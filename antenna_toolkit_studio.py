@@ -717,7 +717,7 @@ class ModernMainWindow(QMainWindow):
         processing_scroll, _processing_page, processing_lay = self._make_scroll_page()
         charts_scroll, _charts_page, charts_lay = self._make_scroll_page()
 
-        outputs_card = Card("Project outputs", "Overview")
+        outputs_card = Card("Output files", "Results")
         outputs_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         outputs_help = QLabel("All generated files stay inside the active project folder so the deliverables are always tied to the correct input set.")
         outputs_help.setWordWrap(True)
@@ -738,7 +738,7 @@ class ModernMainWindow(QMainWindow):
         form.addRow("VSWR output", self._path_row(self.vswr_field))
         outputs_card.body.addLayout(form)
 
-        preset_card = Card("Presets", "Workflow")
+        preset_card = Card("Saved presets", "Presets")
         preset_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         preset_help = QLabel("Save reusable control/range/style presets for product lines. Presets do not change the currently selected input files.")
         preset_help.setWordWrap(True)
@@ -766,7 +766,7 @@ class ModernMainWindow(QMainWindow):
         preset_io = ResponsiveButtonPanel(max_columns=2, min_button_width=120)
         preset_io.set_buttons([self.preset_import_button, self.preset_export_button])
         preset_card.body.addWidget(preset_io)
-        storage_card = Card("What lives in a project", "Guide")
+        storage_card = Card("Workspace guide", "Flow")
         storage_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         storage_note = QLabel(
             "1. Add or edit project inputs on the Inputs tab.\n"
@@ -776,12 +776,12 @@ class ModernMainWindow(QMainWindow):
         storage_note.setWordWrap(True)
         storage_note.setObjectName("helper")
         storage_card.body.addWidget(storage_note)
-        overview_panel = ResponsiveCardPanel(max_columns=2, min_card_width=380)
+        overview_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320)
         overview_panel.set_cards([outputs_card, preset_card, storage_card])
         overview_lay.addWidget(overview_panel)
         overview_lay.addStretch(1)
 
-        ffs_card = Card("Far-field exports", "Inputs")
+        ffs_card = Card("Far-field files", "Primary input")
         ffs_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         helper = QLabel("Drop .ffs files here or add them manually. Changes are saved into the active project.")
         helper.setWordWrap(True)
@@ -802,7 +802,7 @@ class ModernMainWindow(QMainWindow):
         ffs_actions.set_buttons([self.add_ffs_button, self.remove_ffs_button, self.clear_ffs_button])
         ffs_card.body.addWidget(ffs_actions)
 
-        inputs_help_card = Card("Input guidance", "Guide")
+        inputs_help_card = Card("Input guide", "Flow")
         inputs_help_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         inputs_help = QLabel(
             "The far-field list is the main input for workbook generation.\n"
@@ -813,7 +813,7 @@ class ModernMainWindow(QMainWindow):
         inputs_help.setObjectName("helper")
         inputs_help_card.body.addWidget(inputs_help)
 
-        s2p_card = Card("Touchstone", "Inputs")
+        s2p_card = Card("Touchstone file", "VSWR")
         s2p_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.s2p_field = QLineEdit("")
         self.s2p_field.setReadOnly(True)
@@ -828,10 +828,9 @@ class ModernMainWindow(QMainWindow):
         s2p_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=145)
         s2p_actions.set_buttons([self.select_s2p_button, self.clear_s2p_button, self.open_s2p_button])
         s2p_card.body.addWidget(s2p_actions)
-        inputs_top = ResponsiveCardPanel(max_columns=2, min_card_width=360)
-        inputs_top.set_cards([inputs_help_card, s2p_card])
-        inputs_lay.addWidget(inputs_top)
-        inputs_lay.addWidget(ffs_card)
+        inputs_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320)
+        inputs_panel.set_cards([ffs_card, s2p_card, inputs_help_card])
+        inputs_lay.addWidget(inputs_panel)
         inputs_lay.addStretch(1)
 
         self.beam_smooth = NoWheelSpinBox(); self.beam_smooth.setRange(1, 99); self.beam_smooth.setValue(int(self.store.get("smooth", 5))); self.beam_smooth.valueChanged.connect(lambda v: self.store.set("smooth", int(v)))
@@ -858,7 +857,7 @@ class ModernMainWindow(QMainWindow):
         self.vswr_ymax = TrimmedDoubleSpinBox(); self.vswr_ymax.setRange(0.0, 1000.0); self.vswr_ymax.setDecimals(6); self.vswr_ymax.setValue(float(self.store.get("vswr_ymax", 10.0))); self.vswr_ymax.valueChanged.connect(lambda v: self.store.set("vswr_ymax", float(v)))
         self.vswr_ystep = TrimmedDoubleSpinBox(); self.vswr_ystep.setRange(0.01, 100.0); self.vswr_ystep.setDecimals(6); self.vswr_ystep.setValue(float(self.store.get("vswr_ystep", 1.0))); self.vswr_ystep.valueChanged.connect(lambda v: self.store.set("vswr_ystep", float(v)))
         self.vswr_smooth = NoWheelSpinBox(); self.vswr_smooth.setRange(1, 99); self.vswr_smooth.setValue(int(self.store.get("vswr_smooth", 5))); self.vswr_smooth.valueChanged.connect(lambda v: self.store.set("vswr_smooth", int(v)))
-        workbook_card = Card("Workbook and extraction", "Processing")
+        workbook_card = Card("Beam and workbook", "Processing")
         workbook_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         workbook_card.setMinimumWidth(320)
         workbook_form = QFormLayout()
@@ -872,7 +871,7 @@ class ModernMainWindow(QMainWindow):
         add_form_row(workbook_form, "Plot smooth", StepperField(self.plot_smooth), "Smoothing window applied to the workbook-based line plots.")
         workbook_card.body.addLayout(workbook_form)
 
-        frequency_card = Card("Shared frequency and VSWR", "Processing")
+        frequency_card = Card("Frequency window and VSWR", "Frequency")
         frequency_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         frequency_card.setMinimumWidth(320)
         frequency_form = QFormLayout()
@@ -887,7 +886,7 @@ class ModernMainWindow(QMainWindow):
         add_form_row(frequency_form, "Shared x axis", self.shared_xlog, "Switch both workbook plots and the VSWR plot between linear and logarithmic x-axis scaling.")
         add_form_row(frequency_form, "VSWR smooth", StepperField(self.vswr_smooth), "Smoothing window applied to the VSWR traces.")
         frequency_card.body.addLayout(frequency_form)
-        processing_help = Card("Run order", "Guide")
+        processing_help = Card("When to rerun", "Flow")
         processing_help.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         processing_note = QLabel(
             "Run Full Pipeline when the inputs changed and you want the full deliverable.\n"
@@ -898,12 +897,12 @@ class ModernMainWindow(QMainWindow):
         processing_note.setWordWrap(True)
         processing_note.setObjectName("helper")
         processing_help.body.addWidget(processing_note)
-        processing_panel = ResponsiveCardPanel(max_columns=2, min_card_width=360)
+        processing_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320)
         processing_panel.set_cards([workbook_card, frequency_card, processing_help])
         processing_lay.addWidget(processing_panel)
         processing_lay.addStretch(1)
 
-        workbook_range_card = Card("Workbook ranges", "Charts")
+        workbook_range_card = Card("Gain, beamwidth, efficiency", "Ranges")
         workbook_range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         workbook_range_card.setMinimumWidth(320)
         workbook_range_form = QFormLayout()
@@ -923,7 +922,7 @@ class ModernMainWindow(QMainWindow):
         add_form_row(workbook_range_form, "Beam eff y tick", StepperField(self.beam_eff_y_step), "Y-axis tick spacing override for the beam efficiency plot. Use 0 to keep the default tick spacing.")
         workbook_range_card.body.addLayout(workbook_range_form)
 
-        vswr_range_card = Card("VSWR range", "Charts")
+        vswr_range_card = Card("VSWR range", "Ranges")
         vswr_range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         vswr_range_card.setMinimumWidth(320)
         vswr_range_form = QFormLayout()
@@ -937,7 +936,7 @@ class ModernMainWindow(QMainWindow):
         add_form_row(vswr_range_form, "VSWR y tick", StepperField(self.vswr_ystep), "Spacing between VSWR y-axis tick labels.")
         vswr_range_card.body.addLayout(vswr_range_form)
 
-        polar_card = Card("Polar presentation", "Charts")
+        polar_card = Card("Polar plot", "Polar")
         polar_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         polar_card.setMinimumWidth(320)
         self.plot_grid = StudioColorSelector(self.store, "grid_color", DEFAULT_GRID_COLOR, presets=GREY_COLOR_OPTIONS)
@@ -961,7 +960,7 @@ class ModernMainWindow(QMainWindow):
         add_form_row(polar_form, "Polar clip below", StepperField(self.clip_db), "Clip polar-plot values below this dB level to keep the chart readable.")
         polar_card.body.addLayout(polar_form)
 
-        workbook_color_card = Card("Workbook colors", "Charts")
+        workbook_color_card = Card("Workbook colors", "Style")
         workbook_color_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         workbook_color_card.setMinimumWidth(320)
         workbook_color_form = QFormLayout()
@@ -975,7 +974,7 @@ class ModernMainWindow(QMainWindow):
         add_form_row(workbook_color_form, "Plot line color 2", self.plot_line2, "Secondary line color for the second workbook-based plot trace.")
         workbook_color_card.body.addLayout(workbook_color_form)
 
-        vswr_color_card = Card("VSWR colors", "Charts")
+        vswr_color_card = Card("VSWR colors", "Style")
         vswr_color_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         vswr_color_card.setMinimumWidth(320)
         vswr_color_form = QFormLayout()
@@ -989,7 +988,7 @@ class ModernMainWindow(QMainWindow):
         add_form_row(vswr_color_form, "VSWR line color 2", self.vswr_line2, "Secondary line color for the second VSWR trace.")
         vswr_color_card.body.addLayout(vswr_color_form)
 
-        charts_panel = ResponsiveCardPanel(max_columns=2, min_card_width=380)
+        charts_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320)
         charts_panel.set_cards([workbook_range_card, vswr_range_card, polar_card, workbook_color_card, vswr_color_card])
         charts_lay.addWidget(charts_panel)
         charts_lay.addStretch(1)
