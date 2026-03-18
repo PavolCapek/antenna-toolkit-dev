@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QProgressBar,
     QFormLayout, QFrame, QSplitter, QSizePolicy, QStyleFactory, QMessageBox, QInputDialog,
-    QDialog, QDialogButtonBox
+    QDialog, QDialogButtonBox, QScrollArea, QGridLayout
 )
 
 from antenna_toolkit_qt import (
@@ -120,6 +120,47 @@ class Card(QFrame):
         self.body = QVBoxLayout()
         self.body.setSpacing(8)
         outer.addLayout(self.body, 1)
+
+
+class ResponsiveCardPanel(QWidget):
+    def __init__(self):
+        super().__init__()
+        self._cards: list[QWidget] = []
+        self._columns = 0
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(12)
+        self.grid.setVerticalSpacing(12)
+
+    def set_cards(self, cards: list[QWidget]) -> None:
+        self._cards = cards
+        self.refresh_layout(force=True)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.refresh_layout()
+
+    def _desired_columns(self) -> int:
+        width = max(0, self.width())
+        if width < 820:
+            return 1
+        if width < 1220:
+            return 2
+        return 3
+
+    def refresh_layout(self, force: bool = False) -> None:
+        columns = self._desired_columns()
+        if not force and columns == self._columns:
+            return
+        self._columns = columns
+        while self.grid.count():
+            self.grid.takeAt(0)
+        for column in range(columns):
+            self.grid.setColumnStretch(column, 1)
+        for index, card in enumerate(self._cards):
+            row = index // columns
+            column = index % columns
+            self.grid.addWidget(card, row, column)
 
 
 class DropList(QListWidget):
@@ -563,9 +604,9 @@ class ModernMainWindow(QMainWindow):
         split.setChildrenCollapsible(False)
         split.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        left = QWidget()
-        left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        left_lay = QVBoxLayout(left)
+        left_content = QWidget()
+        left_content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        left_lay = QVBoxLayout(left_content)
         left_lay.setContentsMargins(0, 0, 0, 0)
         left_lay.setSpacing(12)
 
@@ -696,18 +737,24 @@ class ModernMainWindow(QMainWindow):
         left_lay.setStretch(2, 1)
         left_lay.setStretch(3, 0)
 
-        split.addWidget(left)
+        left_lay.addStretch(1)
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setWidget(left_content)
+        left_scroll.setMinimumWidth(360)
+        split.addWidget(left_scroll)
 
-        right = QWidget()
-        right.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-        right_lay = QHBoxLayout(right)
+        right_content = QWidget()
+        right_content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        right_lay = QVBoxLayout(right_content)
         right_lay.setContentsMargins(0, 0, 0, 0)
         right_lay.setSpacing(12)
-        right_lay.setAlignment(Qt.AlignLeft | Qt.AlignTop)
 
         proc_card = Card("Processing controls", "Workflow")
-        proc_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        proc_card.setMaximumWidth(400)
+        proc_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        proc_card.setMinimumWidth(320)
         self.beam_smooth = NoWheelSpinBox(); self.beam_smooth.setRange(1, 99); self.beam_smooth.setValue(int(self.store.get("smooth", 5))); self.beam_smooth.valueChanged.connect(lambda v: self.store.set("smooth", int(v)))
         self.theta_window = TrimmedDoubleSpinBox(); self.theta_window.setRange(0.0, 90.0); self.theta_window.setDecimals(6); self.theta_window.setSingleStep(0.5); self.theta_window.setValue(float(self.store.get("theta", 8.0))); self.theta_window.valueChanged.connect(lambda v: self.store.set("theta", float(v)))
         self.plot_smooth = NoWheelSpinBox(); self.plot_smooth.setRange(1, 99); self.plot_smooth.setValue(int(self.store.get("smooth2", 5))); self.plot_smooth.valueChanged.connect(lambda v: self.store.set("smooth2", int(v)))
@@ -747,11 +794,10 @@ class ModernMainWindow(QMainWindow):
         add_form_row(proc_form, "Shared x axis", self.shared_xlog, "Switch both workbook plots and the VSWR plot between linear and logarithmic x-axis scaling.")
         add_form_row(proc_form, "VSWR smooth", StepperField(self.vswr_smooth), "Smoothing window applied to the VSWR traces.")
         proc_card.body.addLayout(proc_form)
-        right_lay.addWidget(proc_card, 0, Qt.AlignTop)
-
         range_card = Card("Y-Axis Ranges", "Charts")
-        range_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        range_card.setMaximumWidth(400)
+        range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        range_card.setMinimumWidth(320)
+
         range_form = QFormLayout()
         range_form.setContentsMargins(0, 0, 0, 0)
         range_form.setHorizontalSpacing(10)
@@ -771,11 +817,9 @@ class ModernMainWindow(QMainWindow):
         add_form_row(range_form, "VSWR y max", StepperField(self.vswr_ymax), "Upper limit of the VSWR y-axis.")
         add_form_row(range_form, "VSWR y tick", StepperField(self.vswr_ystep), "Spacing between VSWR y-axis tick labels.")
         range_card.body.addLayout(range_form)
-        right_lay.addWidget(range_card, 0, Qt.AlignTop)
-
         style_card = Card("Visual style", "Charts")
-        style_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        style_card.setMaximumWidth(500)
+        style_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        style_card.setMinimumWidth(320)
         self.plot_grid = StudioColorSelector(self.store, "grid_color", DEFAULT_GRID_COLOR, presets=GREY_COLOR_OPTIONS)
         self.plot_line1 = StudioColorSelector(self.store, "plot_line_1", DEFAULT_LINE_COLORS[0][1])
         self.plot_line2 = StudioColorSelector(self.store, "plot_line_2", DEFAULT_LINE_COLORS[1][1])
@@ -802,12 +846,22 @@ class ModernMainWindow(QMainWindow):
         add_form_row(style_form, "VSWR line color 1", self.vswr_line1, "Primary line color for the first VSWR trace.")
         add_form_row(style_form, "VSWR line color 2", self.vswr_line2, "Secondary line color for the second VSWR trace.")
         style_card.body.addLayout(style_form)
-        right_lay.addWidget(style_card, 0, Qt.AlignTop)
+        self.control_panel = ResponsiveCardPanel()
+        self.control_panel.set_cards([proc_card, range_card, style_card])
+        right_lay.addWidget(self.control_panel)
+        right_lay.addStretch(1)
 
-        split.addWidget(right)
-        split.setStretchFactor(0, 1)
-        split.setStretchFactor(1, 0)
-        split.setSizes(self.store.get("studio_split_sizes", [500, 980]))
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        right_scroll.setWidget(right_content)
+        right_scroll.setMinimumWidth(360)
+
+        split.addWidget(right_scroll)
+        split.setStretchFactor(0, 5)
+        split.setStretchFactor(1, 7)
+        split.setSizes(self.store.get("studio_split_sizes", [560, 900]))
         root_lay.addWidget(split, 1)
         self.setCentralWidget(root)
         self._body_split = split
