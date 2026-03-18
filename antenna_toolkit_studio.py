@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QByteArray, Signal
@@ -27,8 +28,8 @@ from antenna_toolkit_qt import (
     display_workspace_path, deduce_project_name, normalized_project_stem,
 )
 from project_store import (
-    ProjectRecord, ProjectStore, resolve_project_path, sanitize_project_slug,
-    serialize_workspace_path,
+    CURRENT_PROJECT_SCHEMA_VERSION, ProjectRecord, ProjectStore, resolve_project_path,
+    sanitize_project_slug, serialize_workspace_path, utc_now_iso,
 )
 
 APP_TITLE = "Antenna Toolkit Studio"
@@ -40,6 +41,23 @@ GREY_COLOR_OPTIONS = [
     ("Silver", "#a1a1aa"),
     ("Mist", "#c4c7cf"),
 ]
+STAGE_DEFINITIONS = [
+    ("beam", "Workbook"),
+    ("extract", "Extract"),
+    ("plot", "Plots"),
+    ("vswr", "VSWR"),
+]
+STAGE_LABELS = dict(STAGE_DEFINITIONS)
+
+
+def format_timestamp(value: str | None) -> str:
+    if not value:
+        return "Never"
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return str(value)
+    return stamp.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 def project_key(value: str) -> str:
@@ -574,10 +592,16 @@ class ModernMainWindow(QMainWindow):
         self.proc = Proc(self)
         self._closing_app = False
         self._loading_project = False
+        self._suppress_ffs_item_change = False
+        self._run_cancelled = False
+        self._current_stage_key = ""
+        self._pending_stage_keys: list[str] = []
+        self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
         self.active_project_slug = str(self.store.get("active_project", "")).strip()
         self.active_project_name = ""
         self.project_presets: dict[str, dict[str, object]] = {}
         self.project_active_preset = ""
+        self.project_run_state: dict[str, object] = {}
         self.theme = str(self.store.get("theme", "light")).lower()
         if self.theme not in {"light", "dark"}:
             self.theme = "light"
@@ -647,17 +671,29 @@ class ModernMainWindow(QMainWindow):
         self.project_new_button.clicked.connect(self.create_project)
         self.project_edit_button = QPushButton("Edit project")
         self.project_edit_button.clicked.connect(self.edit_project)
+        self.project_duplicate_button = QPushButton("Duplicate")
+        self.project_duplicate_button.clicked.connect(self.duplicate_project)
         self.project_delete_button = QPushButton("Delete project")
         self.project_delete_button.clicked.connect(self.delete_project)
+        self.project_import_button = QPushButton("Import bundle")
+        self.project_import_button.clicked.connect(self.import_project_bundle)
+        self.project_export_button = QPushButton("Export bundle")
+        self.project_export_button.clicked.connect(self.export_project_bundle)
         self.project_new_button.setToolTip("Create a new project and store its inputs in the Projects directory.")
         self.project_edit_button.setToolTip("Rename the active project or update its input files.")
+        self.project_duplicate_button.setToolTip("Create a copy of the active project with the same settings and inputs.")
         self.project_delete_button.setToolTip("Delete the active project and everything saved inside its folder.")
+        self.project_import_button.setToolTip("Import a previously exported project bundle into the Projects directory.")
+        self.project_export_button.setToolTip("Export the active project directory as a bundle.")
         project_row.addWidget(self.project_combo)
         project_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=130)
         project_actions.set_buttons([
             self.project_new_button,
             self.project_edit_button,
+            self.project_duplicate_button,
             self.project_delete_button,
+            self.project_import_button,
+            self.project_export_button,
         ])
         project_row.addWidget(project_actions)
         project_card.body.addLayout(project_row)
@@ -668,6 +704,10 @@ class ModernMainWindow(QMainWindow):
         self.project_meta.setObjectName("projectMeta")
         self.project_meta.setWordWrap(True)
         project_card.body.addWidget(self.project_meta)
+        self.project_health = QLabel("No validation issues to report.")
+        self.project_health.setObjectName("helper")
+        self.project_health.setWordWrap(True)
+        project_card.body.addWidget(self.project_health)
         badge_grid = QGridLayout()
         badge_grid.setContentsMargins(0, 0, 0, 0)
         badge_grid.setHorizontalSpacing(8)
@@ -705,11 +745,15 @@ class ModernMainWindow(QMainWindow):
         self.btn_plot.clicked.connect(self.run_plot)
         self.btn_vswr = QPushButton("VSWR Only")
         self.btn_vswr.clicked.connect(self.run_vswr)
+        self.btn_cancel = QPushButton("Cancel Run")
+        self.btn_cancel.setObjectName("ghostButton")
+        self.btn_cancel.clicked.connect(self.cancel_run)
         self.btn_full.setToolTip("Run workbook generation, chart generation, and VSWR generation in sequence.")
         self.btn_beam.setToolTip("Generate only the Excel workbook from the selected far-field files.")
         self.btn_extract.setToolTip("Generate a separate Excel workbook with extracted gain, beamwidth, VSWR, impedance, and front-to-back metrics.")
         self.btn_plot.setToolTip("Generate only the plots that are based on the derived workbook.")
         self.btn_vswr.setToolTip("Generate only the VSWR plot from the current Touchstone file.")
+        self.btn_cancel.setToolTip("Stop the current run and clear any queued stages.")
         self.hero_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=150)
         self.hero_actions.set_buttons([
             self.btn_full,
@@ -717,16 +761,39 @@ class ModernMainWindow(QMainWindow):
             self.btn_extract,
             self.btn_plot,
             self.btn_vswr,
+            self.btn_cancel,
         ])
         quick_actions.body.addWidget(self.hero_actions)
         self.run_info = QLabel("Idle")
         self.run_info.setObjectName("runInfo")
         self.run_info.setWordWrap(True)
+        self.run_summary = QLabel("No run summary yet.")
+        self.run_summary.setObjectName("helper")
+        self.run_summary.setWordWrap(True)
         self.busy = QProgressBar()
         self.busy.setVisible(False)
         self.busy.setRange(0, 0)
         self.busy.setTextVisible(False)
         quick_actions.body.addWidget(self.run_info)
+        stage_grid = QGridLayout()
+        stage_grid.setContentsMargins(0, 0, 0, 0)
+        stage_grid.setHorizontalSpacing(8)
+        stage_grid.setVerticalSpacing(8)
+        self.stage_status_labels: dict[str, QLabel] = {}
+        self.stage_open_buttons: dict[str, QPushButton] = {}
+        for index, (stage_key, stage_label) in enumerate(STAGE_DEFINITIONS):
+            label = QLabel(f"{stage_label}: waiting")
+            label.setObjectName("helper")
+            button = QPushButton("Open")
+            button.setObjectName("ghostButton")
+            button.setFixedWidth(72)
+            button.clicked.connect(lambda _checked=False, key=stage_key: self.open_stage_output(key))
+            stage_grid.addWidget(label, index, 0)
+            stage_grid.addWidget(button, index, 1)
+            self.stage_status_labels[stage_key] = label
+            self.stage_open_buttons[stage_key] = button
+        quick_actions.body.addLayout(stage_grid)
+        quick_actions.body.addWidget(self.run_summary)
         quick_actions.body.addWidget(self.busy)
         command_panel.set_cards([project_card, quick_actions])
         root_lay.addWidget(command_panel)
@@ -754,6 +821,14 @@ class ModernMainWindow(QMainWindow):
         outputs_help.setWordWrap(True)
         outputs_help.setObjectName("helper")
         outputs_card.body.addWidget(outputs_help)
+        self.project_stats_label = QLabel("No project stats yet.")
+        self.project_stats_label.setObjectName("helper")
+        self.project_stats_label.setWordWrap(True)
+        outputs_card.body.addWidget(self.project_stats_label)
+        self.artifact_summary_label = QLabel("Artifacts will appear here after the first run.")
+        self.artifact_summary_label.setObjectName("helper")
+        self.artifact_summary_label.setWordWrap(True)
+        outputs_card.body.addWidget(self.artifact_summary_label)
         self.workbook_field = QLineEdit(); self.workbook_field.setReadOnly(True)
         self.extract_field = QLineEdit(); self.extract_field.setReadOnly(True)
         self.results_field = QLineEdit(); self.results_field.setReadOnly(True)
@@ -779,6 +854,10 @@ class ModernMainWindow(QMainWindow):
         self.preset_combo.currentTextChanged.connect(self.on_preset_selected)
         self.preset_combo.setToolTip("Choose a saved preset to apply its control, range, and style settings.")
         preset_card.body.addWidget(self.preset_combo)
+        self.preset_state_label = QLabel("Choose a preset or keep working manually.")
+        self.preset_state_label.setObjectName("helper")
+        self.preset_state_label.setWordWrap(True)
+        preset_card.body.addWidget(self.preset_state_label)
         self.preset_new_button = QPushButton("New"); self.preset_new_button.clicked.connect(self.create_preset)
         self.preset_save_button = QPushButton("Save"); self.preset_save_button.clicked.connect(self.save_preset)
         self.preset_rename_button = QPushButton("Rename"); self.preset_rename_button.clicked.connect(self.rename_preset)
@@ -807,8 +886,24 @@ class ModernMainWindow(QMainWindow):
         storage_note.setWordWrap(True)
         storage_note.setObjectName("helper")
         storage_card.body.addWidget(storage_note)
-        overview_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 2, 1]})
-        overview_panel.set_cards([outputs_card, preset_card, storage_card])
+        validation_card = Card("Validation", "Checks")
+        validation_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.validation_label = QLabel("No validation issues.")
+        self.validation_label.setObjectName("helper")
+        self.validation_label.setWordWrap(True)
+        validation_card.body.addWidget(self.validation_label)
+        activity_card = Card("Recent activity", "Runs")
+        activity_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.last_run_label = QLabel("Last successful run: never")
+        self.last_run_label.setObjectName("helper")
+        self.last_run_label.setWordWrap(True)
+        self.run_state_label = QLabel("No stage history yet.")
+        self.run_state_label.setObjectName("helper")
+        self.run_state_label.setWordWrap(True)
+        activity_card.body.addWidget(self.last_run_label)
+        activity_card.body.addWidget(self.run_state_label)
+        overview_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 3, 1, 4, 2]})
+        overview_panel.set_cards([outputs_card, preset_card, storage_card, validation_card, activity_card])
         overview_lay.addWidget(overview_panel)
         overview_lay.addStretch(1)
 
@@ -822,15 +917,36 @@ class ModernMainWindow(QMainWindow):
         self.ffs_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.ffs_list.setMinimumHeight(230)
         self.ffs_list.setToolTip("Add one or more CST far-field export files (.ffs). Their names drive project-name deduction.")
+        self.ffs_list.itemChanged.connect(self.on_ffs_item_changed)
+        self.ffs_list.itemSelectionChanged.connect(self._update_ffs_action_state)
         ffs_card.body.addWidget(self.ffs_list, 1)
         self.add_ffs_button = QPushButton("Add .ffs"); self.add_ffs_button.clicked.connect(self.add_ffs)
         self.remove_ffs_button = QPushButton("Remove selected"); self.remove_ffs_button.clicked.connect(self.remove_ffs)
         self.clear_ffs_button = QPushButton("Clear list"); self.clear_ffs_button.clicked.connect(self.clear_ffs)
+        self.ffs_up_button = QPushButton("Move up"); self.ffs_up_button.clicked.connect(self.move_ffs_up)
+        self.ffs_down_button = QPushButton("Move down"); self.ffs_down_button.clicked.connect(self.move_ffs_down)
+        self.ffs_sort_button = QPushButton("Sort"); self.ffs_sort_button.clicked.connect(self.sort_ffs)
+        self.ffs_toggle_button = QPushButton("Enable/disable"); self.ffs_toggle_button.clicked.connect(self.toggle_selected_ffs_enabled)
+        self.ffs_missing_button = QPushButton("Remove missing"); self.ffs_missing_button.clicked.connect(self.remove_missing_ffs)
         self.add_ffs_button.setToolTip("Browse for CST far-field export files to include in this project.")
         self.remove_ffs_button.setToolTip("Remove the highlighted far-field files from the current project.")
         self.clear_ffs_button.setToolTip("Clear the full far-field file list.")
+        self.ffs_up_button.setToolTip("Move the selected far-field files up in the processing order.")
+        self.ffs_down_button.setToolTip("Move the selected far-field files down in the processing order.")
+        self.ffs_sort_button.setToolTip("Sort far-field files alphabetically by display name.")
+        self.ffs_toggle_button.setToolTip("Temporarily disable or re-enable the selected far-field files without deleting them.")
+        self.ffs_missing_button.setToolTip("Remove any far-field entries that no longer exist on disk.")
         ffs_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=135)
-        ffs_actions.set_buttons([self.add_ffs_button, self.remove_ffs_button, self.clear_ffs_button])
+        ffs_actions.set_buttons([
+            self.add_ffs_button,
+            self.remove_ffs_button,
+            self.clear_ffs_button,
+            self.ffs_up_button,
+            self.ffs_down_button,
+            self.ffs_sort_button,
+            self.ffs_toggle_button,
+            self.ffs_missing_button,
+        ])
         ffs_card.body.addWidget(ffs_actions)
 
         inputs_help_card = Card("Input guide", "Flow")
@@ -1053,7 +1169,7 @@ class ModernMainWindow(QMainWindow):
     def _make_scroll_page(self) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 6, 0, 0)
         layout.setSpacing(14)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1178,7 +1294,7 @@ class ModernMainWindow(QMainWindow):
                 #summaryBadge { background: %(badge_bg)s; color: %(badge_text)s; border: 1px solid %(badge_border)s; border-radius: 12px; padding: 6px 10px; font-size: 8.75pt; font-weight: 700; }
                 QLabel { color: %(text_color)s; }
                 #helper { color: %(helper_color)s; }
-                QTabWidget::pane { border: none; background: transparent; }
+                QTabWidget::pane { border: none; background: transparent; margin-top: 8px; }
                 QTabBar::tab { background: %(tab_bg)s; border: 1px solid %(shell_border)s; border-bottom: none; border-top-left-radius: 14px; border-top-right-radius: 14px; padding: 10px 16px; margin-right: 6px; min-width: 110px; color: %(helper_color)s; font-weight: 700; }
                 QTabBar::tab:hover { background: %(tab_hover)s; color: %(title_color)s; }
                 QTabBar::tab:selected { background: %(tab_selected)s; color: %(title_color)s; }
@@ -1309,9 +1425,349 @@ class ModernMainWindow(QMainWindow):
 
     def on_project_configuration_changed(self, *_args) -> None:
         self.save_active_project()
+        self.refresh_derived_paths()
+
+    def collect_ffs_items(self) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        for i in range(self.ffs_list.count()):
+            item = self.ffs_list.item(i)
+            items.append({
+                "path": self._item_path(item),
+                "enabled": item.checkState() == Qt.Checked,
+            })
+        return items
+
+    def _selected_ffs_paths(self) -> list[str]:
+        return [self._item_path(item) for item in self.ffs_list.selectedItems()]
+
+    def _enabled_ffs_count(self) -> int:
+        return sum(1 for item in self.collect_ffs_items() if bool(item["enabled"]))
+
+    def _path_fingerprint(self, path: str | Path | None) -> dict[str, object]:
+        resolved = Path(resolve_workspace_path(path)) if path else Path()
+        exists = bool(path) and resolved.exists()
+        payload: dict[str, object] = {
+            "path": serialize_workspace_path(THIS_DIR, resolved) if path else "",
+            "exists": exists,
+        }
+        if exists:
+            stat = resolved.stat()
+            payload["mtime_ns"] = int(stat.st_mtime_ns)
+            payload["size"] = int(stat.st_size)
+        return payload
+
+    def _stage_settings_snapshot(self, stage_key: str) -> dict[str, object]:
+        values = self.collect_preset_values()
+        setting_keys = {
+            "beam": ["smooth", "theta"],
+            "extract": ["smooth", "theta", "shared_fmin", "shared_fmax"],
+            "plot": [
+                "smooth2", "shared_xstep", "shared_fmin", "shared_fmax", "shared_xlog",
+                "gain_ymin", "gain_ymax", "gain_y_step",
+                "beamwidth_ymin", "beamwidth_ymax", "beamwidth_y_step",
+                "beam_eff_ymin", "beam_eff_ymax", "beam_eff_y_step",
+                "grid_color", "plot_line_1", "plot_line_2", "rings", "angle", "clip",
+            ],
+            "vswr": [
+                "shared_xstep", "shared_fmin", "shared_fmax", "shared_xlog",
+                "vswr_ymin", "vswr_ymax", "vswr_ystep", "vswr_smooth",
+                "grid_color", "plot_line_1", "plot_line_2",
+            ],
+        }
+        return {key: values[key] for key in setting_keys.get(stage_key, []) if key in values}
+
+    def _current_stage_snapshot(self, stage_key: str) -> dict[str, object]:
+        snapshot: dict[str, object] = {
+            "schema_version": CURRENT_PROJECT_SCHEMA_VERSION,
+            "settings": self._stage_settings_snapshot(stage_key),
+        }
+        if stage_key in {"beam", "extract", "plot"}:
+            snapshot["ffs_items"] = [
+                {
+                    "path": serialize_workspace_path(THIS_DIR, str(item["path"])),
+                    "enabled": bool(item["enabled"]),
+                    "file": self._path_fingerprint(str(item["path"])),
+                }
+                for item in self.collect_ffs_items()
+            ]
+        if stage_key in {"extract", "vswr"}:
+            snapshot["touchstone"] = self._path_fingerprint(self.selected_s2p())
+        if stage_key in {"extract", "plot"}:
+            snapshot["beam_workbook"] = self._path_fingerprint(self.deduced_beam_output())
+        return snapshot
+
+    def _stage_output_files(self, stage_key: str) -> list[Path]:
+        if stage_key == "beam":
+            return [self.deduced_beam_output()]
+        if stage_key == "extract":
+            return [self.deduced_extract_output()]
+        if stage_key == "vswr":
+            return [self.deduced_vswr_output()]
+        if stage_key == "plot":
+            stem = self.deduced_beam_output().stem
+            out_dir = self.project_results_dir()
+            return [
+                out_dir / f"{stem}_gain.svg",
+                out_dir / f"{stem}_beamwidth.svg",
+                out_dir / f"{stem}_beam_efficiency.svg",
+            ]
+        return []
+
+    def _stage_output_target(self, stage_key: str) -> Path:
+        if stage_key == "plot":
+            return self.project_results_dir()
+        files = self._stage_output_files(stage_key)
+        return files[0] if files else self.project_results_dir()
+
+    def _stage_output_exists(self, stage_key: str) -> bool:
+        files = self._stage_output_files(stage_key)
+        if not files:
+            return False
+        return all(path.exists() for path in files)
+
+    def _ensure_run_state(self) -> None:
+        if not isinstance(self.project_run_state, dict):
+            self.project_run_state = {}
+        stages = self.project_run_state.get("stages")
+        if not isinstance(stages, dict):
+            stages = {}
+            self.project_run_state["stages"] = stages
+        history = self.project_run_state.get("history")
+        if not isinstance(history, list):
+            self.project_run_state["history"] = []
+
+    def _stage_state(self, stage_key: str) -> dict[str, object]:
+        self._ensure_run_state()
+        stages = self.project_run_state["stages"]
+        stage_state = stages.get(stage_key)
+        if not isinstance(stage_state, dict):
+            stage_state = {}
+            stages[stage_key] = stage_state
+        return stage_state
+
+    def _append_history(self, action: str, stage_key: str = "", **extra: object) -> None:
+        self._ensure_run_state()
+        history = self.project_run_state["history"]
+        if not isinstance(history, list):
+            history = []
+            self.project_run_state["history"] = history
+        entry: dict[str, object] = {"action": action, "at": utc_now_iso()}
+        if stage_key:
+            entry["stage"] = stage_key
+        entry.update(extra)
+        history.insert(0, entry)
+        del history[20:]
+
+    def _stage_is_applicable(self, stage_key: str) -> bool:
+        enabled_ffs = bool(self.selected_ffs())
+        has_touchstone = bool(self.selected_s2p())
+        if stage_key == "beam":
+            return enabled_ffs
+        if stage_key == "extract":
+            return enabled_ffs or has_touchstone
+        if stage_key == "plot":
+            return enabled_ffs
+        if stage_key == "vswr":
+            return has_touchstone
+        return False
+
+    def _stage_is_stale(self, stage_key: str) -> bool:
+        if not self._stage_output_exists(stage_key):
+            return False
+        stage_state = self._stage_state(stage_key)
+        snapshot = stage_state.get("snapshot")
+        if not snapshot:
+            return True
+        return snapshot != self._current_stage_snapshot(stage_key)
+
+    def _stale_stage_keys(self) -> list[str]:
+        return [
+            stage_key
+            for stage_key, _label in STAGE_DEFINITIONS
+            if self._stage_is_applicable(stage_key) and self._stage_is_stale(stage_key)
+        ]
+
+    def _preset_matches_selected(self) -> bool:
+        name = self.project_active_preset or self.current_preset_name()
+        if not name:
+            return False
+        preset = self.project_presets.get(name)
+        return isinstance(preset, dict) and preset == self.collect_preset_values()
+
+    def _validation_messages(self) -> list[str]:
+        if not self.active_project_slug:
+            return ["Select or create a project to begin."]
+        messages: list[str] = []
+        items = self.collect_ffs_items()
+        paths = [str(item["path"]) for item in items]
+        enabled_paths = [str(item["path"]) for item in items if bool(item["enabled"])]
+        duplicates = sorted({path for path in paths if paths.count(path) > 1})
+        missing_ffs = [path for path in paths if path and not Path(path).exists()]
+        if not items:
+            messages.append("Add at least one far-field file for workbook and plot stages.")
+        elif not enabled_paths:
+            messages.append("All far-field files are disabled. Enable at least one to run workbook or plots.")
+        if duplicates:
+            messages.append(f"Duplicate far-field entries: {', '.join(display_workspace_path(path) for path in duplicates[:3])}")
+        if missing_ffs:
+            sample = ", ".join(display_workspace_path(path) for path in missing_ffs[:3])
+            more = " ..." if len(missing_ffs) > 3 else ""
+            messages.append(f"Missing far-field files: {sample}{more}")
+        s2p = self.selected_s2p()
+        if s2p and not Path(s2p).exists():
+            messages.append(f"Selected Touchstone file is missing: {display_workspace_path(s2p)}")
+        elif not s2p:
+            messages.append("VSWR stage is unavailable until a Touchstone file is selected.")
+        fmin = float(self.shared_fmin.value())
+        fmax = float(self.shared_fmax.value())
+        if fmin > 0 and fmax <= fmin:
+            messages.append("Shared frequency window is invalid: max must be greater than min.")
+        return messages
+
+    def _last_success_timestamp(self) -> str:
+        stamps = [
+            str(self._stage_state(stage_key).get("last_success_at", "")).strip()
+            for stage_key, _label in STAGE_DEFINITIONS
+        ]
+        stamps = [stamp for stamp in stamps if stamp]
+        return max(stamps) if stamps else ""
+
+    def _recent_activity_text(self) -> str:
+        self._ensure_run_state()
+        history = self.project_run_state.get("history", [])
+        if not isinstance(history, list) or not history:
+            return "No stage history yet."
+        lines: list[str] = []
+        for entry in history[:3]:
+            if not isinstance(entry, dict):
+                continue
+            stage_key = str(entry.get("stage", "")).strip()
+            action = str(entry.get("action", "activity")).replace("_", " ")
+            stage_label = STAGE_LABELS.get(stage_key, stage_key.title()) if stage_key else "Project"
+            lines.append(f"{format_timestamp(str(entry.get('at', '')))}: {stage_label} {action}")
+        return "\n".join(lines) if lines else "No stage history yet."
+
+    def _refresh_stage_labels(self) -> None:
+        for stage_key, stage_label in STAGE_DEFINITIONS:
+            stage_state = self._stage_state(stage_key)
+            status = str(stage_state.get("status", "")).strip().lower()
+            last_finished = str(stage_state.get("last_finished_at", "")).strip()
+            last_success = str(stage_state.get("last_success_at", "")).strip()
+            button = self.stage_open_buttons[stage_key]
+            button.setEnabled(bool(self.active_project_slug) and self._stage_output_exists(stage_key))
+            if not self.active_project_slug:
+                text = f"{stage_label}: no project"
+            elif stage_key == self._current_stage_key:
+                text = f"{stage_label}: running"
+            elif stage_key in self._pending_stage_keys:
+                text = f"{stage_label}: queued"
+            elif not self._stage_is_applicable(stage_key):
+                text = f"{stage_label}: not configured"
+            elif status in {"failed", "cancelled"} and (not last_success or last_finished >= last_success):
+                text = f"{stage_label}: {status}"
+            elif self._stage_is_stale(stage_key):
+                text = f"{stage_label}: stale"
+            elif self._stage_output_exists(stage_key):
+                stamp = format_timestamp(str(stage_state.get("last_success_at", "")))
+                text = f"{stage_label}: ready ({stamp})"
+            elif status == "failed":
+                text = f"{stage_label}: failed"
+            elif status == "cancelled":
+                text = f"{stage_label}: cancelled"
+            else:
+                text = f"{stage_label}: waiting"
+            self.stage_status_labels[stage_key].setText(text)
+
+    def _refresh_project_summary(self) -> None:
+        has_project = bool(self.active_project_slug)
+        messages = self._validation_messages()
+        stale_stages = self._stale_stage_keys() if has_project else []
+        total_ffs = len(self.collect_ffs_items()) if has_project else 0
+        enabled_ffs = self._enabled_ffs_count() if has_project else 0
+        disabled_ffs = max(0, total_ffs - enabled_ffs)
+        if not has_project:
+            self.project_health.setText("Create a project to keep inputs, presets, settings, and outputs together.")
+            self.validation_label.setText(messages[0])
+            self.project_stats_label.setText("No project stats yet.")
+            self.artifact_summary_label.setText("Artifacts will appear here after the first run.")
+            self.last_run_label.setText("Last successful run: never")
+            self.run_state_label.setText("No stage history yet.")
+            self.run_summary.setText("No run summary yet.")
+            self._refresh_stage_labels()
+            return
+
+        artifact_bits: list[str] = []
+        for stage_key, stage_label in STAGE_DEFINITIONS:
+            if not self._stage_is_applicable(stage_key):
+                artifact_bits.append(f"{stage_label}: off")
+            elif self._stage_is_stale(stage_key):
+                artifact_bits.append(f"{stage_label}: stale")
+            elif self._stage_output_exists(stage_key):
+                artifact_bits.append(f"{stage_label}: ready")
+            else:
+                artifact_bits.append(f"{stage_label}: missing")
+        project_dir = self.project_results_dir()
+        file_count = sum(1 for path in project_dir.rglob("*") if path.is_file()) if project_dir.exists() else 0
+        self.project_stats_label.setText(
+            f"Schema v{self._loaded_project_schema_version}->{CURRENT_PROJECT_SCHEMA_VERSION} | "
+            f"{enabled_ffs} enabled / {total_ffs} far-field files"
+            + (f" | {disabled_ffs} disabled" if disabled_ffs else "")
+            + f" | {file_count} file(s) in project folder"
+        )
+        self.artifact_summary_label.setText(" | ".join(artifact_bits))
+        blocking_messages = [msg for msg in messages if not msg.startswith("VSWR stage is unavailable")]
+        if blocking_messages:
+            self.validation_label.setText("\n".join(messages))
+            self.project_health.setText(f"Validation needs attention. {len(blocking_messages)} item(s) flagged.")
+        elif messages:
+            self.validation_label.setText("\n".join(messages))
+            self.project_health.setText("Core inputs are valid. Add a Touchstone file when you need VSWR output.")
+        elif stale_stages:
+            labels = ", ".join(STAGE_LABELS[key] for key in stale_stages)
+            self.validation_label.setText(f"Outputs are stale for: {labels}")
+            self.project_health.setText(f"Project changed since the last successful run: {labels}.")
+        else:
+            self.validation_label.setText("No validation issues.")
+            self.project_health.setText("Inputs, presets, and generated outputs are in sync.")
+        last_success = self._last_success_timestamp()
+        self.last_run_label.setText(f"Last successful run: {format_timestamp(last_success)}" if last_success else "Last successful run: never")
+        self.run_state_label.setText(self._recent_activity_text())
+        if self._current_stage_key:
+            queued = len(self._pending_stage_keys)
+            self.run_summary.setText(
+                f"Running {STAGE_LABELS.get(self._current_stage_key, self._current_stage_key.title())}"
+                + (f" | {queued} stage(s) queued" if queued else "")
+            )
+        else:
+            latest_failed = next(
+                (
+                    stage_key
+                    for stage_key, _label in STAGE_DEFINITIONS
+                    if (
+                        str(self._stage_state(stage_key).get("status", "")).strip().lower() == "failed"
+                        and (
+                            not str(self._stage_state(stage_key).get("last_success_at", "")).strip()
+                            or str(self._stage_state(stage_key).get("last_finished_at", "")).strip()
+                            >= str(self._stage_state(stage_key).get("last_success_at", "")).strip()
+                        )
+                    )
+                ),
+                "",
+            )
+            if latest_failed:
+                self.run_summary.setText(f"Last run failed in {STAGE_LABELS.get(latest_failed, latest_failed.title())}.")
+            elif stale_stages:
+                self.run_summary.setText(
+                    "Outputs need rerun: " + ", ".join(STAGE_LABELS[key] for key in stale_stages)
+                )
+            elif any(self._stage_is_applicable(stage_key) and self._stage_output_exists(stage_key) for stage_key, _label in STAGE_DEFINITIONS):
+                self.run_summary.setText("Outputs are up to date.")
+            else:
+                self.run_summary.setText("No completed run yet.")
+        self._refresh_stage_labels()
 
     def selected_ffs(self) -> list[str]:
-        return [self._item_path(self.ffs_list.item(i)) for i in range(self.ffs_list.count())]
+        return [str(item["path"]) for item in self.collect_ffs_items() if bool(item["enabled"])]
 
     def selected_s2p(self) -> str:
         value = self.s2p_field.text().strip()
@@ -1323,11 +1779,19 @@ class ModernMainWindow(QMainWindow):
         return ProjectRecord(
             name=self.active_project_name or self.active_project_slug,
             slug=self.active_project_slug,
-            ffs_files=[serialize_workspace_path(THIS_DIR, path) for path in self.selected_ffs()],
+            schema_version=CURRENT_PROJECT_SCHEMA_VERSION,
+            ffs_items=[
+                {
+                    "path": serialize_workspace_path(THIS_DIR, str(item["path"])),
+                    "enabled": bool(item["enabled"]),
+                }
+                for item in self.collect_ffs_items()
+            ],
             touchstone_file=serialize_workspace_path(THIS_DIR, self.selected_s2p()),
             settings=self.collect_preset_values(),
             presets=self.project_presets,
             active_preset=self.project_active_preset,
+            run_state=dict(self.project_run_state),
         )
 
     def project_results_dir(self) -> Path:
@@ -1364,14 +1828,22 @@ class ModernMainWindow(QMainWindow):
             self.extract_field.clear()
             self.results_field.clear()
             self.vswr_field.clear()
-        count = len(self.selected_ffs())
-        self.count_badge.setText(f"{count} far-field file{'s' if count != 1 else ''}")
+        total_ffs = len(self.collect_ffs_items()) if self.active_project_slug else 0
+        enabled_ffs = len(self.selected_ffs()) if self.active_project_slug else 0
+        self.count_badge.setText(f"{enabled_ffs}/{total_ffs} far-field enabled" if total_ffs else "0 far-field files")
+        self.open_s2p_button.setEnabled(bool(self.active_project_slug and self.selected_s2p()))
+        self._update_ffs_action_state()
+        self._refresh_project_summary()
         self._update_project_action_state()
 
     def _update_project_action_state(self) -> None:
         has_project = bool(self.active_project_slug)
+        is_running = bool(self.proc.running_cmd or self.proc.queue)
         self.project_edit_button.setEnabled(has_project)
+        self.project_duplicate_button.setEnabled(has_project)
         self.project_delete_button.setEnabled(has_project)
+        self.project_export_button.setEnabled(has_project)
+        self.project_import_button.setEnabled(True)
         for widget in (
             self.btn_full,
             self.btn_beam,
@@ -1389,6 +1861,7 @@ class ModernMainWindow(QMainWindow):
             self.project_folder_button,
         ):
             widget.setEnabled(has_project)
+        self.btn_cancel.setEnabled(has_project and is_running)
         self._update_preset_action_state()
 
     def _update_preset_action_state(self) -> None:
@@ -1405,6 +1878,16 @@ class ModernMainWindow(QMainWindow):
         self.preset_export_button.setEnabled(has_project and bool(self.project_presets))
         preset_label = self.project_active_preset or ("Manual" if has_project else "none")
         self.preset_badge.setText(f"Preset: {preset_label}")
+        if not has_project:
+            self.preset_state_label.setText("Choose a preset or keep working manually.")
+        elif not has_preset:
+            self.preset_state_label.setText("Manual settings only. Save them as a preset if you want to reuse them.")
+        elif self._preset_matches_selected():
+            self.preset_state_label.setText(f"Preset '{self.project_active_preset}' matches the current controls.")
+        else:
+            self.preset_state_label.setText(
+                f"Current controls differ from preset '{self.project_active_preset}'. Save to update it or create a new preset."
+            )
 
     def refresh_project_list(self, select_slug: str = "") -> None:
         projects = self.project_store.list_projects()
@@ -1427,6 +1910,10 @@ class ModernMainWindow(QMainWindow):
             self.active_project_name = ""
             self.project_presets = {}
             self.project_active_preset = ""
+            self.project_run_state = {}
+            self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
+            self._pending_stage_keys = []
+            self._current_stage_key = ""
             self._loading_project = True
             self.ffs_list.clear()
             self.s2p_field.clear()
@@ -1442,9 +1929,13 @@ class ModernMainWindow(QMainWindow):
         self._loading_project = True
         self.active_project_slug = project.slug
         self.active_project_name = project.name
+        self.project_run_state = dict(project.run_state)
+        self._loaded_project_schema_version = int(project.schema_version or 1)
+        self._pending_stage_keys = []
+        self._current_stage_key = ""
         self.store.set("active_project", project.slug)
         self.ffs_list.clear()
-        self._add_ffs_files([resolve_project_path(THIS_DIR, path) for path in project.ffs_files], save=False)
+        self._add_ffs_files(project.ffs_items or [{"path": path, "enabled": True} for path in project.ffs_files], save=False)
         touchstone = resolve_project_path(THIS_DIR, project.touchstone_file)
         if not touchstone and project.name:
             guessed = guess_touchstone_path(project.name, self.selected_ffs())
@@ -1463,7 +1954,9 @@ class ModernMainWindow(QMainWindow):
         self.store.set("beam_ffs", self.selected_ffs())
         self.store.set("vswr_s2p", touchstone)
         self._loading_project = False
-        if not project.presets and self.project_presets:
+        if self._loaded_project_schema_version < CURRENT_PROJECT_SCHEMA_VERSION:
+            self.save_active_project()
+        elif not project.presets and self.project_presets:
             self.save_active_project()
         self.refresh_derived_paths()
 
@@ -1476,14 +1969,16 @@ class ModernMainWindow(QMainWindow):
             self.refresh_derived_paths()
             return
         self.project_store.save_project(project)
+        self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
         self.store.set("active_project", project.slug)
         self.store.set("beam_ffs", self.selected_ffs())
         self.store.set("vswr_s2p", self.selected_s2p())
         self.refresh_derived_paths()
 
     def create_project(self) -> None:
-        suggested_name = deduce_project_name(self.selected_ffs() or [self.selected_s2p()]) if (self.selected_ffs() or self.selected_s2p()) else "New project"
-        dialog = ProjectDialog(self, name=suggested_name, ffs_files=self.selected_ffs(), touchstone_file=self.selected_s2p())
+        seed_ffs = [str(item["path"]) for item in self.collect_ffs_items()]
+        suggested_name = deduce_project_name(seed_ffs or [self.selected_s2p()]) if (seed_ffs or self.selected_s2p()) else "New project"
+        dialog = ProjectDialog(self, name=suggested_name, ffs_files=seed_ffs, touchstone_file=self.selected_s2p())
         if dialog.exec() != QDialog.Accepted:
             return
         name = dialog.project_name()
@@ -1498,12 +1993,14 @@ class ModernMainWindow(QMainWindow):
         project = ProjectRecord(
             name=name,
             slug=slug,
-            ffs_files=[serialize_workspace_path(THIS_DIR, path) for path in dialog.ffs_files()],
+            ffs_items=[{"path": serialize_workspace_path(THIS_DIR, path), "enabled": True} for path in dialog.ffs_files()],
             touchstone_file=serialize_workspace_path(THIS_DIR, touchstone),
             settings=self.collect_preset_values(),
             presets={},
             active_preset="",
+            run_state={},
         )
+        project.record_activity("created")
         self.project_store.save_project(project)
         self.refresh_project_list(select_slug=project.slug)
 
@@ -1514,7 +2011,7 @@ class ModernMainWindow(QMainWindow):
         dialog = ProjectDialog(
             self,
             name=self.active_project_name,
-            ffs_files=self.selected_ffs(),
+            ffs_files=[str(item["path"]) for item in self.collect_ffs_items()],
             touchstone_file=self.selected_s2p(),
         )
         if dialog.exec() != QDialog.Accepted:
@@ -1529,15 +2026,27 @@ class ModernMainWindow(QMainWindow):
             QMessageBox.information(self, "Project Exists", f"A project named '{name}' already exists.")
             return
         touchstone = dialog.touchstone_file() or guess_touchstone_path(name, dialog.ffs_files())
+        enabled_map = {
+            str(item["path"]): bool(item["enabled"])
+            for item in self.collect_ffs_items()
+        }
         project = ProjectRecord(
             name=name,
             slug=new_slug,
-            ffs_files=[serialize_workspace_path(THIS_DIR, path) for path in dialog.ffs_files()],
+            ffs_items=[
+                {
+                    "path": serialize_workspace_path(THIS_DIR, path),
+                    "enabled": enabled_map.get(str(resolve_workspace_path(path)), True),
+                }
+                for path in dialog.ffs_files()
+            ],
             touchstone_file=serialize_workspace_path(THIS_DIR, touchstone),
             settings=self.collect_preset_values(),
             presets=self.project_presets,
             active_preset=self.project_active_preset,
+            run_state=self.project_run_state,
         )
+        project.record_activity("edited")
         self.project_store.save_project(project, previous_slug=current_slug)
         self.refresh_project_list(select_slug=project.slug)
 
@@ -1558,6 +2067,45 @@ class ModernMainWindow(QMainWindow):
         self.active_project_slug = ""
         self.active_project_name = ""
         self.refresh_project_list(select_slug="")
+
+    def duplicate_project(self) -> None:
+        if not self.active_project_slug:
+            QMessageBox.information(self, "No Project Selected", "Select a project to duplicate.")
+            return
+        suggested = f"{self.active_project_name or self.active_project_slug} copy"
+        name, ok = QInputDialog.getText(self, "Duplicate Project", "New project name:", text=suggested)
+        name = name.strip()
+        if not ok or not name:
+            return
+        duplicate = self.project_store.duplicate_project(self.active_project_slug, name)
+        QMessageBox.information(self, "Project Duplicated", f"Created '{duplicate.name}'.")
+        self.refresh_project_list(select_slug=duplicate.slug)
+
+    def export_project_bundle(self) -> None:
+        if not self.active_project_slug:
+            QMessageBox.information(self, "No Project Selected", "Select a project to export.")
+            return
+        suggested = str((self.project_store.projects_dir / f"{self.active_project_slug}_bundle.zip").resolve())
+        path, _ = QFileDialog.getSaveFileName(self, "Export Project Bundle", suggested, "ZIP (*.zip)")
+        if not path:
+            return
+        bundle_path = Path(path)
+        if bundle_path.suffix.lower() != ".zip":
+            bundle_path = bundle_path.with_suffix(".zip")
+        self.project_store.export_project_bundle(self.active_project_slug, bundle_path)
+        QMessageBox.information(self, "Bundle Exported", f"Project bundle written to:\n{bundle_path}")
+
+    def import_project_bundle(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Import Project Bundle", str(self.project_store.projects_dir), "ZIP (*.zip)")
+        if not path:
+            return
+        try:
+            project = self.project_store.import_project_bundle(Path(path))
+        except Exception as exc:
+            QMessageBox.warning(self, "Import Failed", f"Could not import bundle:\n{exc}")
+            return
+        QMessageBox.information(self, "Bundle Imported", f"Imported project '{project.name}'.")
+        self.refresh_project_list(select_slug=project.slug)
 
     def _set_touchstone(self, path: str) -> None:
         resolved = str(resolve_workspace_path(path)) if path else ""
@@ -1767,18 +2315,93 @@ class ModernMainWindow(QMainWindow):
     def _item_path(self, item: QListWidgetItem) -> str:
         return item.data(Qt.UserRole) or str(resolve_workspace_path(item.text()))
 
-    def _add_ffs_files(self, files: list[str], save: bool = True):
-        existing = {self._item_path(self.ffs_list.item(i)) for i in range(self.ffs_list.count())}
-        for path in files:
-            actual = str(resolve_workspace_path(path))
-            if actual.lower().endswith(".ffs") and actual not in existing:
-                item = QListWidgetItem(display_workspace_path(actual))
-                item.setData(Qt.UserRole, actual)
-                self.ffs_list.addItem(item)
-                existing.add(actual)
+    def _refresh_ffs_item_display(self, item: QListWidgetItem) -> None:
+        path = self._item_path(item)
+        enabled = item.checkState() == Qt.Checked
+        suffixes: list[str] = []
+        if not enabled:
+            suffixes.append("disabled")
+        if path and not Path(path).exists():
+            suffixes.append("missing")
+        label = display_workspace_path(path)
+        if suffixes:
+            label += " [" + ", ".join(suffixes) + "]"
+        previous = self._suppress_ffs_item_change
+        self._suppress_ffs_item_change = True
+        item.setText(label)
+        item.setToolTip(path)
+        self._suppress_ffs_item_change = previous
+
+    def _make_ffs_item(self, path: str, enabled: bool = True) -> QListWidgetItem:
+        actual = str(resolve_workspace_path(path))
+        item = QListWidgetItem()
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+        item.setData(Qt.UserRole, actual)
+        item.setCheckState(Qt.Checked if enabled else Qt.Unchecked)
+        self._refresh_ffs_item_display(item)
+        return item
+
+    def _replace_ffs_items(self, items: list[dict[str, object]], selected_paths: list[str] | None = None, save: bool = True) -> None:
+        selected = set(selected_paths or [])
+        self._suppress_ffs_item_change = True
+        self.ffs_list.clear()
+        for entry in items:
+            path = str(entry.get("path", "")).strip()
+            if not path:
+                continue
+            item = self._make_ffs_item(path, bool(entry.get("enabled", True)))
+            self.ffs_list.addItem(item)
+            if path in selected:
+                item.setSelected(True)
+        self._suppress_ffs_item_change = False
+        self._update_ffs_action_state()
         if save:
             self.store.set("beam_ffs", self.selected_ffs())
             self.save_active_project()
+
+    def on_ffs_item_changed(self, item: QListWidgetItem) -> None:
+        if self._loading_project or self._suppress_ffs_item_change:
+            return
+        self._refresh_ffs_item_display(item)
+        self.store.set("beam_ffs", self.selected_ffs())
+        self.save_active_project()
+
+    def _update_ffs_action_state(self) -> None:
+        has_project = bool(self.active_project_slug)
+        selected = bool(self.ffs_list.selectedItems())
+        count = self.ffs_list.count()
+        self.remove_ffs_button.setEnabled(has_project and selected)
+        self.clear_ffs_button.setEnabled(has_project and count > 0)
+        self.ffs_up_button.setEnabled(has_project and selected)
+        self.ffs_down_button.setEnabled(has_project and selected)
+        self.ffs_sort_button.setEnabled(has_project and count > 1)
+        self.ffs_toggle_button.setEnabled(has_project and selected)
+        self.ffs_missing_button.setEnabled(has_project and count > 0)
+
+    def _add_ffs_files(self, files: list[object], save: bool = True):
+        existing = {self._item_path(self.ffs_list.item(i)) for i in range(self.ffs_list.count())}
+        added = False
+        self._suppress_ffs_item_change = True
+        for raw in files:
+            if isinstance(raw, dict):
+                path = str(raw.get("path", "")).strip()
+                enabled = bool(raw.get("enabled", True))
+            else:
+                path = str(raw).strip()
+                enabled = True
+            actual = str(resolve_workspace_path(path))
+            if actual.lower().endswith(".ffs") and actual not in existing:
+                item = self._make_ffs_item(actual, enabled)
+                self.ffs_list.addItem(item)
+                existing.add(actual)
+                added = True
+        self._suppress_ffs_item_change = False
+        self._update_ffs_action_state()
+        if save:
+            self.store.set("beam_ffs", self.selected_ffs())
+            self.save_active_project()
+        elif added:
+            self.refresh_derived_paths()
 
     def add_ffs(self):
         if not self.active_project_slug:
@@ -1798,6 +2421,52 @@ class ModernMainWindow(QMainWindow):
         self.ffs_list.clear()
         self.store.set("beam_ffs", [])
         self.save_active_project()
+
+    def move_ffs_up(self) -> None:
+        selected = set(self._selected_ffs_paths())
+        if not selected:
+            return
+        items = self.collect_ffs_items()
+        for index in range(1, len(items)):
+            current = str(items[index]["path"])
+            previous = str(items[index - 1]["path"])
+            if current in selected and previous not in selected:
+                items[index - 1], items[index] = items[index], items[index - 1]
+        self._replace_ffs_items(items, selected_paths=list(selected))
+
+    def move_ffs_down(self) -> None:
+        selected = set(self._selected_ffs_paths())
+        if not selected:
+            return
+        items = self.collect_ffs_items()
+        for index in range(len(items) - 2, -1, -1):
+            current = str(items[index]["path"])
+            following = str(items[index + 1]["path"])
+            if current in selected and following not in selected:
+                items[index], items[index + 1] = items[index + 1], items[index]
+        self._replace_ffs_items(items, selected_paths=list(selected))
+
+    def sort_ffs(self) -> None:
+        items = sorted(
+            self.collect_ffs_items(),
+            key=lambda entry: display_workspace_path(str(entry["path"])).lower(),
+        )
+        self._replace_ffs_items(items, selected_paths=self._selected_ffs_paths())
+
+    def toggle_selected_ffs_enabled(self) -> None:
+        selected = set(self._selected_ffs_paths())
+        if not selected:
+            return
+        items = self.collect_ffs_items()
+        enable_selected = any(not bool(entry["enabled"]) for entry in items if str(entry["path"]) in selected)
+        for entry in items:
+            if str(entry["path"]) in selected:
+                entry["enabled"] = enable_selected
+        self._replace_ffs_items(items, selected_paths=list(selected))
+
+    def remove_missing_ffs(self) -> None:
+        items = [entry for entry in self.collect_ffs_items() if Path(str(entry["path"])).exists()]
+        self._replace_ffs_items(items)
 
     def browse_s2p(self):
         if not self.active_project_slug:
@@ -1843,6 +2512,99 @@ class ModernMainWindow(QMainWindow):
     def status(self, msg: str):
         self.statusBar().showMessage(msg, 4500)
 
+    def _frequency_window_is_valid(self) -> bool:
+        fmin = float(self.shared_fmin.value())
+        fmax = float(self.shared_fmax.value())
+        return fmin <= 0 or fmax > fmin
+
+    def _missing_enabled_ffs(self) -> list[str]:
+        return [path for path in self.selected_ffs() if not Path(path).exists()]
+
+    def _detect_stage_key(self, args: list[str]) -> str:
+        names = {Path(str(arg)).name.lower() for arg in args}
+        mapping = {
+            Path(SCRIPT_BEAM).name.lower(): "beam",
+            Path(SCRIPT_EXTRACT).name.lower(): "extract",
+            Path(SCRIPT_PLOT).name.lower(): "plot",
+            Path(SCRIPT_VSWR).name.lower(): "vswr",
+        }
+        for script_name, stage_key in mapping.items():
+            if script_name in names:
+                return stage_key
+        return ""
+
+    def _enqueue_stage(self, stage_key: str, args: list[str]) -> None:
+        self._pending_stage_keys.append(stage_key)
+        self.proc.enqueue(args)
+        self.refresh_derived_paths()
+
+    def cancel_run(self) -> None:
+        if not (self.proc.running_cmd or self.proc.queue):
+            return
+        stage_key = self._current_stage_key
+        if stage_key:
+            stage_state = self._stage_state(stage_key)
+            stage_state["status"] = "cancelled"
+            stage_state["last_finished_at"] = utc_now_iso()
+            self._append_history("cancelled", stage_key, reason="user")
+        self._pending_stage_keys = []
+        self._current_stage_key = ""
+        self._run_cancelled = True
+        self.proc.stop()
+        self.save_active_project()
+        self.refresh_derived_paths()
+
+    def open_stage_output(self, stage_key: str) -> None:
+        target = self._stage_output_target(stage_key)
+        if stage_key != "plot" and not target.exists():
+            self.status("Generate that output first")
+            return
+        if stage_key == "plot" and not self._stage_output_exists("plot"):
+            self.status("Generate the plots first")
+            return
+        open_in_file_manager(target)
+
+    def on_proc_step_started(self, args: list[str], cmd: str) -> None:
+        stage_key = self._pending_stage_keys.pop(0) if self._pending_stage_keys else self._detect_stage_key(args)
+        self._current_stage_key = stage_key
+        self._run_cancelled = False
+        if not stage_key:
+            self.refresh_derived_paths()
+            return
+        stage_state = self._stage_state(stage_key)
+        stage_state["status"] = "running"
+        stage_state["command"] = cmd
+        stage_state["last_started_at"] = utc_now_iso()
+        self.project_run_state["last_run_at"] = stage_state["last_started_at"]
+        self._append_history("started", stage_key)
+        self.save_active_project()
+        self.refresh_derived_paths()
+
+    def on_proc_step_finished(self, args: list[str], exit_code: int, _exit_status) -> None:
+        stage_key = self._current_stage_key or self._detect_stage_key(args)
+        self._current_stage_key = ""
+        if not stage_key:
+            self.refresh_derived_paths()
+            return
+        if self._run_cancelled:
+            self.refresh_derived_paths()
+            return
+        stage_state = self._stage_state(stage_key)
+        finished_at = utc_now_iso()
+        stage_state["last_finished_at"] = finished_at
+        stage_state["exit_code"] = int(exit_code)
+        if int(exit_code) == 0:
+            stage_state["status"] = "success"
+            stage_state["last_success_at"] = finished_at
+            stage_state["snapshot"] = self._current_stage_snapshot(stage_key)
+            self.project_run_state["last_success_at"] = finished_at
+            self._append_history("succeeded", stage_key)
+        else:
+            stage_state["status"] = "failed"
+            self._append_history("failed", stage_key, exit_code=int(exit_code))
+        self.save_active_project()
+        self.refresh_derived_paths()
+
     def on_proc_started(self, cmd: str):
         self._line_count = 0
         self._started_ts = time.time()
@@ -1855,7 +2617,7 @@ class ModernMainWindow(QMainWindow):
     def on_proc_finished(self):
         if hasattr(self, "_tick"):
             self._tick.stop()
-        self.run_info.setText("Idle")
+        self.run_info.setText("Advancing to next stage..." if self.proc.queue else "Idle")
 
     def _update_run_info(self):
         elapsed = int(time.time() - getattr(self, "_started_ts", time.time()))
@@ -1867,6 +2629,10 @@ class ModernMainWindow(QMainWindow):
         if not self.active_project_slug:
             self.status("Create or select a project first")
             return
+        missing = self._missing_enabled_ffs()
+        if missing:
+            self.status("Remove or fix missing far-field files before running")
+            return
         out = str(self.deduced_beam_output())
         ffs = self.selected_ffs()
         if not ffs:
@@ -1876,13 +2642,17 @@ class ModernMainWindow(QMainWindow):
             "--smooth", str(self.beam_smooth.value()),
             "--theta-window", str(self.theta_window.value())
         ]
-        self.proc.enqueue(args)
+        self._enqueue_stage("beam", args)
 
     def build_extract_args(self) -> list[str] | None:
         if not self.active_project_slug:
             return None
-        ffs = self.selected_ffs()
+        if not self._frequency_window_is_valid():
+            return None
+        ffs = [path for path in self.selected_ffs() if Path(path).exists()]
         s2p = self.selected_s2p()
+        if s2p and not Path(s2p).exists():
+            s2p = ""
         if not ffs and not s2p:
             return None
         args = [which_python(), "-u", SCRIPT_EXTRACT, str(self.deduced_extract_output())]
@@ -1901,15 +2671,21 @@ class ModernMainWindow(QMainWindow):
         return args
 
     def run_extract(self):
+        if self.selected_ffs() and self._missing_enabled_ffs() and not (self.selected_s2p() and Path(self.selected_s2p()).exists()):
+            self.status("Remove or fix missing far-field files before running")
+            return
         args = self.build_extract_args()
         if not args:
-            self.status("Add at least one .ffs file or select a Touchstone file")
+            self.status("Add a valid .ffs or Touchstone input and fix the shared frequency window if needed")
             return
-        self.proc.enqueue(args)
+        self._enqueue_stage("extract", args)
 
     def run_plot(self):
         if not self.active_project_slug:
             self.status("Create or select a project first")
+            return
+        if not self._frequency_window_is_valid():
+            self.status("Set a valid shared frequency window or clear it")
             return
         xlsx = self.deduced_beam_output()
         if not xlsx.exists():
@@ -1946,15 +2722,21 @@ class ModernMainWindow(QMainWindow):
             args.append("--x-log")
         if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
             args += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
-        self.proc.enqueue(args)
+        self._enqueue_stage("plot", args)
 
     def run_vswr(self):
         if not self.active_project_slug:
             self.status("Create or select a project first")
             return
+        if not self._frequency_window_is_valid():
+            self.status("Set a valid shared frequency window or clear it")
+            return
         s2p = self.selected_s2p()
         if not s2p:
             self.status("Select a .s1p or .s2p file")
+            return
+        if not Path(s2p).exists():
+            self.status("Selected Touchstone file is missing")
             return
         args = [which_python(), "-u", SCRIPT_VSWR, s2p,
                 "--output", str(self.deduced_vswr_output()),
@@ -1969,11 +2751,18 @@ class ModernMainWindow(QMainWindow):
             args.append("--x-log")
         if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
             args += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
-        self.proc.enqueue(args)
+        self._enqueue_stage("vswr", args)
 
     def run_full(self):
         if not self.active_project_slug:
             self.status("Create or select a project first")
+            return
+        if not self._frequency_window_is_valid():
+            self.status("Set a valid shared frequency window or clear it")
+            return
+        missing = self._missing_enabled_ffs()
+        if missing:
+            self.status("Remove or fix missing far-field files before running")
             return
         out = str(self.deduced_beam_output())
         ffs = self.selected_ffs()
@@ -1985,11 +2774,11 @@ class ModernMainWindow(QMainWindow):
             "--smooth", str(self.beam_smooth.value()),
             "--theta-window", str(self.theta_window.value())
         ]
-        self.proc.enqueue(args_beam)
+        self._enqueue_stage("beam", args_beam)
 
         args_extract = self.build_extract_args()
         if args_extract:
-            self.proc.enqueue(args_extract)
+            self._enqueue_stage("extract", args_extract)
 
         args_plot = [which_python(), "-u", SCRIPT_PLOT, out,
                 "--out-dir", str(self.project_results_dir()),
@@ -2022,10 +2811,10 @@ class ModernMainWindow(QMainWindow):
             args_plot.append("--x-log")
         if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
             args_plot += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
-        self.proc.enqueue(args_plot)
+        self._enqueue_stage("plot", args_plot)
 
         s2p = self.selected_s2p()
-        if s2p:
+        if s2p and Path(s2p).exists():
             args_vswr = [which_python(), "-u", SCRIPT_VSWR, s2p,
                     "--output", str(self.deduced_vswr_output()),
                     "--grid-color", self.plot_grid.color(),
@@ -2039,7 +2828,7 @@ class ModernMainWindow(QMainWindow):
                 args_vswr.append("--x-log")
             if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
                 args_vswr += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
-            self.proc.enqueue(args_vswr)
+            self._enqueue_stage("vswr", args_vswr)
 
     def _restore_geometry(self):
         geo = self.store.get("geometry", None)

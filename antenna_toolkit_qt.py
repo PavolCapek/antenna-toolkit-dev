@@ -81,9 +81,6 @@ PRESET_KEYS = [
     "rings",
     "angle",
     "clip",
-    "vswr_grid",
-    "vswr_line_1",
-    "vswr_line_2",
 ]
 
 
@@ -327,6 +324,11 @@ class Proc:
         self.win.set_busy(True)
         cmd_str = " ".join([display_command_part(program)] + [display_command_part(arg) for arg in args])
         self.win.on_proc_started(cmd_str)
+        if hasattr(self.win, "on_proc_step_started"):
+            try:
+                self.win.on_proc_step_started(list(self.running_cmd), cmd_str)
+            except Exception:
+                pass
         self.win.log(f"\n$ {cmd_str}\n", color="#8aa2b8", channel="meta")
         self.proc.start(program, args)
 
@@ -356,9 +358,14 @@ class Proc:
             pct = max(0, min(100, int(m.group(1))))
             self.win.set_progress(pct)
 
-    def _on_finished(self):
+    def _on_finished(self, exit_code=0, exit_status=None):
         self.win.set_busy(False)
         self.win.set_progress(None)
+        if hasattr(self.win, "on_proc_step_finished"):
+            try:
+                self.win.on_proc_step_finished(list(self.running_cmd or []), int(exit_code), exit_status)
+            except Exception:
+                pass
         self.win.on_proc_finished()
         self._dequeue_and_start()
 
