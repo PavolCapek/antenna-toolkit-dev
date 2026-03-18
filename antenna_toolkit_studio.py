@@ -123,10 +123,16 @@ class Card(QFrame):
 
 
 class ResponsiveCardPanel(QWidget):
-    def __init__(self, max_columns: int = 3, min_card_width: int = 360):
+    def __init__(
+        self,
+        max_columns: int = 3,
+        min_card_width: int = 360,
+        column_orders: dict[int, list[int]] | None = None,
+    ):
         super().__init__()
         self.max_columns = max(1, max_columns)
         self.min_card_width = max(220, min_card_width)
+        self.column_orders = column_orders or {}
         self._cards: list[QWidget] = []
         self._columns = 0
         self.grid = QGridLayout(self)
@@ -149,6 +155,21 @@ class ResponsiveCardPanel(QWidget):
         columns = max(1, width // self.min_card_width)
         return min(self.max_columns, len(self._cards), columns)
 
+    def _ordered_cards(self, columns: int) -> list[QWidget]:
+        order = self.column_orders.get(columns)
+        if not order:
+            return list(self._cards)
+        seen: set[int] = set()
+        ordered_cards: list[QWidget] = []
+        for index in order:
+            if 0 <= index < len(self._cards) and index not in seen:
+                ordered_cards.append(self._cards[index])
+                seen.add(index)
+        for index, card in enumerate(self._cards):
+            if index not in seen:
+                ordered_cards.append(card)
+        return ordered_cards
+
     def refresh_layout(self, force: bool = False) -> None:
         columns = self._desired_columns()
         if not force and columns == self._columns:
@@ -158,7 +179,7 @@ class ResponsiveCardPanel(QWidget):
             self.grid.takeAt(0)
         for column in range(columns):
             self.grid.setColumnStretch(column, 1)
-        for index, card in enumerate(self._cards):
+        for index, card in enumerate(self._ordered_cards(columns)):
             row = index // columns
             column = index % columns
             self.grid.addWidget(card, row, column)
@@ -776,7 +797,7 @@ class ModernMainWindow(QMainWindow):
         storage_note.setWordWrap(True)
         storage_note.setObjectName("helper")
         storage_card.body.addWidget(storage_note)
-        overview_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320)
+        overview_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 2, 1]})
         overview_panel.set_cards([outputs_card, preset_card, storage_card])
         overview_lay.addWidget(overview_panel)
         overview_lay.addStretch(1)
@@ -828,7 +849,7 @@ class ModernMainWindow(QMainWindow):
         s2p_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=145)
         s2p_actions.set_buttons([self.select_s2p_button, self.clear_s2p_button, self.open_s2p_button])
         s2p_card.body.addWidget(s2p_actions)
-        inputs_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320)
+        inputs_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 2, 1]})
         inputs_panel.set_cards([ffs_card, s2p_card, inputs_help_card])
         inputs_lay.addWidget(inputs_panel)
         inputs_lay.addStretch(1)
@@ -897,7 +918,7 @@ class ModernMainWindow(QMainWindow):
         processing_note.setWordWrap(True)
         processing_note.setObjectName("helper")
         processing_help.body.addWidget(processing_note)
-        processing_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320)
+        processing_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 2, 1]})
         processing_panel.set_cards([workbook_card, frequency_card, processing_help])
         processing_lay.addWidget(processing_panel)
         processing_lay.addStretch(1)
@@ -993,7 +1014,7 @@ class ModernMainWindow(QMainWindow):
         add_form_row(plot_color_form, "Line color 2", self.plot_line2, "Secondary line color used by both the workbook plots and the VSWR plot.")
         plot_color_card.body.addLayout(plot_color_form)
 
-        charts_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320)
+        charts_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 1, 2, 5, 3, 4]})
         charts_panel.set_cards([gain_range_card, beamwidth_range_card, efficiency_range_card, vswr_range_card, polar_card, plot_color_card])
         charts_lay.addWidget(charts_panel)
         charts_lay.addStretch(1)
