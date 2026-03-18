@@ -639,6 +639,7 @@ class ModernMainWindow(QMainWindow):
         self._apply_style()
         self.refresh_project_list(select_slug="")
         self._reset_to_default_state()
+        self._restore_geometry()
         self.store.set("theme", self.theme)
 
     def _build_ui(self):
@@ -2987,18 +2988,20 @@ class ModernMainWindow(QMainWindow):
             self._enqueue_stage("vswr", args_vswr)
 
     def _restore_geometry(self):
-        geo = self.store.get("geometry", None)
-        if geo:
-            try:
-                ba = QByteArray.fromBase64(geo.encode("ascii"))
-                self.restoreGeometry(ba)
-            except Exception:
-                pass
+        width = self.store.get("window_width", None)
+        height = self.store.get("window_height", None)
+        try:
+            width = int(width)
+            height = int(height)
+        except (TypeError, ValueError):
+            return
+        if width >= 900 and height >= 600:
+            self.resize(width, height)
 
     def _save_geometry(self):
         try:
-            ba = self.saveGeometry().toBase64().data().decode("ascii")
-            self.store.set("geometry", ba)
+            self.store.set("window_width", int(self.width()))
+            self.store.set("window_height", int(self.height()))
             if hasattr(self, "console_window"):
                 self.console_window._save_geometry()
         except Exception:

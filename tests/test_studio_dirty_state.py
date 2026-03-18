@@ -120,6 +120,17 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.plot_grid.next_btn.focusPolicy(), Qt.NoFocus)
         self.assertIs(self.window.plot_grid.focusProxy(), self.window.plot_grid.combo)
 
+    def test_restore_geometry_uses_saved_window_size(self) -> None:
+        self.window.store.set("window_width", 1234)
+        self.window.store.set("window_height", 777)
+        self.window.resize(900, 900)
+
+        self.window._restore_geometry()
+        self.app.processEvents()
+
+        self.assertEqual(self.window.width(), 1234)
+        self.assertEqual(self.window.height(), 777)
+
 
 if __name__ == "__main__":
     unittest.main()
