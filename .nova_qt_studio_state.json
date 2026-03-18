@@ -1,0 +1,45 @@
+{
+  "beam_ffs": [
+    "C:\\Users\\capek\\OneDrive\\Documents\\antenna_toolkit_dev\\Input data\\SH20WB_Horizontal.ffs",
+    "C:\\Users\\capek\\OneDrive\\Documents\\antenna_toolkit_dev\\Input data\\SH20WB_Vertical.ffs"
+  ],
+  "vswr_s2p": "C:\\Users\\capek\\OneDrive\\Documents\\antenna_toolkit_dev\\Input data\\SH20WB.s2p",
+  "geometry": "AdnQywADAAD////UAAAArwAAB08AAAVs////1QAAAM0AAAdOAAAFawAAAAAAAAAAB4D////VAAAAzQAAB04AAAVr",
+  "studio_split_sizes": [
+    764,
+    1114
+  ],
+  "studio_right_sizes": [
+    568,
+    319
+  ],
+  "theta": 8.0,
+  "vswr_ystep": 0.5,
+  "vswr_ymin": 1.0,
+  "vswr_xstep": 0.3,
+  "smooth": 5,
+  "plot_fmax": 7.2,
+  "plot_fmin": 4.9,
+  "vswr_ymax": 4.0,
+  "vswr_fmin": 4.9,
+  "vswr_fmax": 7.2,
+  "angle": 30,
+  "vswr_smooth": 8,
+  "plot_line_1": "#2bb6f6",
+  "theme": "dark",
+  "vswr_line_1": "#2bb6f6",
+  "smooth2": 5,
+  "plot_line_2": "#f5a623",
+  "console_visible": false,
+  "console_geometry": "AdnQywADAAAAAAABAAAAIAAAA9QAAAFfAAAAAQAAACAAAAPUAAABXwAAAAAAAAAAB4AAAAABAAAAIAAAA9QAAAFf",
+  "vswr_line_2": "#f5a623",
+  "plot_xlog": false,
+  "vswr_xlog": false,
+  "xstep": 0.5,
+  "grid_color": "#858c96",
+  "vswr_grid": "#858c96",
+  "gain_ymax": 30.0,
+  "beamwidth_ymax": 50.0,
+  "beam_eff_ymin": 80.0,
+  "beam_eff_ymax": 100.0
+}

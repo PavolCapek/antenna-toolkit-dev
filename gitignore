@@ -1,0 +1,20 @@
+# Data folders to exclude
+/Input data/
+/Results/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local tool/editor state
+.nova_qt_state.json
+.nova_qt_studio_state.json
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Optional OS/editor files
+.DS_Store
+Thumbs.db
