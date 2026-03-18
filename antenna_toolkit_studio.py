@@ -163,6 +163,45 @@ class ResponsiveCardPanel(QWidget):
             self.grid.addWidget(card, row, column)
 
 
+class ResponsiveButtonPanel(QWidget):
+    def __init__(self, max_columns: int = 4, min_button_width: int = 140):
+        super().__init__()
+        self.max_columns = max(1, max_columns)
+        self.min_button_width = max(80, min_button_width)
+        self._buttons: list[QWidget] = []
+        self._columns = 0
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(8)
+        self.grid.setVerticalSpacing(8)
+
+    def set_buttons(self, buttons: list[QWidget]) -> None:
+        self._buttons = buttons
+        self.refresh_layout(force=True)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.refresh_layout()
+
+    def _desired_columns(self) -> int:
+        width = max(self.width(), self.min_button_width)
+        return max(1, min(self.max_columns, width // self.min_button_width))
+
+    def refresh_layout(self, force: bool = False) -> None:
+        columns = self._desired_columns()
+        if not force and columns == self._columns:
+            return
+        self._columns = columns
+        while self.grid.count():
+            self.grid.takeAt(0)
+        for column in range(columns):
+            self.grid.setColumnStretch(column, 1)
+        for index, button in enumerate(self._buttons):
+            row = index // columns
+            column = index % columns
+            self.grid.addWidget(button, row, column)
+
+
 class DropList(QListWidget):
     def __init__(self, callback):
         super().__init__()
@@ -546,9 +585,6 @@ class ModernMainWindow(QMainWindow):
 
         action_col = QVBoxLayout()
         action_col.setSpacing(8)
-        run_row = QHBoxLayout()
-        run_row.setContentsMargins(0, 0, 0, 0)
-        run_row.setSpacing(8)
         self.btn_full = QPushButton("Run Full Pipeline")
         self.btn_full.setObjectName("primaryButton")
         self.btn_full.clicked.connect(self.run_full)
@@ -575,13 +611,16 @@ class ModernMainWindow(QMainWindow):
         self.btn_vswr.setToolTip("Generate only the VSWR plot from the current Touchstone file.")
         self.console_toggle.setToolTip("Show or hide the separate output console window.")
         self.theme_toggle.setToolTip("Switch between the light and dark studio themes.")
-        run_row.addWidget(self.btn_full)
-        run_row.addWidget(self.btn_beam)
-        run_row.addWidget(self.btn_extract)
-        run_row.addWidget(self.btn_plot)
-        run_row.addWidget(self.btn_vswr)
-        run_row.addWidget(self.console_toggle)
-        run_row.addWidget(self.theme_toggle)
+        self.hero_actions = ResponsiveButtonPanel(max_columns=4, min_button_width=150)
+        self.hero_actions.set_buttons([
+            self.btn_full,
+            self.btn_beam,
+            self.btn_extract,
+            self.btn_plot,
+            self.btn_vswr,
+            self.console_toggle,
+            self.theme_toggle,
+        ])
         self.run_info = QLabel("Idle")
         self.run_info.setObjectName("runInfo")
         self.busy = QProgressBar()
@@ -593,7 +632,7 @@ class ModernMainWindow(QMainWindow):
         info_row.setSpacing(10)
         info_row.addWidget(self.run_info, 1)
         info_row.addWidget(self.busy)
-        action_col.addLayout(run_row)
+        action_col.addWidget(self.hero_actions)
         action_col.addLayout(info_row)
         hero_lay.addLayout(action_col)
         root_lay.addWidget(hero, 0)
@@ -616,7 +655,7 @@ class ModernMainWindow(QMainWindow):
         project_help.setWordWrap(True)
         project_help.setObjectName("helper")
         summary.body.addWidget(project_help)
-        project_row = QHBoxLayout()
+        project_row = QVBoxLayout()
         project_row.setContentsMargins(0, 0, 0, 0)
         project_row.setSpacing(8)
         self.project_combo = QComboBox()
@@ -628,10 +667,14 @@ class ModernMainWindow(QMainWindow):
         self.project_edit_button.clicked.connect(self.edit_project)
         self.project_delete_button = QPushButton("Delete")
         self.project_delete_button.clicked.connect(self.delete_project)
-        project_row.addWidget(self.project_combo, 1)
-        project_row.addWidget(self.project_new_button)
-        project_row.addWidget(self.project_edit_button)
-        project_row.addWidget(self.project_delete_button)
+        project_row.addWidget(self.project_combo)
+        project_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=110)
+        project_actions.set_buttons([
+            self.project_new_button,
+            self.project_edit_button,
+            self.project_delete_button,
+        ])
+        project_row.addWidget(project_actions)
         summary.body.addLayout(project_row)
         self.project_name = QLabel("No project selected")
         self.project_name.setObjectName("projectName")
@@ -662,9 +705,6 @@ class ModernMainWindow(QMainWindow):
         self.preset_combo.currentTextChanged.connect(self.on_preset_selected)
         self.preset_combo.setToolTip("Choose a saved preset to apply its control, range, and style settings.")
         preset_card.body.addWidget(self.preset_combo)
-        preset_row = QHBoxLayout()
-        preset_row.setContentsMargins(0, 0, 0, 0)
-        preset_row.setSpacing(8)
         preset_new = QPushButton("New"); preset_new.clicked.connect(self.create_preset)
         preset_save = QPushButton("Save"); preset_save.clicked.connect(self.save_preset)
         preset_rename = QPushButton("Rename"); preset_rename.clicked.connect(self.rename_preset)
@@ -673,23 +713,16 @@ class ModernMainWindow(QMainWindow):
         preset_save.setToolTip("Overwrite the selected preset with the current GUI settings.")
         preset_rename.setToolTip("Rename the selected preset without changing its settings.")
         preset_delete.setToolTip("Delete the selected preset.")
-        preset_row.addWidget(preset_new)
-        preset_row.addWidget(preset_save)
-        preset_row.addWidget(preset_rename)
-        preset_row.addWidget(preset_delete)
-        preset_row.addStretch(1)
-        preset_card.body.addLayout(preset_row)
-        io_row = QHBoxLayout()
-        io_row.setContentsMargins(0, 0, 0, 0)
-        io_row.setSpacing(8)
+        preset_actions = ResponsiveButtonPanel(max_columns=4, min_button_width=110)
+        preset_actions.set_buttons([preset_new, preset_save, preset_rename, preset_delete])
+        preset_card.body.addWidget(preset_actions)
         preset_import = QPushButton("Import"); preset_import.clicked.connect(self.import_presets)
         preset_export = QPushButton("Export"); preset_export.clicked.connect(self.export_presets)
         preset_import.setToolTip("Import presets from a JSON file and merge them into the current list.")
         preset_export.setToolTip("Export all saved presets to a JSON file.")
-        io_row.addWidget(preset_import)
-        io_row.addWidget(preset_export)
-        io_row.addStretch(1)
-        preset_card.body.addLayout(io_row)
+        preset_io = ResponsiveButtonPanel(max_columns=2, min_button_width=120)
+        preset_io.set_buttons([preset_import, preset_export])
+        preset_card.body.addWidget(preset_io)
         left_lay.addWidget(preset_card)
 
         ffs_card = Card("Far-field exports", "Inputs")
@@ -703,34 +736,32 @@ class ModernMainWindow(QMainWindow):
         self.ffs_list.setMinimumHeight(230)
         self.ffs_list.setToolTip("Add one or more CST far-field export files (.ffs). Their names drive project-name deduction.")
         ffs_card.body.addWidget(self.ffs_list, 1)
-        ffs_row = QHBoxLayout()
-        ffs_row.setContentsMargins(0, 0, 0, 0)
-        ffs_row.setSpacing(8)
         addb = QPushButton("Add .ffs"); addb.clicked.connect(self.add_ffs)
         remb = QPushButton("Remove selected"); remb.clicked.connect(self.remove_ffs)
         clearb = QPushButton("Clear list"); clearb.clicked.connect(self.clear_ffs)
         addb.setToolTip("Browse for CST far-field export files to include in this project.")
         remb.setToolTip("Remove the highlighted far-field files from the current project.")
         clearb.setToolTip("Clear the full far-field file list.")
-        ffs_row.addWidget(addb); ffs_row.addWidget(remb); ffs_row.addWidget(clearb); ffs_row.addStretch(1)
-        ffs_card.body.addLayout(ffs_row)
+        ffs_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=135)
+        ffs_actions.set_buttons([addb, remb, clearb])
+        ffs_card.body.addWidget(ffs_actions)
         left_lay.addWidget(ffs_card, 1)
 
         s2p_card = Card("Touchstone", "Inputs")
         s2p_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        s2p_row = QHBoxLayout()
         self.s2p_field = QLineEdit("")
         self.s2p_field.setReadOnly(True)
         self.s2p_field.setToolTip("Detected or manually selected Touchstone file used for the VSWR plot (.s1p or .s2p).")
-        s2p_row.addWidget(self.s2p_field, 1)
+        s2p_card.body.addWidget(self.s2p_field)
         sel = QPushButton("Select Touchstone"); sel.clicked.connect(self.browse_s2p)
         clr = QPushButton("Clear"); clr.clicked.connect(self.clear_s2p)
         opn = QPushButton("Open"); opn.clicked.connect(lambda: open_in_file_manager(resolve_workspace_path(self.s2p_field.text())))
         sel.setToolTip("Choose a Touchstone file manually if the automatic project match is not the one you want.")
         clr.setToolTip("Clear the current Touchstone selection and let deduction run again.")
         opn.setToolTip("Open the selected Touchstone file in File Explorer.")
-        s2p_row.addWidget(sel); s2p_row.addWidget(clr); s2p_row.addWidget(opn)
-        s2p_card.body.addLayout(s2p_row)
+        s2p_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=145)
+        s2p_actions.set_buttons([sel, clr, opn])
+        s2p_card.body.addWidget(s2p_actions)
         left_lay.addWidget(s2p_card)
         left_lay.setStretch(0, 0)
         left_lay.setStretch(1, 0)
