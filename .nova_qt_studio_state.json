@@ -4,10 +4,10 @@
     "C:\\Users\\capek\\OneDrive\\Documents\\antenna_toolkit_dev\\Input data\\SH20WB_Vertical.ffs"
   ],
   "vswr_s2p": "C:\\Users\\capek\\OneDrive\\Documents\\antenna_toolkit_dev\\Input data\\SH20WB.s2p",
-  "geometry": "AdnQywADAAD////UAAAArwAAB08AAAVs////1QAAAM0AAAdOAAAFawAAAAAAAAAAB4D////VAAAAzQAAB04AAAVr",
+  "geometry": "AdnQywADAAD///Mt////wv//+RgAAAS9///zLf///+D///kYAAAEvQAAAAEAAAAADAD///Mt////4P//+RgAAAS9",
   "studio_split_sizes": [
-    764,
-    1114
+    381,
+    1099
   ],
   "studio_right_sizes": [
     568,
@@ -31,7 +31,7 @@
   "smooth2": 5,
   "plot_line_2": "#f5a623",
   "console_visible": false,
-  "console_geometry": "AdnQywADAAAAAAABAAAAIAAAA9QAAAFfAAAAAQAAACAAAAPUAAABXwAAAAAAAAAAB4AAAAABAAAAIAAAA9QAAAFf",
+  "console_geometry": "AdnQywADAAAAAAAAAAAAAAAAA9MAAAE/AAAAAAAAAAAAAAPTAAABPwAAAAAAAAAADXAAAAAAAAAAAAAAA9MAAAE/",
   "vswr_line_2": "#f5a623",
   "plot_xlog": false,
   "vswr_xlog": false,
