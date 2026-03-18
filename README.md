@@ -70,6 +70,7 @@ python antenna_toolkit_studio.py
   - one or more `.ffs` files
   - zero or one Touchstone file
   - the current processing and chart settings
+  - the project's saved GUI preset library
 - Project metadata is saved in:
   `Projects\<project>\project.json`
 

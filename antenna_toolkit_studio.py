@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
 
 from antenna_toolkit_qt import (
     THIS_DIR, SCRIPT_BEAM, SCRIPT_EXTRACT, SCRIPT_PLOT, SCRIPT_VSWR,
-    PRESET_STORE_KEY, ACTIVE_PRESET_KEY,
     suggest_preset_name, normalize_preset_payload,
     DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, Persist, Proc,
     which_python, open_in_file_manager, resolve_workspace_path,
@@ -462,6 +461,8 @@ class ModernMainWindow(QMainWindow):
         self._loading_project = False
         self.active_project_slug = str(self.store.get("active_project", "")).strip()
         self.active_project_name = ""
+        self.project_presets: dict[str, dict[str, object]] = {}
+        self.project_active_preset = ""
         self.theme = str(self.store.get("theme", "light")).lower()
         if self.theme not in {"light", "dark"}:
             self.theme = "light"
@@ -816,7 +817,7 @@ class ModernMainWindow(QMainWindow):
         self._set_console_visible(bool(self.store.get("console_visible", False)), persist=False)
 
         self._bind_project_persistence()
-        self.refresh_preset_list(select_name=str(self.store.get(ACTIVE_PRESET_KEY, "")))
+        self.refresh_preset_list()
 
     def _path_row(self, field: QLineEdit) -> QWidget:
         row = QWidget()
@@ -1040,6 +1041,8 @@ class ModernMainWindow(QMainWindow):
             ffs_files=[serialize_workspace_path(THIS_DIR, path) for path in self.selected_ffs()],
             touchstone_file=serialize_workspace_path(THIS_DIR, self.selected_s2p()),
             settings=self.collect_preset_values(),
+            presets=self.project_presets,
+            active_preset=self.project_active_preset,
         )
 
     def project_results_dir(self) -> Path:
@@ -1112,11 +1115,14 @@ class ModernMainWindow(QMainWindow):
         if not slug:
             self.active_project_slug = ""
             self.active_project_name = ""
+            self.project_presets = {}
+            self.project_active_preset = ""
             self._loading_project = True
             self.ffs_list.clear()
             self.s2p_field.clear()
             self._loading_project = False
             self.store.set("active_project", "")
+            self.refresh_preset_list()
             self.refresh_derived_paths()
             return
         project = self.project_store.load_project(slug)
@@ -1134,10 +1140,21 @@ class ModernMainWindow(QMainWindow):
             guessed = guess_touchstone_path(project.name, self.selected_ffs())
             touchstone = guessed
         self.s2p_field.setText(display_workspace_path(touchstone))
+        self.project_presets = normalize_preset_payload(project.presets)
+        self.project_active_preset = project.active_preset if project.active_preset in self.project_presets else ""
+        if not self.project_presets:
+            legacy_presets = normalize_preset_payload(self.store.get("ui_presets", {}))
+            legacy_active = str(self.store.get("active_preset", "")).strip()
+            if legacy_presets:
+                self.project_presets = legacy_presets
+                self.project_active_preset = legacy_active if legacy_active in legacy_presets else ""
+        self.refresh_preset_list(select_name=self.project_active_preset)
         self.apply_preset_values(project.settings)
         self.store.set("beam_ffs", self.selected_ffs())
         self.store.set("vswr_s2p", touchstone)
         self._loading_project = False
+        if not project.presets and self.project_presets:
+            self.save_active_project()
         self.refresh_derived_paths()
 
     def save_active_project(self) -> None:
@@ -1174,6 +1191,8 @@ class ModernMainWindow(QMainWindow):
             ffs_files=[serialize_workspace_path(THIS_DIR, path) for path in dialog.ffs_files()],
             touchstone_file=serialize_workspace_path(THIS_DIR, touchstone),
             settings=self.collect_preset_values(),
+            presets={},
+            active_preset="",
         )
         self.project_store.save_project(project)
         self.refresh_project_list(select_slug=project.slug)
@@ -1206,6 +1225,8 @@ class ModernMainWindow(QMainWindow):
             ffs_files=[serialize_workspace_path(THIS_DIR, path) for path in dialog.ffs_files()],
             touchstone_file=serialize_workspace_path(THIS_DIR, touchstone),
             settings=self.collect_preset_values(),
+            presets=self.project_presets,
+            active_preset=self.project_active_preset,
         )
         self.project_store.save_project(project, previous_slug=current_slug)
         self.refresh_project_list(select_slug=project.slug)
@@ -1235,8 +1256,7 @@ class ModernMainWindow(QMainWindow):
         self.save_active_project()
 
     def preset_names(self) -> list[str]:
-        presets = self.store.get(PRESET_STORE_KEY, {}) or {}
-        return sorted(str(name) for name in presets.keys())
+        return sorted(str(name) for name in self.project_presets.keys())
 
     def current_preset_name(self) -> str:
         if not hasattr(self, "preset_combo"):
@@ -1247,6 +1267,8 @@ class ModernMainWindow(QMainWindow):
     def refresh_preset_list(self, select_name: str = "") -> None:
         if not hasattr(self, "preset_combo"):
             return
+        if not select_name:
+            select_name = self.project_active_preset
         self.preset_combo.blockSignals(True)
         self.preset_combo.clear()
         self.preset_combo.addItem("No preset", "")
@@ -1324,41 +1346,49 @@ class ModernMainWindow(QMainWindow):
 
     def on_preset_selected(self, _text: str) -> None:
         name = self.current_preset_name()
-        self.store.set(ACTIVE_PRESET_KEY, name)
+        self.project_active_preset = name
         if not name:
+            self.save_active_project()
             return
-        presets = self.store.get(PRESET_STORE_KEY, {}) or {}
-        values = presets.get(name, {})
+        values = self.project_presets.get(name, {})
         if isinstance(values, dict):
             self.apply_preset_values(values)
+        self.save_active_project()
 
     def create_preset(self) -> None:
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
         suggested = suggest_preset_name(self.preset_names(), self.active_project_name or "Preset")
         name, ok = QInputDialog.getText(self, "Create Preset", "Preset name:", text=suggested)
         name = name.strip()
         if not ok or not name:
             return
-        presets = self.store.get(PRESET_STORE_KEY, {}) or {}
-        if name in presets:
+        if name in self.project_presets:
             QMessageBox.information(self, "Preset Exists", f"A preset named '{name}' already exists.")
             return
-        presets[name] = self.collect_preset_values()
-        self.store.set(PRESET_STORE_KEY, presets)
-        self.store.set(ACTIVE_PRESET_KEY, name)
+        self.project_presets[name] = self.collect_preset_values()
+        self.project_active_preset = name
+        self.save_active_project()
         self.refresh_preset_list(select_name=name)
 
     def save_preset(self) -> None:
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
         name = self.current_preset_name()
         if not name:
             self.create_preset()
             return
-        presets = self.store.get(PRESET_STORE_KEY, {}) or {}
-        presets[name] = self.collect_preset_values()
-        self.store.set(PRESET_STORE_KEY, presets)
-        self.store.set(ACTIVE_PRESET_KEY, name)
+        self.project_presets[name] = self.collect_preset_values()
+        self.project_active_preset = name
+        self.save_active_project()
         self.refresh_preset_list(select_name=name)
 
     def rename_preset(self) -> None:
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
         name = self.current_preset_name()
         if not name:
             QMessageBox.information(self, "No Preset Selected", "Select a preset to rename.")
@@ -1367,29 +1397,33 @@ class ModernMainWindow(QMainWindow):
         new_name = new_name.strip()
         if not ok or not new_name or new_name == name:
             return
-        presets = self.store.get(PRESET_STORE_KEY, {}) or {}
-        if new_name in presets:
+        if new_name in self.project_presets:
             QMessageBox.information(self, "Preset Exists", f"A preset named '{new_name}' already exists.")
             return
-        presets[new_name] = presets.pop(name)
-        self.store.set(PRESET_STORE_KEY, presets)
-        self.store.set(ACTIVE_PRESET_KEY, new_name)
+        self.project_presets[new_name] = self.project_presets.pop(name)
+        self.project_active_preset = new_name
+        self.save_active_project()
         self.refresh_preset_list(select_name=new_name)
 
     def delete_preset(self) -> None:
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
         name = self.current_preset_name()
         if not name:
             QMessageBox.information(self, "No Preset Selected", "Select a preset to delete.")
             return
         if QMessageBox.question(self, "Delete Preset", f"Delete preset '{name}'?") != QMessageBox.Yes:
             return
-        presets = self.store.get(PRESET_STORE_KEY, {}) or {}
-        presets.pop(name, None)
-        self.store.set(PRESET_STORE_KEY, presets)
-        self.store.set(ACTIVE_PRESET_KEY, "")
+        self.project_presets.pop(name, None)
+        self.project_active_preset = ""
+        self.save_active_project()
         self.refresh_preset_list(select_name="")
 
     def import_presets(self) -> None:
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
         path, _ = QFileDialog.getOpenFileName(self, "Import Presets", str(self.project_results_dir()), "JSON (*.json)")
         if not path:
             return
@@ -1402,15 +1436,16 @@ class ModernMainWindow(QMainWindow):
         if not imported:
             QMessageBox.information(self, "No Presets Imported", "The selected file did not contain any valid presets.")
             return
-        presets = self.store.get(PRESET_STORE_KEY, {}) or {}
-        presets.update(imported)
-        self.store.set(PRESET_STORE_KEY, presets)
+        self.project_presets.update(imported)
+        self.save_active_project()
         self.refresh_preset_list(select_name=self.current_preset_name())
         QMessageBox.information(self, "Presets Imported", f"Imported {len(imported)} preset(s).")
 
     def export_presets(self) -> None:
-        presets = self.store.get(PRESET_STORE_KEY, {}) or {}
-        if not presets:
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
+        if not self.project_presets:
             QMessageBox.information(self, "No Presets", "There are no presets to export.")
             return
         suggested = str((self.project_results_dir() / "antenna_toolkit_presets.json").resolve())
@@ -1420,8 +1455,8 @@ class ModernMainWindow(QMainWindow):
         out_path = Path(path)
         if out_path.suffix.lower() != ".json":
             out_path = out_path.with_suffix(".json")
-        out_path.write_text(json.dumps({"presets": presets}, indent=2), encoding="utf-8")
-        QMessageBox.information(self, "Presets Exported", f"Exported {len(presets)} preset(s) to:\n{out_path}")
+        out_path.write_text(json.dumps({"presets": self.project_presets}, indent=2), encoding="utf-8")
+        QMessageBox.information(self, "Presets Exported", f"Exported {len(self.project_presets)} preset(s) to:\n{out_path}")
 
     def _item_path(self, item: QListWidgetItem) -> str:
         return item.data(Qt.UserRole) or str(resolve_workspace_path(item.text()))

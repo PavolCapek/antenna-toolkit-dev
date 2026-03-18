@@ -42,6 +42,8 @@ class ProjectRecord:
     ffs_files: list[str] = field(default_factory=list)
     touchstone_file: str = ""
     settings: dict[str, Any] = field(default_factory=dict)
+    presets: dict[str, dict[str, Any]] = field(default_factory=dict)
+    active_preset: str = ""
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ProjectRecord":
@@ -52,7 +54,19 @@ class ProjectRecord:
         settings = payload.get("settings", {})
         if not isinstance(settings, dict):
             settings = {}
-        return cls(name=name or slug, slug=slug, ffs_files=ffs_files, touchstone_file=touchstone_file, settings=settings)
+        presets = payload.get("presets", {})
+        if not isinstance(presets, dict):
+            presets = {}
+        active_preset = str(payload.get("active_preset", "")).strip()
+        return cls(
+            name=name or slug,
+            slug=slug,
+            ffs_files=ffs_files,
+            touchstone_file=touchstone_file,
+            settings=settings,
+            presets={str(key): value for key, value in presets.items() if isinstance(value, dict)},
+            active_preset=active_preset,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +75,8 @@ class ProjectRecord:
             "ffs_files": self.ffs_files,
             "touchstone_file": self.touchstone_file,
             "settings": self.settings,
+            "presets": self.presets,
+            "active_preset": self.active_preset,
         }
 
     def project_dir(self, root: Path) -> Path:
