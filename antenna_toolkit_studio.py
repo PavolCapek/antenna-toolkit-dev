@@ -597,7 +597,9 @@ class ModernMainWindow(QMainWindow):
         self._current_stage_key = ""
         self._pending_stage_keys: list[str] = []
         self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
-        self.active_project_slug = str(self.store.get("active_project", "")).strip()
+        self._saved_project_signature = ""
+        self._reverting_project_selection = False
+        self.active_project_slug = ""
         self.active_project_name = ""
         self.project_presets: dict[str, dict[str, object]] = {}
         self.project_active_preset = ""
@@ -607,9 +609,9 @@ class ModernMainWindow(QMainWindow):
             self.theme = "light"
         self._build_ui()
         self._apply_style()
-        self.refresh_project_list(select_slug=self.active_project_slug)
+        self.refresh_project_list(select_slug="")
+        self._reset_to_default_state()
         self.store.set("theme", self.theme)
-        self._restore_geometry()
 
     def _build_ui(self):
         root = QWidget()
@@ -1153,17 +1155,13 @@ class ModernMainWindow(QMainWindow):
 
         self.console_window = ConsoleWindow(self, self.store)
         self.console = self.console_window.console
-        self._set_console_visible(bool(self.store.get("console_visible", False)), persist=False)
+        self._set_console_visible(False, persist=False)
 
         self._bind_project_persistence()
         self.refresh_preset_list()
         self._sync_theme_toggle()
         self._sync_console_toggle()
-        initial_page = int(self.store.get("studio_nav_index", 0))
-        if 0 <= initial_page < self.workflow_tabs.count():
-            self.workflow_tabs.setCurrentIndex(initial_page)
-        else:
-            self.workflow_tabs.setCurrentIndex(0)
+        self.workflow_tabs.setCurrentIndex(0)
         self.on_tab_changed(self.workflow_tabs.currentIndex())
 
     def _make_scroll_page(self) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
@@ -1182,6 +1180,93 @@ class ModernMainWindow(QMainWindow):
         if index < 0:
             return
         self.store.set("studio_nav_index", index)
+
+    def _reset_to_default_state(self) -> None:
+        self._loading_project = True
+        self.active_project_slug = ""
+        self.active_project_name = ""
+        self.project_presets = {}
+        self.project_active_preset = ""
+        self.project_run_state = {}
+        self._saved_project_signature = ""
+        self._pending_stage_keys = []
+        self._current_stage_key = ""
+        self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
+        self.ffs_list.clear()
+        self.s2p_field.clear()
+        self.beam_smooth.setValue(5)
+        self.theta_window.setValue(8.0)
+        self.plot_smooth.setValue(5)
+        self.shared_xstep.setValue(0.2)
+        self.shared_fmin.setValue(0.0)
+        self.shared_fmax.setValue(0.0)
+        self.shared_xlog.setChecked(False)
+        self.gain_ymin.setValue(0.0)
+        self.gain_ymax.setValue(0.0)
+        self.gain_y_step.setValue(0.0)
+        self.beamwidth_ymin.setValue(0.0)
+        self.beamwidth_ymax.setValue(0.0)
+        self.beamwidth_y_step.setValue(0.0)
+        self.beam_eff_ymin.setValue(0.0)
+        self.beam_eff_ymax.setValue(0.0)
+        self.beam_eff_y_step.setValue(0.0)
+        self.vswr_ymin.setValue(1.0)
+        self.vswr_ymax.setValue(10.0)
+        self.vswr_ystep.setValue(1.0)
+        self.vswr_smooth.setValue(5)
+        self.plot_grid.set_color(DEFAULT_GRID_COLOR, persist=False)
+        self.plot_line1.set_color(DEFAULT_LINE_COLORS[0][1], persist=False)
+        self.plot_line2.set_color(DEFAULT_LINE_COLORS[1][1], persist=False)
+        self.rings.setText("0,-7.5,-15,-22.5,-30")
+        self.angle_step.setValue(30)
+        self.clip_db.setValue(-30.0)
+        self.workflow_tabs.setCurrentIndex(0)
+        self.refresh_preset_list(select_name="")
+        self.project_combo.blockSignals(True)
+        self.project_combo.setCurrentIndex(0)
+        self.project_combo.blockSignals(False)
+        self.store.set("active_project", "")
+        self._loading_project = False
+        self.refresh_derived_paths()
+
+    def _project_signature(self, project: ProjectRecord | None = None) -> str:
+        project = project or self.current_project()
+        if not project:
+            return ""
+        return json.dumps(project.to_dict(), sort_keys=True)
+
+    def _capture_saved_project_signature(self, project: ProjectRecord | None = None) -> None:
+        self._saved_project_signature = self._project_signature(project)
+
+    def has_unsaved_project_changes(self) -> bool:
+        if self._loading_project or not self.active_project_slug:
+            return False
+        return self._project_signature() != self._saved_project_signature
+
+    def _mark_project_dirty(self) -> None:
+        if self._loading_project or not self.active_project_slug:
+            return
+        self.refresh_derived_paths()
+
+    def _confirm_pending_project_changes(self, action: str) -> bool:
+        if not self.has_unsaved_project_changes():
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Unsaved Changes",
+            f"The current project or its presets have unsaved changes. Save before {action}?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+        if answer == QMessageBox.Cancel:
+            return False
+        if answer == QMessageBox.Save:
+            self.save_active_project()
+        return True
+
+    def _save_project_if_dirty(self) -> None:
+        if self.has_unsaved_project_changes():
+            self.save_active_project()
 
     def _path_row(self, field: QLineEdit) -> QWidget:
         row = QWidget()
@@ -1424,8 +1509,7 @@ class ModernMainWindow(QMainWindow):
             signal.connect(self.on_project_configuration_changed)
 
     def on_project_configuration_changed(self, *_args) -> None:
-        self.save_active_project()
-        self.refresh_derived_paths()
+        self._mark_project_dirty()
 
     def collect_ffs_items(self) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
@@ -1715,24 +1799,34 @@ class ModernMainWindow(QMainWindow):
             + f" | {file_count} file(s) in project folder"
         )
         self.artifact_summary_label.setText(" | ".join(artifact_bits))
+        unsaved_changes = self.has_unsaved_project_changes()
+        if unsaved_changes:
+            self.project_health.setText("Unsaved project or preset changes are pending.")
+            self.run_summary.setText("Current edits are not saved yet.")
         blocking_messages = [msg for msg in messages if not msg.startswith("VSWR stage is unavailable")]
-        if blocking_messages:
+        if not unsaved_changes and blocking_messages:
             self.validation_label.setText("\n".join(messages))
             self.project_health.setText(f"Validation needs attention. {len(blocking_messages)} item(s) flagged.")
-        elif messages:
+        elif not unsaved_changes and messages:
             self.validation_label.setText("\n".join(messages))
             self.project_health.setText("Core inputs are valid. Add a Touchstone file when you need VSWR output.")
-        elif stale_stages:
+        elif not unsaved_changes and stale_stages:
             labels = ", ".join(STAGE_LABELS[key] for key in stale_stages)
             self.validation_label.setText(f"Outputs are stale for: {labels}")
             self.project_health.setText(f"Project changed since the last successful run: {labels}.")
-        else:
+        elif not unsaved_changes:
             self.validation_label.setText("No validation issues.")
             self.project_health.setText("Inputs, presets, and generated outputs are in sync.")
+        elif messages:
+            self.validation_label.setText("\n".join(messages))
+        else:
+            self.validation_label.setText("Save or discard the current edits before leaving.")
         last_success = self._last_success_timestamp()
         self.last_run_label.setText(f"Last successful run: {format_timestamp(last_success)}" if last_success else "Last successful run: never")
         self.run_state_label.setText(self._recent_activity_text())
-        if self._current_stage_key:
+        if unsaved_changes and not self._current_stage_key:
+            pass
+        elif self._current_stage_key:
             queued = len(self._pending_stage_keys)
             self.run_summary.setText(
                 f"Running {STAGE_LABELS.get(self._current_stage_key, self._current_stage_key.title())}"
@@ -1898,19 +1992,30 @@ class ModernMainWindow(QMainWindow):
             self.project_combo.addItem(project.name, project.slug)
         index = self.project_combo.findData(select_slug)
         if index < 0 and projects:
-            index = 1
+            index = 1 if select_slug else 0
         self.project_combo.setCurrentIndex(max(0, index))
         self.project_combo.blockSignals(False)
         self.on_project_selected(self.project_combo.currentIndex())
 
     def on_project_selected(self, _index: int) -> None:
+        if self._reverting_project_selection:
+            return
         slug = str(self.project_combo.currentData() or "")
+        if slug != self.active_project_slug and not self._confirm_pending_project_changes("switching projects"):
+            self._reverting_project_selection = True
+            self.project_combo.blockSignals(True)
+            restore_index = self.project_combo.findData(self.active_project_slug)
+            self.project_combo.setCurrentIndex(restore_index if restore_index >= 0 else 0)
+            self.project_combo.blockSignals(False)
+            self._reverting_project_selection = False
+            return
         if not slug:
             self.active_project_slug = ""
             self.active_project_name = ""
             self.project_presets = {}
             self.project_active_preset = ""
             self.project_run_state = {}
+            self._saved_project_signature = ""
             self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
             self._pending_stage_keys = []
             self._current_stage_key = ""
@@ -1954,6 +2059,7 @@ class ModernMainWindow(QMainWindow):
         self.store.set("beam_ffs", self.selected_ffs())
         self.store.set("vswr_s2p", touchstone)
         self._loading_project = False
+        self._capture_saved_project_signature(self.current_project())
         if self._loaded_project_schema_version < CURRENT_PROJECT_SCHEMA_VERSION:
             self.save_active_project()
         elif not project.presets and self.project_presets:
@@ -1970,6 +2076,7 @@ class ModernMainWindow(QMainWindow):
             return
         self.project_store.save_project(project)
         self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
+        self._capture_saved_project_signature(project)
         self.store.set("active_project", project.slug)
         self.store.set("beam_ffs", self.selected_ffs())
         self.store.set("vswr_s2p", self.selected_s2p())
@@ -2111,7 +2218,7 @@ class ModernMainWindow(QMainWindow):
         resolved = str(resolve_workspace_path(path)) if path else ""
         self.s2p_field.setText(display_workspace_path(resolved))
         self.store.set("vswr_s2p", resolved)
-        self.save_active_project()
+        self._mark_project_dirty()
 
     def preset_names(self) -> list[str]:
         return sorted(str(name) for name in self.project_presets.keys())
@@ -2202,12 +2309,12 @@ class ModernMainWindow(QMainWindow):
         self.project_active_preset = name
         self._update_preset_action_state()
         if not name:
-            self.save_active_project()
+            self._mark_project_dirty()
             return
         values = self.project_presets.get(name, {})
         if isinstance(values, dict):
             self.apply_preset_values(values)
-        self.save_active_project()
+        self._mark_project_dirty()
 
     def create_preset(self) -> None:
         if not self.active_project_slug:
@@ -2357,14 +2464,14 @@ class ModernMainWindow(QMainWindow):
         self._update_ffs_action_state()
         if save:
             self.store.set("beam_ffs", self.selected_ffs())
-            self.save_active_project()
+            self._mark_project_dirty()
 
     def on_ffs_item_changed(self, item: QListWidgetItem) -> None:
         if self._loading_project or self._suppress_ffs_item_change:
             return
         self._refresh_ffs_item_display(item)
         self.store.set("beam_ffs", self.selected_ffs())
-        self.save_active_project()
+        self._mark_project_dirty()
 
     def _update_ffs_action_state(self) -> None:
         has_project = bool(self.active_project_slug)
@@ -2399,7 +2506,7 @@ class ModernMainWindow(QMainWindow):
         self._update_ffs_action_state()
         if save:
             self.store.set("beam_ffs", self.selected_ffs())
-            self.save_active_project()
+            self._mark_project_dirty()
         elif added:
             self.refresh_derived_paths()
 
@@ -2415,12 +2522,12 @@ class ModernMainWindow(QMainWindow):
         for item in list(self.ffs_list.selectedItems()):
             self.ffs_list.takeItem(self.ffs_list.row(item))
         self.store.set("beam_ffs", self.selected_ffs())
-        self.save_active_project()
+        self._mark_project_dirty()
 
     def clear_ffs(self):
         self.ffs_list.clear()
         self.store.set("beam_ffs", [])
-        self.save_active_project()
+        self._mark_project_dirty()
 
     def move_ffs_up(self) -> None:
         selected = set(self._selected_ffs_paths())
@@ -2642,6 +2749,7 @@ class ModernMainWindow(QMainWindow):
             "--smooth", str(self.beam_smooth.value()),
             "--theta-window", str(self.theta_window.value())
         ]
+        self._save_project_if_dirty()
         self._enqueue_stage("beam", args)
 
     def build_extract_args(self) -> list[str] | None:
@@ -2678,6 +2786,7 @@ class ModernMainWindow(QMainWindow):
         if not args:
             self.status("Add a valid .ffs or Touchstone input and fix the shared frequency window if needed")
             return
+        self._save_project_if_dirty()
         self._enqueue_stage("extract", args)
 
     def run_plot(self):
@@ -2722,6 +2831,7 @@ class ModernMainWindow(QMainWindow):
             args.append("--x-log")
         if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
             args += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
+        self._save_project_if_dirty()
         self._enqueue_stage("plot", args)
 
     def run_vswr(self):
@@ -2751,6 +2861,7 @@ class ModernMainWindow(QMainWindow):
             args.append("--x-log")
         if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
             args += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
+        self._save_project_if_dirty()
         self._enqueue_stage("vswr", args)
 
     def run_full(self):
@@ -2774,6 +2885,7 @@ class ModernMainWindow(QMainWindow):
             "--smooth", str(self.beam_smooth.value()),
             "--theta-window", str(self.theta_window.value())
         ]
+        self._save_project_if_dirty()
         self._enqueue_stage("beam", args_beam)
 
         args_extract = self.build_extract_args()
@@ -2849,6 +2961,9 @@ class ModernMainWindow(QMainWindow):
             pass
 
     def closeEvent(self, e):
+        if not self._confirm_pending_project_changes("exiting"):
+            e.ignore()
+            return
         self._closing_app = True
         self.store.set("console_visible", bool(hasattr(self, "console_window") and self.console_window.isVisible()))
         self._save_geometry()
