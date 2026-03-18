@@ -152,8 +152,13 @@ class ResponsiveCardPanel(QWidget):
         if not self._cards:
             return 1
         width = max(0, self.width())
-        columns = max(1, width // self.min_card_width)
-        return min(self.max_columns, len(self._cards), columns)
+        max_columns = min(self.max_columns, len(self._cards))
+        gap = max(0, self.grid.horizontalSpacing())
+        for columns in range(max_columns, 0, -1):
+            required_width = (columns * self.min_card_width) + ((columns - 1) * gap)
+            if width >= required_width:
+                return columns
+        return 1
 
     def _ordered_cards(self, columns: int) -> list[QWidget]:
         order = self.column_orders.get(columns)
@@ -209,8 +214,13 @@ class ResponsiveButtonPanel(QWidget):
         if not self._buttons:
             return 1
         width = max(self.width(), self.min_button_width)
-        columns = max(1, min(self.max_columns, width // self.min_button_width))
-        return min(columns, len(self._buttons))
+        max_columns = min(self.max_columns, len(self._buttons))
+        gap = max(0, self.grid.horizontalSpacing())
+        for columns in range(max_columns, 0, -1):
+            required_width = (columns * self.min_button_width) + ((columns - 1) * gap)
+            if width >= required_width:
+                return columns
+        return 1
 
     def refresh_layout(self, force: bool = False) -> None:
         columns = self._desired_columns()
