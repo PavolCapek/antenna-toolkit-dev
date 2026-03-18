@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QByteArray
+from PySide6.QtCore import Qt, QTimer, QByteArray, Signal
 from PySide6.QtGui import QColor, QPalette, QTextCursor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout,
@@ -15,16 +15,21 @@ from PySide6.QtWidgets import (
     QComboBox, QColorDialog,
     QCheckBox,
     QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QProgressBar,
-    QFormLayout, QFrame, QSplitter, QSizePolicy, QStyleFactory, QMessageBox, QInputDialog
+    QFormLayout, QFrame, QSplitter, QSizePolicy, QStyleFactory, QMessageBox, QInputDialog,
+    QDialog, QDialogButtonBox
 )
 
 from antenna_toolkit_qt import (
-    THIS_DIR, SCRIPT_BEAM, SCRIPT_EXTRACT, SCRIPT_PLOT, SCRIPT_VSWR, RESULTS_DIR,
+    THIS_DIR, SCRIPT_BEAM, SCRIPT_EXTRACT, SCRIPT_PLOT, SCRIPT_VSWR,
     PRESET_STORE_KEY, ACTIVE_PRESET_KEY,
     suggest_preset_name, normalize_preset_payload,
     DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, Persist, Proc,
     which_python, open_in_file_manager, resolve_workspace_path,
     display_workspace_path, deduce_project_name, normalized_project_stem,
+)
+from project_store import (
+    ProjectRecord, ProjectStore, resolve_project_path, sanitize_project_slug,
+    serialize_workspace_path,
 )
 
 APP_TITLE = "Antenna Toolkit Studio"
@@ -142,6 +147,110 @@ class DropList(QListWidget):
             e.ignore()
 
 
+class ProjectDialog(QDialog):
+    def __init__(self, parent: QWidget, name: str = "", ffs_files: list[str] | None = None, touchstone_file: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("Project")
+        self.resize(760, 520)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        form = QFormLayout()
+        self.name_field = QLineEdit(name)
+        self.name_field.setPlaceholderText("Project name")
+        form.addRow("Name", self.name_field)
+        layout.addLayout(form)
+
+        layout.addWidget(QLabel("Far-field files (.ffs)"))
+        self.ffs_list = DropList(self._add_ffs_files)
+        self.ffs_list.setMinimumHeight(220)
+        self.ffs_list.setToolTip("Files saved as part of the project definition.")
+        layout.addWidget(self.ffs_list, 1)
+
+        ffs_actions = QHBoxLayout()
+        add_button = QPushButton("Add .ffs")
+        add_button.clicked.connect(self.add_ffs)
+        remove_button = QPushButton("Remove selected")
+        remove_button.clicked.connect(self.remove_ffs)
+        clear_button = QPushButton("Clear list")
+        clear_button.clicked.connect(self.clear_ffs)
+        ffs_actions.addWidget(add_button)
+        ffs_actions.addWidget(remove_button)
+        ffs_actions.addWidget(clear_button)
+        ffs_actions.addStretch(1)
+        layout.addLayout(ffs_actions)
+
+        layout.addWidget(QLabel("Touchstone (.s1p/.s2p)"))
+        touchstone_row = QHBoxLayout()
+        self.touchstone_field = QLineEdit(display_workspace_path(touchstone_file))
+        self.touchstone_field.setReadOnly(True)
+        browse_button = QPushButton("Browse")
+        browse_button.clicked.connect(self.browse_touchstone)
+        clear_touchstone = QPushButton("Clear")
+        clear_touchstone.clicked.connect(self.clear_touchstone)
+        touchstone_row.addWidget(self.touchstone_field, 1)
+        touchstone_row.addWidget(browse_button)
+        touchstone_row.addWidget(clear_touchstone)
+        layout.addLayout(touchstone_row)
+
+        note = QLabel("Processing controls and chart styles stay on the main screen and are saved into the selected project automatically.")
+        note.setWordWrap(True)
+        note.setObjectName("helper")
+        layout.addWidget(note)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self._add_ffs_files(ffs_files or [])
+
+    def _item_path(self, item: QListWidgetItem) -> str:
+        return item.data(Qt.UserRole) or str(resolve_workspace_path(item.text()))
+
+    def _add_ffs_files(self, files: list[str]) -> None:
+        existing = {self._item_path(self.ffs_list.item(i)) for i in range(self.ffs_list.count())}
+        for path in files:
+            actual = str(resolve_workspace_path(path))
+            if actual.lower().endswith(".ffs") and actual not in existing:
+                item = QListWidgetItem(display_workspace_path(actual))
+                item.setData(Qt.UserRole, actual)
+                self.ffs_list.addItem(item)
+                existing.add(actual)
+
+    def add_ffs(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(self, "Add .ffs", str(THIS_DIR), "CST Farfield (*.ffs)")
+        if files:
+            self._add_ffs_files(files)
+
+    def remove_ffs(self) -> None:
+        for item in list(self.ffs_list.selectedItems()):
+            self.ffs_list.takeItem(self.ffs_list.row(item))
+
+    def clear_ffs(self) -> None:
+        self.ffs_list.clear()
+
+    def browse_touchstone(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Select Touchstone", str(THIS_DIR), "Touchstone (*.s1p *.s2p)")
+        if path:
+            self.touchstone_field.setText(display_workspace_path(path))
+
+    def clear_touchstone(self) -> None:
+        self.touchstone_field.clear()
+
+    def project_name(self) -> str:
+        return self.name_field.text().strip()
+
+    def ffs_files(self) -> list[str]:
+        return [self._item_path(self.ffs_list.item(i)) for i in range(self.ffs_list.count())]
+
+    def touchstone_file(self) -> str:
+        value = self.touchstone_field.text().strip()
+        return str(resolve_workspace_path(value)) if value else ""
+
+
 class NoWheelSpinBox(QSpinBox):
     def __init__(self):
         super().__init__()
@@ -198,6 +307,8 @@ class StepperField(QWidget):
 
 
 class StudioColorSelector(QWidget):
+    colorChanged = Signal(str)
+
     def __init__(self, store: Persist, key: str, default: str, presets: list[tuple[str, str]] | None = None):
         super().__init__()
         self.store = store
@@ -269,6 +380,7 @@ class StudioColorSelector(QWidget):
         self.swatch.setStyleSheet(f"background:{color}; border:1px solid #6f7a81; border-radius:3px;")
         if persist:
             self.store.set(self.key, color)
+        self.colorChanged.emit(color)
 
     def _on_combo_changed(self):
         value = self.combo.currentData()
@@ -344,14 +456,18 @@ class ModernMainWindow(QMainWindow):
         self.setWindowTitle(APP_TITLE)
         self.resize(1460, 920)
         self.store = Persist(STATE_FILE)
+        self.project_store = ProjectStore(THIS_DIR)
         self.proc = Proc(self)
         self._closing_app = False
+        self._loading_project = False
+        self.active_project_slug = str(self.store.get("active_project", "")).strip()
+        self.active_project_name = ""
         self.theme = str(self.store.get("theme", "light")).lower()
         if self.theme not in {"light", "dark"}:
             self.theme = "light"
         self._build_ui()
         self._apply_style()
-        self.refresh_derived_paths()
+        self.refresh_project_list(select_slug=self.active_project_slug)
         self.store.set("theme", self.theme)
         self._restore_geometry()
 
@@ -452,23 +568,44 @@ class ModernMainWindow(QMainWindow):
         left_lay.setContentsMargins(0, 0, 0, 0)
         left_lay.setSpacing(12)
 
-        summary = Card("Derived outputs", "Project")
+        summary = Card("Project workspace", "Project")
         summary.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        self.project_name = QLabel("results")
+        project_help = QLabel("Each project stores its own far-field files, Touchstone file, UI settings, and generated outputs under Projects/<name>/.")
+        project_help.setWordWrap(True)
+        project_help.setObjectName("helper")
+        summary.body.addWidget(project_help)
+        project_row = QHBoxLayout()
+        project_row.setContentsMargins(0, 0, 0, 0)
+        project_row.setSpacing(8)
+        self.project_combo = QComboBox()
+        self.project_combo.currentIndexChanged.connect(self.on_project_selected)
+        self.project_combo.setToolTip("Select the active project.")
+        self.project_new_button = QPushButton("New")
+        self.project_new_button.clicked.connect(self.create_project)
+        self.project_edit_button = QPushButton("Edit")
+        self.project_edit_button.clicked.connect(self.edit_project)
+        self.project_delete_button = QPushButton("Delete")
+        self.project_delete_button.clicked.connect(self.delete_project)
+        project_row.addWidget(self.project_combo, 1)
+        project_row.addWidget(self.project_new_button)
+        project_row.addWidget(self.project_edit_button)
+        project_row.addWidget(self.project_delete_button)
+        summary.body.addLayout(project_row)
+        self.project_name = QLabel("No project selected")
         self.project_name.setObjectName("projectName")
         summary.body.addWidget(self.project_name)
         self.workbook_field = QLineEdit(); self.workbook_field.setReadOnly(True)
         self.extract_field = QLineEdit(); self.extract_field.setReadOnly(True)
         self.results_field = QLineEdit(); self.results_field.setReadOnly(True)
         self.vswr_field = QLineEdit(); self.vswr_field.setReadOnly(True)
-        self.workbook_field.setToolTip("Derived Excel workbook path based on the selected far-field files.")
-        self.extract_field.setToolTip("Derived extracted-data workbook path based on the selected inputs and current frequency windows.")
-        self.results_field.setToolTip("Project result folder where generated files will be written.")
-        self.vswr_field.setToolTip("Derived VSWR plot output path based on the selected project name.")
+        self.workbook_field.setToolTip("Workbook stored inside the selected project directory.")
+        self.extract_field.setToolTip("Extracted-data workbook stored inside the selected project directory.")
+        self.results_field.setToolTip("Project directory containing metadata and generated outputs.")
+        self.vswr_field.setToolTip("VSWR plot stored inside the selected project directory.")
         form = QFormLayout()
         form.addRow("Workbook", self._path_row(self.workbook_field))
         form.addRow("Extract workbook", self._path_row(self.extract_field))
-        form.addRow("Result folder", self._path_row(self.results_field))
+        form.addRow("Project folder", self._path_row(self.results_field))
         form.addRow("VSWR output", self._path_row(self.vswr_field))
         summary.body.addLayout(form)
         left_lay.addWidget(summary)
@@ -515,7 +652,7 @@ class ModernMainWindow(QMainWindow):
 
         ffs_card = Card("Far-field exports", "Inputs")
         ffs_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        helper = QLabel("Drop .ffs files here or add them manually. The project name comes from this set.")
+        helper = QLabel("Drop .ffs files here or add them manually. Changes are saved into the active project.")
         helper.setWordWrap(True)
         helper.setObjectName("helper")
         ffs_card.body.addWidget(helper)
@@ -540,7 +677,7 @@ class ModernMainWindow(QMainWindow):
         s2p_card = Card("Touchstone", "Inputs")
         s2p_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         s2p_row = QHBoxLayout()
-        self.s2p_field = QLineEdit(display_workspace_path(self.store.get("vswr_s2p", "")))
+        self.s2p_field = QLineEdit("")
         self.s2p_field.setReadOnly(True)
         self.s2p_field.setToolTip("Detected or manually selected Touchstone file used for the VSWR plot (.s1p or .s2p).")
         s2p_row.addWidget(self.s2p_field, 1)
@@ -678,8 +815,7 @@ class ModernMainWindow(QMainWindow):
         self.console = self.console_window.console
         self._set_console_visible(bool(self.store.get("console_visible", False)), persist=False)
 
-        self._add_ffs_files(self.store.get("beam_ffs", []), save=False)
-        self.refresh_derived_paths()
+        self._bind_project_persistence()
         self.refresh_preset_list(select_name=str(self.store.get(ACTIVE_PRESET_KEY, "")))
 
     def _path_row(self, field: QLineEdit) -> QWidget:
@@ -850,6 +986,44 @@ class ModernMainWindow(QMainWindow):
     def toggle_console(self, checked: bool = False):
         self._set_console_visible(checked)
 
+    def _bind_project_persistence(self) -> None:
+        tracked_signals = [
+            self.beam_smooth.valueChanged,
+            self.theta_window.valueChanged,
+            self.plot_smooth.valueChanged,
+            self.shared_xstep.valueChanged,
+            self.shared_fmin.valueChanged,
+            self.shared_fmax.valueChanged,
+            self.shared_xlog.toggled,
+            self.gain_ymin.valueChanged,
+            self.gain_ymax.valueChanged,
+            self.gain_y_step.valueChanged,
+            self.beamwidth_ymin.valueChanged,
+            self.beamwidth_ymax.valueChanged,
+            self.beamwidth_y_step.valueChanged,
+            self.beam_eff_ymin.valueChanged,
+            self.beam_eff_ymax.valueChanged,
+            self.beam_eff_y_step.valueChanged,
+            self.vswr_ymin.valueChanged,
+            self.vswr_ymax.valueChanged,
+            self.vswr_ystep.valueChanged,
+            self.vswr_smooth.valueChanged,
+            self.plot_grid.colorChanged,
+            self.plot_line1.colorChanged,
+            self.plot_line2.colorChanged,
+            self.rings.textChanged,
+            self.angle_step.valueChanged,
+            self.clip_db.valueChanged,
+            self.vswr_grid.colorChanged,
+            self.vswr_line1.colorChanged,
+            self.vswr_line2.colorChanged,
+        ]
+        for signal in tracked_signals:
+            signal.connect(self.on_project_configuration_changed)
+
+    def on_project_configuration_changed(self, *_args) -> None:
+        self.save_active_project()
+
     def selected_ffs(self) -> list[str]:
         return [self._item_path(self.ffs_list.item(i)) for i in range(self.ffs_list.count())]
 
@@ -857,56 +1031,208 @@ class ModernMainWindow(QMainWindow):
         value = self.s2p_field.text().strip()
         return str(resolve_workspace_path(value)) if value else ""
 
-    def deduced_project_name(self) -> str:
-        ffs = self.selected_ffs()
-        if ffs:
-            return deduce_project_name(ffs)
-        s2p = self.selected_s2p()
-        return deduce_project_name([s2p]) if s2p else "results"
+    def current_project(self) -> ProjectRecord | None:
+        if not self.active_project_slug:
+            return None
+        return ProjectRecord(
+            name=self.active_project_name or self.active_project_slug,
+            slug=self.active_project_slug,
+            ffs_files=[serialize_workspace_path(THIS_DIR, path) for path in self.selected_ffs()],
+            touchstone_file=serialize_workspace_path(THIS_DIR, self.selected_s2p()),
+            settings=self.collect_preset_values(),
+        )
 
-    def deduced_results_dir(self) -> Path:
-        return RESULTS_DIR / self.deduced_project_name()
+    def project_results_dir(self) -> Path:
+        project = self.current_project()
+        return project.project_dir(THIS_DIR) if project else (self.project_store.projects_dir / "unassigned")
 
     def deduced_beam_output(self) -> Path:
-        project = self.deduced_project_name()
-        return self.deduced_results_dir() / f"{project}.xlsx"
+        project = self.current_project()
+        return project.workbook_path(THIS_DIR) if project else (self.project_results_dir() / "project.xlsx")
 
     def deduced_extract_output(self) -> Path:
-        project = self.deduced_project_name()
-        return self.deduced_results_dir() / f"{project}_extracted_data.xlsx"
+        project = self.current_project()
+        return project.extract_path(THIS_DIR) if project else (self.project_results_dir() / "project_extracted_data.xlsx")
 
     def deduced_vswr_output(self) -> Path:
-        s2p = self.selected_s2p()
-        stem = self.deduced_project_name() if self.selected_ffs() else (normalized_project_stem(Path(s2p).stem) if s2p else self.deduced_project_name())
-        return self.deduced_results_dir() / f"{stem}_vswr.svg"
+        project = self.current_project()
+        return project.vswr_path(THIS_DIR) if project else (self.project_results_dir() / "project_vswr.svg")
 
-    def refresh_derived_paths(self):
-        project = self.deduced_project_name()
-        guessed_s2p = guess_touchstone_path(project, self.selected_ffs())
-        current_s2p = self.selected_s2p()
-        current_path = resolve_workspace_path(current_s2p) if current_s2p else None
-        current_stem = normalized_project_stem(Path(current_s2p).stem) if current_s2p else ""
-        prefer_s1p = len(self.selected_ffs()) <= 1
-        current_ext = current_path.suffix.lower() if current_path else ""
-        preferred_ext = ".s1p" if prefer_s1p else ".s2p"
-        should_replace = bool(guessed_s2p) and (
-            not current_s2p
-            or project_key(current_stem) != project_key(project)
-            or current_path is None
-            or not current_path.exists()
-            or current_ext != preferred_ext
-        )
-        if should_replace:
-            self.s2p_field.setText(display_workspace_path(guessed_s2p))
-            self.store.set("vswr_s2p", guessed_s2p)
+    def refresh_derived_paths(self) -> None:
+        if self.active_project_slug:
+            project_label = self.active_project_name or self.active_project_slug
+            self.project_name.setText(project_label)
+            self.project_badge.setText(f"Project: {project_label}")
+            self.workbook_field.setText(display_workspace_path(self.deduced_beam_output()))
+            self.extract_field.setText(display_workspace_path(self.deduced_extract_output()))
+            self.results_field.setText(display_workspace_path(self.project_results_dir()))
+            self.vswr_field.setText(display_workspace_path(self.deduced_vswr_output()))
+        else:
+            self.project_name.setText("No project selected")
+            self.project_badge.setText("Project: none")
+            self.workbook_field.clear()
+            self.extract_field.clear()
+            self.results_field.clear()
+            self.vswr_field.clear()
         count = len(self.selected_ffs())
-        self.project_name.setText(project)
-        self.project_badge.setText(f"Project: {project}")
         self.count_badge.setText(f"{count} far-field file{'s' if count != 1 else ''}")
-        self.workbook_field.setText(display_workspace_path(self.deduced_beam_output()))
-        self.extract_field.setText(display_workspace_path(self.deduced_extract_output()))
-        self.results_field.setText(display_workspace_path(self.deduced_results_dir()))
-        self.vswr_field.setText(display_workspace_path(self.deduced_vswr_output()))
+        self._update_project_action_state()
+
+    def _update_project_action_state(self) -> None:
+        has_project = bool(self.active_project_slug)
+        self.project_edit_button.setEnabled(has_project)
+        self.project_delete_button.setEnabled(has_project)
+        for widget in (
+            self.btn_full,
+            self.btn_beam,
+            self.btn_extract,
+            self.btn_plot,
+            self.btn_vswr,
+            self.ffs_list,
+            self.s2p_field,
+        ):
+            widget.setEnabled(has_project)
+
+    def refresh_project_list(self, select_slug: str = "") -> None:
+        projects = self.project_store.list_projects()
+        self.project_combo.blockSignals(True)
+        self.project_combo.clear()
+        self.project_combo.addItem("Select a project", "")
+        for project in projects:
+            self.project_combo.addItem(project.name, project.slug)
+        index = self.project_combo.findData(select_slug)
+        if index < 0 and projects:
+            index = 1
+        self.project_combo.setCurrentIndex(max(0, index))
+        self.project_combo.blockSignals(False)
+        self.on_project_selected(self.project_combo.currentIndex())
+
+    def on_project_selected(self, _index: int) -> None:
+        slug = str(self.project_combo.currentData() or "")
+        if not slug:
+            self.active_project_slug = ""
+            self.active_project_name = ""
+            self._loading_project = True
+            self.ffs_list.clear()
+            self.s2p_field.clear()
+            self._loading_project = False
+            self.store.set("active_project", "")
+            self.refresh_derived_paths()
+            return
+        project = self.project_store.load_project(slug)
+        self._apply_project(project)
+
+    def _apply_project(self, project: ProjectRecord) -> None:
+        self._loading_project = True
+        self.active_project_slug = project.slug
+        self.active_project_name = project.name
+        self.store.set("active_project", project.slug)
+        self.ffs_list.clear()
+        self._add_ffs_files([resolve_project_path(THIS_DIR, path) for path in project.ffs_files], save=False)
+        touchstone = resolve_project_path(THIS_DIR, project.touchstone_file)
+        if not touchstone and project.name:
+            guessed = guess_touchstone_path(project.name, self.selected_ffs())
+            touchstone = guessed
+        self.s2p_field.setText(display_workspace_path(touchstone))
+        self.apply_preset_values(project.settings)
+        self.store.set("beam_ffs", self.selected_ffs())
+        self.store.set("vswr_s2p", touchstone)
+        self._loading_project = False
+        self.refresh_derived_paths()
+
+    def save_active_project(self) -> None:
+        if self._loading_project or not self.active_project_slug:
+            self.refresh_derived_paths()
+            return
+        project = self.current_project()
+        if not project:
+            self.refresh_derived_paths()
+            return
+        self.project_store.save_project(project)
+        self.store.set("active_project", project.slug)
+        self.store.set("beam_ffs", self.selected_ffs())
+        self.store.set("vswr_s2p", self.selected_s2p())
+        self.refresh_derived_paths()
+
+    def create_project(self) -> None:
+        suggested_name = deduce_project_name(self.selected_ffs() or [self.selected_s2p()]) if (self.selected_ffs() or self.selected_s2p()) else "New project"
+        dialog = ProjectDialog(self, name=suggested_name, ffs_files=self.selected_ffs(), touchstone_file=self.selected_s2p())
+        if dialog.exec() != QDialog.Accepted:
+            return
+        name = dialog.project_name()
+        if not name:
+            QMessageBox.information(self, "Project Name Required", "Enter a project name.")
+            return
+        slug = sanitize_project_slug(name)
+        if self.project_combo.findData(slug) >= 0:
+            QMessageBox.information(self, "Project Exists", f"A project named '{name}' already exists.")
+            return
+        touchstone = dialog.touchstone_file() or guess_touchstone_path(name, dialog.ffs_files())
+        project = ProjectRecord(
+            name=name,
+            slug=slug,
+            ffs_files=[serialize_workspace_path(THIS_DIR, path) for path in dialog.ffs_files()],
+            touchstone_file=serialize_workspace_path(THIS_DIR, touchstone),
+            settings=self.collect_preset_values(),
+        )
+        self.project_store.save_project(project)
+        self.refresh_project_list(select_slug=project.slug)
+
+    def edit_project(self) -> None:
+        if not self.active_project_slug:
+            QMessageBox.information(self, "No Project Selected", "Select a project to edit.")
+            return
+        dialog = ProjectDialog(
+            self,
+            name=self.active_project_name,
+            ffs_files=self.selected_ffs(),
+            touchstone_file=self.selected_s2p(),
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        name = dialog.project_name()
+        if not name:
+            QMessageBox.information(self, "Project Name Required", "Enter a project name.")
+            return
+        new_slug = sanitize_project_slug(name)
+        current_slug = self.active_project_slug
+        if new_slug != current_slug and self.project_combo.findData(new_slug) >= 0:
+            QMessageBox.information(self, "Project Exists", f"A project named '{name}' already exists.")
+            return
+        touchstone = dialog.touchstone_file() or guess_touchstone_path(name, dialog.ffs_files())
+        project = ProjectRecord(
+            name=name,
+            slug=new_slug,
+            ffs_files=[serialize_workspace_path(THIS_DIR, path) for path in dialog.ffs_files()],
+            touchstone_file=serialize_workspace_path(THIS_DIR, touchstone),
+            settings=self.collect_preset_values(),
+        )
+        self.project_store.save_project(project, previous_slug=current_slug)
+        self.refresh_project_list(select_slug=project.slug)
+
+    def delete_project(self) -> None:
+        if not self.active_project_slug:
+            QMessageBox.information(self, "No Project Selected", "Select a project to delete.")
+            return
+        name = self.active_project_name or self.active_project_slug
+        answer = QMessageBox.question(
+            self,
+            "Delete Project",
+            f"Delete project '{name}' and everything in its project directory?",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        deleted_slug = self.active_project_slug
+        self.project_store.delete_project(deleted_slug)
+        self.active_project_slug = ""
+        self.active_project_name = ""
+        self.refresh_project_list(select_slug="")
+
+    def _set_touchstone(self, path: str) -> None:
+        resolved = str(resolve_workspace_path(path)) if path else ""
+        self.s2p_field.setText(display_workspace_path(resolved))
+        self.store.set("vswr_s2p", resolved)
+        self.save_active_project()
 
     def preset_names(self) -> list[str]:
         presets = self.store.get(PRESET_STORE_KEY, {}) or {}
@@ -1007,7 +1333,7 @@ class ModernMainWindow(QMainWindow):
             self.apply_preset_values(values)
 
     def create_preset(self) -> None:
-        suggested = suggest_preset_name(self.preset_names(), self.deduced_project_name())
+        suggested = suggest_preset_name(self.preset_names(), self.active_project_name or "Preset")
         name, ok = QInputDialog.getText(self, "Create Preset", "Preset name:", text=suggested)
         name = name.strip()
         if not ok or not name:
@@ -1064,7 +1390,7 @@ class ModernMainWindow(QMainWindow):
         self.refresh_preset_list(select_name="")
 
     def import_presets(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Import Presets", str(self.deduced_results_dir()), "JSON (*.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "Import Presets", str(self.project_results_dir()), "JSON (*.json)")
         if not path:
             return
         try:
@@ -1087,7 +1413,7 @@ class ModernMainWindow(QMainWindow):
         if not presets:
             QMessageBox.information(self, "No Presets", "There are no presets to export.")
             return
-        suggested = str((self.deduced_results_dir() / "antenna_toolkit_presets.json").resolve())
+        suggested = str((self.project_results_dir() / "antenna_toolkit_presets.json").resolve())
         path, _ = QFileDialog.getSaveFileName(self, "Export Presets", suggested, "JSON (*.json)")
         if not path:
             return
@@ -1111,9 +1437,12 @@ class ModernMainWindow(QMainWindow):
                 existing.add(actual)
         if save:
             self.store.set("beam_ffs", self.selected_ffs())
-            self.refresh_derived_paths()
+            self.save_active_project()
 
     def add_ffs(self):
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
         files, _ = QFileDialog.getOpenFileNames(self, "Add .ffs", str(THIS_DIR), "CST Farfield (*.ffs)")
         if files:
             self._add_ffs_files(files)
@@ -1122,24 +1451,26 @@ class ModernMainWindow(QMainWindow):
         for item in list(self.ffs_list.selectedItems()):
             self.ffs_list.takeItem(self.ffs_list.row(item))
         self.store.set("beam_ffs", self.selected_ffs())
-        self.refresh_derived_paths()
+        self.save_active_project()
 
     def clear_ffs(self):
         self.ffs_list.clear()
         self.store.set("beam_ffs", [])
-        self.refresh_derived_paths()
+        self.save_active_project()
 
     def browse_s2p(self):
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
         fn, _ = QFileDialog.getOpenFileName(self, "Select Touchstone", str(THIS_DIR), "Touchstone (*.s1p *.s2p)")
         if fn:
-            self.s2p_field.setText(display_workspace_path(fn))
-            self.store.set("vswr_s2p", str(resolve_workspace_path(fn)))
-            self.refresh_derived_paths()
+            self._set_touchstone(fn)
 
     def clear_s2p(self):
-        self.s2p_field.clear()
-        self.store.set("vswr_s2p", "")
-        self.refresh_derived_paths()
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
+        self._set_touchstone("")
 
     def set_busy(self, on: bool):
         self.busy.setVisible(on)
@@ -1192,6 +1523,9 @@ class ModernMainWindow(QMainWindow):
         self.run_info.setText(f"Running | {getattr(self, '_line_count', 0)} lines | {hh:02d}:{mm:02d}:{ss:02d}")
 
     def run_beam(self):
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
         out = str(self.deduced_beam_output())
         ffs = self.selected_ffs()
         if not ffs:
@@ -1204,6 +1538,8 @@ class ModernMainWindow(QMainWindow):
         self.proc.enqueue(args)
 
     def build_extract_args(self) -> list[str] | None:
+        if not self.active_project_slug:
+            return None
         ffs = self.selected_ffs()
         s2p = self.selected_s2p()
         if not ffs and not s2p:
@@ -1231,12 +1567,15 @@ class ModernMainWindow(QMainWindow):
         self.proc.enqueue(args)
 
     def run_plot(self):
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
         xlsx = self.deduced_beam_output()
         if not xlsx.exists():
             self.status("Generate the workbook first")
             return
         args = [which_python(), "-u", SCRIPT_PLOT, str(xlsx),
-                "--out-dir", str(self.deduced_results_dir()),
+                "--out-dir", str(self.project_results_dir()),
                 "--grid-color", self.plot_grid.color(),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
                 "--rings", self.rings.text().strip(),
@@ -1269,6 +1608,9 @@ class ModernMainWindow(QMainWindow):
         self.proc.enqueue(args)
 
     def run_vswr(self):
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
         s2p = self.selected_s2p()
         if not s2p:
             self.status("Select a .s1p or .s2p file")
@@ -1289,6 +1631,9 @@ class ModernMainWindow(QMainWindow):
         self.proc.enqueue(args)
 
     def run_full(self):
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
         out = str(self.deduced_beam_output())
         ffs = self.selected_ffs()
         if not ffs:
@@ -1306,7 +1651,7 @@ class ModernMainWindow(QMainWindow):
             self.proc.enqueue(args_extract)
 
         args_plot = [which_python(), "-u", SCRIPT_PLOT, out,
-                "--out-dir", str(self.deduced_results_dir()),
+                "--out-dir", str(self.project_results_dir()),
                 "--grid-color", self.plot_grid.color(),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
                 "--rings", self.rings.text().strip(),

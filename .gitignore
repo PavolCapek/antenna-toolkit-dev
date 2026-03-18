@@ -1,6 +1,7 @@
 # Data folders to exclude
 /Input data/
 /Results/
+/Projects/
 
 # Python cache
 __pycache__/
