@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication, QMessageBox
+
+from antenna_toolkit_studio import ModernMainWindow
+from project_store import ProjectRecord, ProjectStore
+
+
+class StudioDirtyStateTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.window = ModernMainWindow()
+        self.window.project_store = ProjectStore(Path(self.temp_dir.name))
+        self.window.store.set("ui_presets", {})
+        self.window.store.set("active_preset", "")
+        self.window.refresh_project_list(select_slug="")
+        self.window._reset_to_default_state()
+        self.project = ProjectRecord(
+            name="Dirty Project",
+            slug="dirty_project",
+            settings=self.window.collect_preset_values(),
+            presets={},
+            active_preset="",
+            run_state={},
+        )
+        self.window.project_store.save_project(self.project)
+        self.window.refresh_project_list(select_slug=self.project.slug)
+        self.app.processEvents()
+
+    def tearDown(self) -> None:
+        with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Discard):
+            self.window.close()
+        self.temp_dir.cleanup()
+
+    def test_starts_clean_and_save_button_tracks_project_changes(self) -> None:
+        self.assertFalse(self.window.has_unsaved_project_changes())
+        self.assertFalse(self.window.project_save_button.isEnabled())
+
+        self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
+        self.app.processEvents()
+
+        self.assertTrue(self.window.has_unsaved_project_changes())
+        self.assertTrue(self.window.project_save_button.isEnabled())
+        self.assertTrue(self.window.project_badge.text().endswith("*"))
+
+        self.window.save_project_changes()
+        self.app.processEvents()
+
+        self.assertFalse(self.window.has_unsaved_project_changes())
+        self.assertFalse(self.window.project_save_button.isEnabled())
+        self.assertFalse(self.window.project_badge.text().endswith("*"))
+
+    def test_preset_changes_require_project_save(self) -> None:
+        with mock.patch("antenna_toolkit_studio.QInputDialog.getText", return_value=("Preset A", True)):
+            self.window.create_preset()
+        self.app.processEvents()
+
+        self.assertTrue(self.window.has_unsaved_project_changes())
+        loaded_before_save = self.window.project_store.load_project(self.project.slug)
+        self.assertEqual(loaded_before_save.presets, {})
+
+        self.window.save_project_changes()
+        self.app.processEvents()
+
+        loaded_after_save = self.window.project_store.load_project(self.project.slug)
+        self.assertIn("Preset A", loaded_after_save.presets)
+
+        self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
+        self.app.processEvents()
+        self.window.save_preset()
+        self.app.processEvents()
+
+        self.assertTrue(self.window.has_unsaved_project_changes())
+        loaded_before_second_save = self.window.project_store.load_project(self.project.slug)
+        self.assertEqual(loaded_before_second_save.presets["Preset A"]["smooth"], self.project.settings["smooth"])
+
+        self.window.save_project_changes()
+        self.app.processEvents()
+
+        loaded_after_second_save = self.window.project_store.load_project(self.project.slug)
+        self.assertEqual(loaded_after_second_save.presets["Preset A"]["smooth"], self.window.beam_smooth.value())
+
+    def test_exit_prompt_can_save_or_cancel_dirty_project(self) -> None:
+        self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
+        self.app.processEvents()
+
+        with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Save):
+            confirmed = self.window._confirm_pending_project_changes("exiting")
+        self.assertTrue(confirmed)
+        self.assertFalse(self.window.has_unsaved_project_changes())
+
+        self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
+        self.app.processEvents()
+
+        with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Cancel):
+            confirmed = self.window._confirm_pending_project_changes("exiting")
+        self.assertFalse(confirmed)
+        self.assertTrue(self.window.has_unsaved_project_changes())
+
+
+if __name__ == "__main__":
+    unittest.main()

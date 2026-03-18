@@ -60,6 +60,28 @@ def format_timestamp(value: str | None) -> str:
     return stamp.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
+def clean_run_state(run_state: dict[str, object] | None) -> dict[str, object]:
+    if not isinstance(run_state, dict):
+        return {}
+    cleaned: dict[str, object] = {}
+    for key, value in run_state.items():
+        if key == "history":
+            if isinstance(value, list) and value:
+                cleaned[key] = value
+        elif key == "stages":
+            if isinstance(value, dict):
+                stage_map = {
+                    stage_key: stage_value
+                    for stage_key, stage_value in value.items()
+                    if isinstance(stage_value, dict) and stage_value
+                }
+                if stage_map:
+                    cleaned[key] = stage_map
+        elif value not in ({}, [], "", None):
+            cleaned[key] = value
+    return cleaned
+
+
 def project_key(value: str) -> str:
     return "".join(ch for ch in value.lower() if ch.isalnum())
 
@@ -671,6 +693,8 @@ class ModernMainWindow(QMainWindow):
         self.project_combo.setToolTip("Select the active project.")
         self.project_new_button = QPushButton("New project")
         self.project_new_button.clicked.connect(self.create_project)
+        self.project_save_button = QPushButton("Save project")
+        self.project_save_button.clicked.connect(self.save_project_changes)
         self.project_edit_button = QPushButton("Edit project")
         self.project_edit_button.clicked.connect(self.edit_project)
         self.project_duplicate_button = QPushButton("Duplicate")
@@ -682,6 +706,7 @@ class ModernMainWindow(QMainWindow):
         self.project_export_button = QPushButton("Export bundle")
         self.project_export_button.clicked.connect(self.export_project_bundle)
         self.project_new_button.setToolTip("Create a new project and store its inputs in the Projects directory.")
+        self.project_save_button.setToolTip("Write the current project inputs, presets, settings, and run metadata to disk.")
         self.project_edit_button.setToolTip("Rename the active project or update its input files.")
         self.project_duplicate_button.setToolTip("Create a copy of the active project with the same settings and inputs.")
         self.project_delete_button.setToolTip("Delete the active project and everything saved inside its folder.")
@@ -691,6 +716,7 @@ class ModernMainWindow(QMainWindow):
         project_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=130)
         project_actions.set_buttons([
             self.project_new_button,
+            self.project_save_button,
             self.project_edit_button,
             self.project_duplicate_button,
             self.project_delete_button,
@@ -864,16 +890,16 @@ class ModernMainWindow(QMainWindow):
         self.preset_save_button = QPushButton("Save"); self.preset_save_button.clicked.connect(self.save_preset)
         self.preset_rename_button = QPushButton("Rename"); self.preset_rename_button.clicked.connect(self.rename_preset)
         self.preset_delete_button = QPushButton("Delete"); self.preset_delete_button.clicked.connect(self.delete_preset)
-        self.preset_new_button.setToolTip("Create a new preset from the current GUI settings.")
-        self.preset_save_button.setToolTip("Overwrite the selected preset with the current GUI settings.")
-        self.preset_rename_button.setToolTip("Rename the selected preset without changing its settings.")
-        self.preset_delete_button.setToolTip("Delete the selected preset.")
+        self.preset_new_button.setToolTip("Create a new preset from the current GUI settings. Use Save project to persist it.")
+        self.preset_save_button.setToolTip("Overwrite the selected preset with the current GUI settings. Use Save project to persist it.")
+        self.preset_rename_button.setToolTip("Rename the selected preset without changing its settings. Use Save project to persist it.")
+        self.preset_delete_button.setToolTip("Delete the selected preset. Use Save project to persist it.")
         preset_actions = ResponsiveButtonPanel(max_columns=4, min_button_width=110)
         preset_actions.set_buttons([self.preset_new_button, self.preset_save_button, self.preset_rename_button, self.preset_delete_button])
         preset_card.body.addWidget(preset_actions)
         self.preset_import_button = QPushButton("Import"); self.preset_import_button.clicked.connect(self.import_presets)
         self.preset_export_button = QPushButton("Export"); self.preset_export_button.clicked.connect(self.export_presets)
-        self.preset_import_button.setToolTip("Import presets from a JSON file and merge them into the current list.")
+        self.preset_import_button.setToolTip("Import presets from a JSON file and merge them into the current list. Use Save project to persist them.")
         self.preset_export_button.setToolTip("Export all saved presets to a JSON file.")
         preset_io = ResponsiveButtonPanel(max_columns=2, min_button_width=120)
         preset_io.set_buttons([self.preset_import_button, self.preset_export_button])
@@ -1267,6 +1293,13 @@ class ModernMainWindow(QMainWindow):
     def _save_project_if_dirty(self) -> None:
         if self.has_unsaved_project_changes():
             self.save_active_project()
+
+    def save_project_changes(self) -> None:
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
+        self.save_active_project()
+        self.status("Project saved")
 
     def _path_row(self, field: QLineEdit) -> QWidget:
         row = QWidget()
@@ -1885,7 +1918,7 @@ class ModernMainWindow(QMainWindow):
             settings=self.collect_preset_values(),
             presets=self.project_presets,
             active_preset=self.project_active_preset,
-            run_state=dict(self.project_run_state),
+            run_state=clean_run_state(dict(self.project_run_state)),
         )
 
     def project_results_dir(self) -> Path:
@@ -1925,6 +1958,9 @@ class ModernMainWindow(QMainWindow):
         total_ffs = len(self.collect_ffs_items()) if self.active_project_slug else 0
         enabled_ffs = len(self.selected_ffs()) if self.active_project_slug else 0
         self.count_badge.setText(f"{enabled_ffs}/{total_ffs} far-field enabled" if total_ffs else "0 far-field files")
+        if self.active_project_slug:
+            suffix = " *" if self.has_unsaved_project_changes() else ""
+            self.project_badge.setText(f"Project: {(self.active_project_name or self.active_project_slug)}{suffix}")
         self.open_s2p_button.setEnabled(bool(self.active_project_slug and self.selected_s2p()))
         self._update_ffs_action_state()
         self._refresh_project_summary()
@@ -1933,6 +1969,8 @@ class ModernMainWindow(QMainWindow):
     def _update_project_action_state(self) -> None:
         has_project = bool(self.active_project_slug)
         is_running = bool(self.proc.running_cmd or self.proc.queue)
+        is_dirty = self.has_unsaved_project_changes()
+        self.project_save_button.setEnabled(has_project and is_dirty)
         self.project_edit_button.setEnabled(has_project)
         self.project_duplicate_button.setEnabled(has_project)
         self.project_delete_button.setEnabled(has_project)
@@ -2330,7 +2368,7 @@ class ModernMainWindow(QMainWindow):
             return
         self.project_presets[name] = self.collect_preset_values()
         self.project_active_preset = name
-        self.save_active_project()
+        self._mark_project_dirty()
         self.refresh_preset_list(select_name=name)
 
     def save_preset(self) -> None:
@@ -2343,7 +2381,7 @@ class ModernMainWindow(QMainWindow):
             return
         self.project_presets[name] = self.collect_preset_values()
         self.project_active_preset = name
-        self.save_active_project()
+        self._mark_project_dirty()
         self.refresh_preset_list(select_name=name)
 
     def rename_preset(self) -> None:
@@ -2363,7 +2401,7 @@ class ModernMainWindow(QMainWindow):
             return
         self.project_presets[new_name] = self.project_presets.pop(name)
         self.project_active_preset = new_name
-        self.save_active_project()
+        self._mark_project_dirty()
         self.refresh_preset_list(select_name=new_name)
 
     def delete_preset(self) -> None:
@@ -2378,7 +2416,7 @@ class ModernMainWindow(QMainWindow):
             return
         self.project_presets.pop(name, None)
         self.project_active_preset = ""
-        self.save_active_project()
+        self._mark_project_dirty()
         self.refresh_preset_list(select_name="")
 
     def import_presets(self) -> None:
@@ -2398,7 +2436,7 @@ class ModernMainWindow(QMainWindow):
             QMessageBox.information(self, "No Presets Imported", "The selected file did not contain any valid presets.")
             return
         self.project_presets.update(imported)
-        self.save_active_project()
+        self._mark_project_dirty()
         self.refresh_preset_list(select_name=self.current_preset_name())
         QMessageBox.information(self, "Presets Imported", f"Imported {len(imported)} preset(s).")
 
