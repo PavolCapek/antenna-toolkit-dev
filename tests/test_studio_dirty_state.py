@@ -8,9 +8,10 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from antenna_toolkit_studio import ModernMainWindow
+from antenna_toolkit_studio import ModernMainWindow, StepperField
 from project_store import ProjectRecord, ProjectStore
 
 
@@ -108,6 +109,16 @@ class StudioDirtyStateTests(unittest.TestCase):
             confirmed = self.window._confirm_pending_project_changes("exiting")
         self.assertFalse(confirmed)
         self.assertTrue(self.window.has_unsaved_project_changes())
+
+    def test_helper_buttons_are_not_tab_stops(self) -> None:
+        beam_field = next(field for field in self.window.findChildren(StepperField) if field.spinbox is self.window.beam_smooth)
+        self.assertEqual(beam_field.minus.focusPolicy(), Qt.NoFocus)
+        self.assertEqual(beam_field.plus.focusPolicy(), Qt.NoFocus)
+        self.assertIs(beam_field.focusProxy(), beam_field.spinbox)
+
+        self.assertEqual(self.window.plot_grid.prev_btn.focusPolicy(), Qt.NoFocus)
+        self.assertEqual(self.window.plot_grid.next_btn.focusPolicy(), Qt.NoFocus)
+        self.assertIs(self.window.plot_grid.focusProxy(), self.window.plot_grid.combo)
 
 
 if __name__ == "__main__":

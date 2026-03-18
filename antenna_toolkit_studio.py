@@ -441,6 +441,7 @@ class StepperField(QWidget):
         super().__init__()
         self.spinbox = spinbox
         self.spinbox.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.setFocusProxy(self.spinbox)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
@@ -448,11 +449,13 @@ class StepperField(QWidget):
         self.minus = QPushButton("-")
         self.minus.setObjectName("stepButton")
         self.minus.setFixedWidth(30)
+        self.minus.setFocusPolicy(Qt.NoFocus)
         self.minus.clicked.connect(lambda: self.spinbox.stepBy(-1))
 
         self.plus = QPushButton("+")
         self.plus.setObjectName("stepButton")
         self.plus.setFixedWidth(30)
+        self.plus.setFocusPolicy(Qt.NoFocus)
         self.plus.clicked.connect(lambda: self.spinbox.stepBy(1))
 
         lay.addWidget(self.minus)
@@ -480,9 +483,11 @@ class StudioColorSelector(QWidget):
         self.prev_btn = QPushButton("<")
         self.prev_btn.setObjectName("stepButton")
         self.prev_btn.setFixedWidth(34)
+        self.prev_btn.setFocusPolicy(Qt.NoFocus)
         self.prev_btn.clicked.connect(lambda: self.step_preset(-1))
 
         self.combo = NoWheelComboBox()
+        self.setFocusProxy(self.combo)
         for name, value in self.presets:
             self.combo.addItem(f"{name} ({value})", value)
         self.combo.addItem("Custom", "__custom__")
@@ -491,6 +496,7 @@ class StudioColorSelector(QWidget):
         self.next_btn = QPushButton(">")
         self.next_btn.setObjectName("stepButton")
         self.next_btn.setFixedWidth(34)
+        self.next_btn.setFocusPolicy(Qt.NoFocus)
         self.next_btn.clicked.connect(lambda: self.step_preset(1))
 
         self.swatch = QFrame()
