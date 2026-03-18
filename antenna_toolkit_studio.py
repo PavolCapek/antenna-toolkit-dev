@@ -857,7 +857,7 @@ class ModernMainWindow(QMainWindow):
         self.vswr_ymax = TrimmedDoubleSpinBox(); self.vswr_ymax.setRange(0.0, 1000.0); self.vswr_ymax.setDecimals(6); self.vswr_ymax.setValue(float(self.store.get("vswr_ymax", 10.0))); self.vswr_ymax.valueChanged.connect(lambda v: self.store.set("vswr_ymax", float(v)))
         self.vswr_ystep = TrimmedDoubleSpinBox(); self.vswr_ystep.setRange(0.01, 100.0); self.vswr_ystep.setDecimals(6); self.vswr_ystep.setValue(float(self.store.get("vswr_ystep", 1.0))); self.vswr_ystep.valueChanged.connect(lambda v: self.store.set("vswr_ystep", float(v)))
         self.vswr_smooth = NoWheelSpinBox(); self.vswr_smooth.setRange(1, 99); self.vswr_smooth.setValue(int(self.store.get("vswr_smooth", 5))); self.vswr_smooth.valueChanged.connect(lambda v: self.store.set("vswr_smooth", int(v)))
-        workbook_card = Card("Beam and workbook", "Processing")
+        workbook_card = Card("Beam, workbook, and VSWR smoothing", "Processing")
         workbook_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         workbook_card.setMinimumWidth(320)
         workbook_form = QFormLayout()
@@ -869,9 +869,10 @@ class ModernMainWindow(QMainWindow):
         add_form_row(workbook_form, "Beam smooth", StepperField(self.beam_smooth), "Smoothing window used while creating the workbook from the far-field files. Higher values smooth more aggressively.")
         add_form_row(workbook_form, "Theta window", StepperField(self.theta_window), "Angular window in degrees used for the beamwidth calculation around the main lobe.")
         add_form_row(workbook_form, "Plot smooth", StepperField(self.plot_smooth), "Smoothing window applied to the workbook-based line plots.")
+        add_form_row(workbook_form, "VSWR smooth", StepperField(self.vswr_smooth), "Smoothing window applied to the VSWR traces.")
         workbook_card.body.addLayout(workbook_form)
 
-        frequency_card = Card("Frequency window and VSWR", "Frequency")
+        frequency_card = Card("Shared frequency window", "Frequency")
         frequency_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         frequency_card.setMinimumWidth(320)
         frequency_form = QFormLayout()
@@ -884,7 +885,6 @@ class ModernMainWindow(QMainWindow):
         add_form_row(frequency_form, "Shared fmin", StepperField(self.shared_fmin), "Lower frequency bound used by both workbook plots and the VSWR plot, in GHz. Use 0 to keep the full range.")
         add_form_row(frequency_form, "Shared fmax", StepperField(self.shared_fmax), "Upper frequency bound used by both workbook plots and the VSWR plot, in GHz. Use 0 to keep the full range.")
         add_form_row(frequency_form, "Shared x axis", self.shared_xlog, "Switch both workbook plots and the VSWR plot between linear and logarithmic x-axis scaling.")
-        add_form_row(frequency_form, "VSWR smooth", StepperField(self.vswr_smooth), "Smoothing window applied to the VSWR traces.")
         frequency_card.body.addLayout(frequency_form)
         processing_help = Card("When to rerun", "Flow")
         processing_help.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -902,25 +902,47 @@ class ModernMainWindow(QMainWindow):
         processing_lay.addWidget(processing_panel)
         processing_lay.addStretch(1)
 
-        workbook_range_card = Card("Gain, beamwidth, efficiency", "Ranges")
-        workbook_range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        workbook_range_card.setMinimumWidth(320)
-        workbook_range_form = QFormLayout()
-        workbook_range_form.setContentsMargins(0, 0, 0, 0)
-        workbook_range_form.setHorizontalSpacing(10)
-        workbook_range_form.setVerticalSpacing(8)
-        workbook_range_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        workbook_range_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        add_form_row(workbook_range_form, "Gain y min", StepperField(self.gain_ymin), "Lower limit override for the gain plot. Use 0 to keep the default automatic minimum.")
-        add_form_row(workbook_range_form, "Gain y max", StepperField(self.gain_ymax), "Upper limit override for the gain plot. Use 0 to keep the default automatic maximum.")
-        add_form_row(workbook_range_form, "Gain y tick", StepperField(self.gain_y_step), "Y-axis tick spacing override for the gain plot. Use 0 to keep the default tick spacing.")
-        add_form_row(workbook_range_form, "Beamwidth y min", StepperField(self.beamwidth_ymin), "Lower limit override for the beamwidth plot. Use 0 to keep the default automatic minimum.")
-        add_form_row(workbook_range_form, "Beamwidth y max", StepperField(self.beamwidth_ymax), "Upper limit override for the beamwidth plot. Use 0 to keep the default automatic maximum.")
-        add_form_row(workbook_range_form, "Beamwidth y tick", StepperField(self.beamwidth_y_step), "Y-axis tick spacing override for the beamwidth plot. Use 0 to keep the default tick spacing.")
-        add_form_row(workbook_range_form, "Beam eff y min", StepperField(self.beam_eff_ymin), "Lower limit override for the beam efficiency plot. Use 0 to keep the default automatic minimum.")
-        add_form_row(workbook_range_form, "Beam eff y max", StepperField(self.beam_eff_ymax), "Upper limit override for the beam efficiency plot. Use 0 to keep the default automatic maximum.")
-        add_form_row(workbook_range_form, "Beam eff y tick", StepperField(self.beam_eff_y_step), "Y-axis tick spacing override for the beam efficiency plot. Use 0 to keep the default tick spacing.")
-        workbook_range_card.body.addLayout(workbook_range_form)
+        gain_range_card = Card("Gain range", "Ranges")
+        gain_range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        gain_range_card.setMinimumWidth(320)
+        gain_range_form = QFormLayout()
+        gain_range_form.setContentsMargins(0, 0, 0, 0)
+        gain_range_form.setHorizontalSpacing(10)
+        gain_range_form.setVerticalSpacing(8)
+        gain_range_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        gain_range_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(gain_range_form, "Gain y min", StepperField(self.gain_ymin), "Lower limit override for the gain plot. Use 0 to keep the default automatic minimum.")
+        add_form_row(gain_range_form, "Gain y max", StepperField(self.gain_ymax), "Upper limit override for the gain plot. Use 0 to keep the default automatic maximum.")
+        add_form_row(gain_range_form, "Gain y tick", StepperField(self.gain_y_step), "Y-axis tick spacing override for the gain plot. Use 0 to keep the default tick spacing.")
+        gain_range_card.body.addLayout(gain_range_form)
+
+        beamwidth_range_card = Card("Beamwidth range", "Ranges")
+        beamwidth_range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        beamwidth_range_card.setMinimumWidth(320)
+        beamwidth_range_form = QFormLayout()
+        beamwidth_range_form.setContentsMargins(0, 0, 0, 0)
+        beamwidth_range_form.setHorizontalSpacing(10)
+        beamwidth_range_form.setVerticalSpacing(8)
+        beamwidth_range_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        beamwidth_range_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(beamwidth_range_form, "Beamwidth y min", StepperField(self.beamwidth_ymin), "Lower limit override for the beamwidth plot. Use 0 to keep the default automatic minimum.")
+        add_form_row(beamwidth_range_form, "Beamwidth y max", StepperField(self.beamwidth_ymax), "Upper limit override for the beamwidth plot. Use 0 to keep the default automatic maximum.")
+        add_form_row(beamwidth_range_form, "Beamwidth y tick", StepperField(self.beamwidth_y_step), "Y-axis tick spacing override for the beamwidth plot. Use 0 to keep the default tick spacing.")
+        beamwidth_range_card.body.addLayout(beamwidth_range_form)
+
+        efficiency_range_card = Card("Efficiency range", "Ranges")
+        efficiency_range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        efficiency_range_card.setMinimumWidth(320)
+        efficiency_range_form = QFormLayout()
+        efficiency_range_form.setContentsMargins(0, 0, 0, 0)
+        efficiency_range_form.setHorizontalSpacing(10)
+        efficiency_range_form.setVerticalSpacing(8)
+        efficiency_range_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        efficiency_range_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(efficiency_range_form, "Beam eff y min", StepperField(self.beam_eff_ymin), "Lower limit override for the beam efficiency plot. Use 0 to keep the default automatic minimum.")
+        add_form_row(efficiency_range_form, "Beam eff y max", StepperField(self.beam_eff_ymax), "Upper limit override for the beam efficiency plot. Use 0 to keep the default automatic maximum.")
+        add_form_row(efficiency_range_form, "Beam eff y tick", StepperField(self.beam_eff_y_step), "Y-axis tick spacing override for the beam efficiency plot. Use 0 to keep the default tick spacing.")
+        efficiency_range_card.body.addLayout(efficiency_range_form)
 
         vswr_range_card = Card("VSWR range", "Ranges")
         vswr_range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -945,9 +967,6 @@ class ModernMainWindow(QMainWindow):
         self.rings = QLineEdit(self.store.get("rings", "0,-7.5,-15,-22.5,-30")); self.rings.textChanged.connect(lambda v: self.store.set("rings", v))
         self.angle_step = NoWheelSpinBox(); self.angle_step.setRange(5, 90); self.angle_step.setSingleStep(5); self.angle_step.setValue(int(self.store.get("angle", 30))); self.angle_step.valueChanged.connect(lambda v: self.store.set("angle", int(v)))
         self.clip_db = TrimmedDoubleSpinBox(); self.clip_db.setRange(-120.0, 0.0); self.clip_db.setDecimals(6); self.clip_db.setSingleStep(0.5); self.clip_db.setValue(float(self.store.get("clip", -30.0))); self.clip_db.valueChanged.connect(lambda v: self.store.set("clip", float(v)))
-        self.vswr_grid = StudioColorSelector(self.store, "vswr_grid", DEFAULT_GRID_COLOR, presets=GREY_COLOR_OPTIONS)
-        self.vswr_line1 = StudioColorSelector(self.store, "vswr_line_1", DEFAULT_LINE_COLORS[0][1])
-        self.vswr_line2 = StudioColorSelector(self.store, "vswr_line_2", DEFAULT_LINE_COLORS[1][1])
         self.rings.setToolTip("Comma-separated dB ring values used on the polar plots.")
         polar_form = QFormLayout()
         polar_form.setContentsMargins(0, 0, 0, 0)
@@ -960,36 +979,22 @@ class ModernMainWindow(QMainWindow):
         add_form_row(polar_form, "Polar clip below", StepperField(self.clip_db), "Clip polar-plot values below this dB level to keep the chart readable.")
         polar_card.body.addLayout(polar_form)
 
-        workbook_color_card = Card("Workbook colors", "Style")
-        workbook_color_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        workbook_color_card.setMinimumWidth(320)
-        workbook_color_form = QFormLayout()
-        workbook_color_form.setContentsMargins(0, 0, 0, 0)
-        workbook_color_form.setHorizontalSpacing(10)
-        workbook_color_form.setVerticalSpacing(8)
-        workbook_color_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        workbook_color_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        add_form_row(workbook_color_form, "Plot grid color", self.plot_grid, "Grid and axis color for the workbook-based cartesian plots. Presets are neutral greys, with a custom color option.")
-        add_form_row(workbook_color_form, "Plot line color 1", self.plot_line1, "Primary line color for the first workbook-based plot trace.")
-        add_form_row(workbook_color_form, "Plot line color 2", self.plot_line2, "Secondary line color for the second workbook-based plot trace.")
-        workbook_color_card.body.addLayout(workbook_color_form)
-
-        vswr_color_card = Card("VSWR colors", "Style")
-        vswr_color_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        vswr_color_card.setMinimumWidth(320)
-        vswr_color_form = QFormLayout()
-        vswr_color_form.setContentsMargins(0, 0, 0, 0)
-        vswr_color_form.setHorizontalSpacing(10)
-        vswr_color_form.setVerticalSpacing(8)
-        vswr_color_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        vswr_color_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        add_form_row(vswr_color_form, "VSWR grid color", self.vswr_grid, "Grid and axis color for the VSWR plot. Presets are neutral greys, with a custom color option.")
-        add_form_row(vswr_color_form, "VSWR line color 1", self.vswr_line1, "Primary line color for the first VSWR trace.")
-        add_form_row(vswr_color_form, "VSWR line color 2", self.vswr_line2, "Secondary line color for the second VSWR trace.")
-        vswr_color_card.body.addLayout(vswr_color_form)
+        plot_color_card = Card("Plot colors", "Style")
+        plot_color_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        plot_color_card.setMinimumWidth(320)
+        plot_color_form = QFormLayout()
+        plot_color_form.setContentsMargins(0, 0, 0, 0)
+        plot_color_form.setHorizontalSpacing(10)
+        plot_color_form.setVerticalSpacing(8)
+        plot_color_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        plot_color_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(plot_color_form, "Grid color", self.plot_grid, "Grid and axis color used by both the workbook plots and the VSWR plot. Presets are neutral greys, with a custom color option.")
+        add_form_row(plot_color_form, "Line color 1", self.plot_line1, "Primary line color used by both the workbook plots and the VSWR plot.")
+        add_form_row(plot_color_form, "Line color 2", self.plot_line2, "Secondary line color used by both the workbook plots and the VSWR plot.")
+        plot_color_card.body.addLayout(plot_color_form)
 
         charts_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320)
-        charts_panel.set_cards([workbook_range_card, vswr_range_card, polar_card, workbook_color_card, vswr_color_card])
+        charts_panel.set_cards([gain_range_card, beamwidth_range_card, efficiency_range_card, vswr_range_card, polar_card, plot_color_card])
         charts_lay.addWidget(charts_panel)
         charts_lay.addStretch(1)
 
@@ -1267,9 +1272,6 @@ class ModernMainWindow(QMainWindow):
             self.rings.textChanged,
             self.angle_step.valueChanged,
             self.clip_db.valueChanged,
-            self.vswr_grid.colorChanged,
-            self.vswr_line1.colorChanged,
-            self.vswr_line2.colorChanged,
         ]
         for signal in tracked_signals:
             signal.connect(self.on_project_configuration_changed)
@@ -1584,9 +1586,6 @@ class ModernMainWindow(QMainWindow):
             "rings": self.rings.text().strip(),
             "angle": int(self.angle_step.value()),
             "clip": float(self.clip_db.value()),
-            "vswr_grid": self.vswr_grid.color(),
-            "vswr_line_1": self.vswr_line1.color(),
-            "vswr_line_2": self.vswr_line2.color(),
         }
 
     def apply_preset_values(self, values: dict[str, object]) -> None:
@@ -1618,9 +1617,6 @@ class ModernMainWindow(QMainWindow):
         if "rings" in values: self.rings.setText(str(values["rings"]))
         if "angle" in values: self.angle_step.setValue(int(values["angle"]))
         if "clip" in values: self.clip_db.setValue(float(values["clip"]))
-        if "vswr_grid" in values: self.vswr_grid.set_color(str(values["vswr_grid"]))
-        if "vswr_line_1" in values: self.vswr_line1.set_color(str(values["vswr_line_1"]))
-        if "vswr_line_2" in values: self.vswr_line2.set_color(str(values["vswr_line_2"]))
 
     def on_preset_selected(self, _text: str) -> None:
         name = self.current_preset_name()
@@ -1931,8 +1927,8 @@ class ModernMainWindow(QMainWindow):
             return
         args = [which_python(), "-u", SCRIPT_VSWR, s2p,
                 "--output", str(self.deduced_vswr_output()),
-                "--grid-color", self.vswr_grid.color(),
-                "--line-colors", ",".join([self.vswr_line1.color(), self.vswr_line2.color()]),
+                "--grid-color", self.plot_grid.color(),
+                "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
                 "--x-step", str(self.shared_xstep.value()),
                 "--ymin", str(self.vswr_ymin.value()),
                 "--ymax", str(self.vswr_ymax.value()),
@@ -2001,8 +1997,8 @@ class ModernMainWindow(QMainWindow):
         if s2p:
             args_vswr = [which_python(), "-u", SCRIPT_VSWR, s2p,
                     "--output", str(self.deduced_vswr_output()),
-                    "--grid-color", self.vswr_grid.color(),
-                    "--line-colors", ",".join([self.vswr_line1.color(), self.vswr_line2.color()]),
+                    "--grid-color", self.plot_grid.color(),
+                    "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
                     "--x-step", str(self.shared_xstep.value()),
                     "--ymin", str(self.vswr_ymin.value()),
                     "--ymax", str(self.vswr_ymax.value()),
