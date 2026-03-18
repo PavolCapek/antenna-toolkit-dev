@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QByteArray, Signal
-from PySide6.QtGui import QColor, QPalette, QTextCursor
+from PySide6.QtGui import QColor, QPalette, QTextCursor, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QAbstractItemView,
@@ -48,6 +48,216 @@ STAGE_DEFINITIONS = [
     ("vswr", "VSWR"),
 ]
 STAGE_LABELS = dict(STAGE_DEFINITIONS)
+THEME_OPTIONS = [
+    ("light", "Canvas"),
+    ("dark", "Midnight"),
+    ("graphite", "Graphite"),
+    ("sage", "Sage"),
+    ("sepia", "Sepia"),
+]
+THEME_LABELS = {key: label for key, label in THEME_OPTIONS}
+THEME_STYLES = {
+    "light": {
+        "palette_window": "#edf2f7",
+        "palette_window_text": "#172433",
+        "palette_base": "#ffffff",
+        "palette_text": "#172433",
+        "palette_button": "#f3f7fb",
+        "palette_button_text": "#172433",
+        "palette_highlight": "#d37436",
+        "palette_highlight_text": "#ffffff",
+        "window_bg": "#edf2f7",
+        "title_band_bg": "qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #142033, stop:0.55 #25516c, stop:1 #2f7a73)",
+        "title_subtle": "rgba(237,244,249,0.86)",
+        "shell_bg": "#f7f9fb",
+        "shell_border": "#d5dde6",
+        "card_bg": "#ffffff",
+        "card_border": "#d5dde6",
+        "title_color": "#172433",
+        "text_color": "#314255",
+        "input_bg": "#f7fafc",
+        "input_border": "#c7d2de",
+        "button_bg": "#f3f7fb",
+        "button_hover": "#e8f0f7",
+        "list_selected": "#d9e8f4",
+        "primary_bg": "#d37436",
+        "primary_hover": "#bf6226",
+        "progress_bg": "rgba(29,45,60,0.10)",
+        "ghost_bg": "#ebf0f5",
+        "ghost_hover": "#dfe8f0",
+        "step_bg": "#eef4f8",
+        "step_hover": "#e1ebf2",
+        "step_border": "#bdcbd8",
+        "helper_color": "#5f7182",
+        "tab_bg": "#e7edf3",
+        "tab_hover": "#dde7ef",
+        "tab_selected": "#ffffff",
+        "badge_bg": "rgba(211,116,54,0.10)",
+        "badge_border": "#e2b290",
+        "badge_text": "#7c4929",
+        "eyebrow_color": "#19706a",
+    },
+    "dark": {
+        "palette_window": "#0f1720",
+        "palette_window_text": "#f3f6f9",
+        "palette_base": "#121b24",
+        "palette_text": "#f3f6f9",
+        "palette_button": "#202c37",
+        "palette_button_text": "#f3f6f9",
+        "palette_highlight": "#f19a5b",
+        "palette_highlight_text": "#10161d",
+        "window_bg": "#0f1720",
+        "title_band_bg": "qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #0c1722, stop:0.55 #17344a, stop:1 #1f5a53)",
+        "title_subtle": "rgba(226,234,240,0.84)",
+        "shell_bg": "#16212c",
+        "shell_border": "#283848",
+        "card_bg": "#1c2935",
+        "card_border": "#30414f",
+        "title_color": "#f3f6f9",
+        "text_color": "#d9e3ea",
+        "input_bg": "#121b24",
+        "input_border": "#334653",
+        "button_bg": "#202c37",
+        "button_hover": "#2a3844",
+        "list_selected": "#29414c",
+        "primary_bg": "#f19a5b",
+        "primary_hover": "#de8442",
+        "progress_bg": "rgba(255,255,255,0.08)",
+        "ghost_bg": "#1f2b35",
+        "ghost_hover": "#293743",
+        "step_bg": "#141d26",
+        "step_hover": "#1c2731",
+        "step_border": "#3a4a57",
+        "helper_color": "#9fb2c2",
+        "tab_bg": "#202c37",
+        "tab_hover": "#253440",
+        "tab_selected": "#1c2935",
+        "badge_bg": "rgba(241,154,91,0.16)",
+        "badge_border": "#8b5630",
+        "badge_text": "#ffe0cb",
+        "eyebrow_color": "#72ccb4",
+    },
+    "graphite": {
+        "palette_window": "#171a20",
+        "palette_window_text": "#f2f4f7",
+        "palette_base": "#1d2128",
+        "palette_text": "#f2f4f7",
+        "palette_button": "#262c35",
+        "palette_button_text": "#f2f4f7",
+        "palette_highlight": "#75aeda",
+        "palette_highlight_text": "#141920",
+        "window_bg": "#171a20",
+        "title_band_bg": "qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #14171d, stop:0.55 #283340, stop:1 #3b4654)",
+        "title_subtle": "rgba(228,232,237,0.82)",
+        "shell_bg": "#1d2128",
+        "shell_border": "#313845",
+        "card_bg": "#222831",
+        "card_border": "#3a4351",
+        "title_color": "#f2f4f7",
+        "text_color": "#d8dee6",
+        "input_bg": "#191d24",
+        "input_border": "#3b4452",
+        "button_bg": "#262c35",
+        "button_hover": "#303744",
+        "list_selected": "#334455",
+        "primary_bg": "#75aeda",
+        "primary_hover": "#6199c8",
+        "progress_bg": "rgba(255,255,255,0.07)",
+        "ghost_bg": "#242a33",
+        "ghost_hover": "#2d3440",
+        "step_bg": "#191e25",
+        "step_hover": "#212730",
+        "step_border": "#46505f",
+        "helper_color": "#a5afbb",
+        "tab_bg": "#262c35",
+        "tab_hover": "#303744",
+        "tab_selected": "#222831",
+        "badge_bg": "rgba(117,174,218,0.16)",
+        "badge_border": "#53789b",
+        "badge_text": "#dbefff",
+        "eyebrow_color": "#87c5d4",
+    },
+    "sage": {
+        "palette_window": "#e8f0eb",
+        "palette_window_text": "#19332d",
+        "palette_base": "#fcfffd",
+        "palette_text": "#19332d",
+        "palette_button": "#eef5f0",
+        "palette_button_text": "#19332d",
+        "palette_highlight": "#4b8270",
+        "palette_highlight_text": "#ffffff",
+        "window_bg": "#e8f0eb",
+        "title_band_bg": "qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #17312f, stop:0.55 #2f5b55, stop:1 #5b7a5f)",
+        "title_subtle": "rgba(236,245,240,0.86)",
+        "shell_bg": "#f5faf6",
+        "shell_border": "#cbdace",
+        "card_bg": "#fcfffd",
+        "card_border": "#d2ddd4",
+        "title_color": "#19332d",
+        "text_color": "#3c544d",
+        "input_bg": "#f1f7f3",
+        "input_border": "#c7d9cd",
+        "button_bg": "#eef5f0",
+        "button_hover": "#e1ede5",
+        "list_selected": "#d6e7db",
+        "primary_bg": "#4b8270",
+        "primary_hover": "#3d6e5d",
+        "progress_bg": "rgba(24,48,42,0.10)",
+        "ghost_bg": "#e6efe8",
+        "ghost_hover": "#d9e8dc",
+        "step_bg": "#eaf2ec",
+        "step_hover": "#dde9e0",
+        "step_border": "#b7cabd",
+        "helper_color": "#657c74",
+        "tab_bg": "#e3ece5",
+        "tab_hover": "#d7e6db",
+        "tab_selected": "#fcfffd",
+        "badge_bg": "rgba(75,130,112,0.12)",
+        "badge_border": "#9ebcae",
+        "badge_text": "#2f5a4d",
+        "eyebrow_color": "#2f7863",
+    },
+    "sepia": {
+        "palette_window": "#f3eadc",
+        "palette_window_text": "#30251a",
+        "palette_base": "#fffaf1",
+        "palette_text": "#30251a",
+        "palette_button": "#f6efe4",
+        "palette_button_text": "#30251a",
+        "palette_highlight": "#a6612f",
+        "palette_highlight_text": "#fff8f0",
+        "window_bg": "#f3eadc",
+        "title_band_bg": "qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #332219, stop:0.55 #6c4931, stop:1 #8b6a48)",
+        "title_subtle": "rgba(247,240,230,0.88)",
+        "shell_bg": "#fbf4e9",
+        "shell_border": "#d8c6ae",
+        "card_bg": "#fffaf1",
+        "card_border": "#dccab3",
+        "title_color": "#30251a",
+        "text_color": "#5b4b3d",
+        "input_bg": "#f7efe2",
+        "input_border": "#d4c1a9",
+        "button_bg": "#f6efe4",
+        "button_hover": "#eee3d3",
+        "list_selected": "#efd9bd",
+        "primary_bg": "#a6612f",
+        "primary_hover": "#8f5225",
+        "progress_bg": "rgba(60,42,26,0.10)",
+        "ghost_bg": "#efe4d4",
+        "ghost_hover": "#e6d7c1",
+        "step_bg": "#f1e6d7",
+        "step_hover": "#e8dac6",
+        "step_border": "#c5ae92",
+        "helper_color": "#7a6958",
+        "tab_bg": "#eadfce",
+        "tab_hover": "#e1d2bc",
+        "tab_selected": "#fffaf1",
+        "badge_bg": "rgba(166,97,47,0.12)",
+        "badge_border": "#c89d76",
+        "badge_text": "#7a431f",
+        "eyebrow_color": "#896038",
+    },
+}
 
 
 def format_timestamp(value: str | None) -> str:
@@ -633,7 +843,7 @@ class ModernMainWindow(QMainWindow):
         self.project_active_preset = ""
         self.project_run_state: dict[str, object] = {}
         self.theme = str(self.store.get("theme", "light")).lower()
-        if self.theme not in {"light", "dark"}:
+        if self.theme not in THEME_LABELS:
             self.theme = "light"
         self._build_ui()
         self._apply_style()
@@ -673,14 +883,15 @@ class ModernMainWindow(QMainWindow):
         self.console_toggle.setObjectName("ghostButton")
         self.console_toggle.setCheckable(True)
         self.console_toggle.clicked.connect(self.toggle_console)
-        self.theme_toggle = QPushButton()
-        self.theme_toggle.setObjectName("themeToggle")
-        self.theme_toggle.setCheckable(True)
-        self.theme_toggle.clicked.connect(self.toggle_theme)
+        self.theme_selector = QComboBox()
+        self.theme_selector.setObjectName("themeSelector")
+        for theme_key, theme_label in THEME_OPTIONS:
+            self.theme_selector.addItem(theme_label, theme_key)
+        self.theme_selector.currentIndexChanged.connect(self.on_theme_selected)
         self.console_toggle.setToolTip("Show or hide the separate output console window.")
-        self.theme_toggle.setToolTip("Switch between the light and dark studio themes.")
+        self.theme_selector.setToolTip("Choose a studio theme.")
         title_tools.addWidget(self.console_toggle)
-        title_tools.addWidget(self.theme_toggle)
+        title_tools.addWidget(self.theme_selector)
         title_lay.addLayout(title_tools)
         root_lay.addWidget(title_band)
 
@@ -1192,7 +1403,7 @@ class ModernMainWindow(QMainWindow):
 
         self._bind_project_persistence()
         self.refresh_preset_list()
-        self._sync_theme_toggle()
+        self._sync_theme_selector()
         self._sync_console_toggle()
         self.workflow_tabs.setCurrentIndex(0)
         self.on_tab_changed(self.workflow_tabs.currentIndex())
@@ -1324,101 +1535,42 @@ class ModernMainWindow(QMainWindow):
 
     def _apply_style(self):
         QApplication.setStyle(QStyleFactory.create("Fusion"))
+        theme = THEME_STYLES.get(self.theme, THEME_STYLES["light"])
         pal = QPalette()
-        if self.theme == "dark":
-            pal.setColor(QPalette.Window, QColor("#10161d"))
-            pal.setColor(QPalette.WindowText, QColor("#f4f6f8"))
-            pal.setColor(QPalette.Base, QColor("#121a22"))
-            pal.setColor(QPalette.Text, QColor("#f4f6f8"))
-            pal.setColor(QPalette.Highlight, QColor("#e4874a"))
-            pal.setColor(QPalette.HighlightedText, QColor("#10161d"))
-            window_bg = "#10161d"
-            title_band_bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #0d1722, stop:0.55 #163247, stop:1 #214e4a)"
-            title_subtle = "rgba(226,232,240,0.82)"
-            shell_bg = "#16202a"
-            shell_border = "#283645"
-            card_bg = "#1b2630"
-            card_border = "#30414f"
-            title_color = "#f4f6f8"
-            text_color = "#d5dee5"
-            input_bg = "#121a22"
-            input_border = "#32424f"
-            button_bg = "#202b35"
-            button_hover = "#283640"
-            list_selected = "#29414c"
-            primary_bg = "#e4874a"
-            primary_hover = "#d77433"
-            progress_bg = "rgba(255,255,255,0.08)"
-            ghost_bg = "#1f2a33"
-            ghost_hover = "#293640"
-            step_bg = "#141c24"
-            step_hover = "#1c2630"
-            step_border = "#3a4a57"
-            helper_color = "#9fb1bf"
-            tab_bg = "#202c37"
-            tab_hover = "#253440"
-            tab_selected = "#1b2630"
-            badge_bg = "rgba(228,135,74,0.14)"
-            badge_border = "#7b4d2f"
-            badge_text = "#ffd8c2"
-            eyebrow_color = "#6fc7ae"
-        else:
-            pal.setColor(QPalette.Window, QColor("#efe7dc"))
-            pal.setColor(QPalette.WindowText, QColor("#182635"))
-            pal.setColor(QPalette.Base, QColor("#fffaf2"))
-            pal.setColor(QPalette.Text, QColor("#182635"))
-            pal.setColor(QPalette.Highlight, QColor("#c76a38"))
-            pal.setColor(QPalette.HighlightedText, QColor("#fffaf2"))
-            window_bg = "#efe7dc"
-            title_band_bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #142033, stop:0.55 #26445b, stop:1 #496f63)"
-            title_subtle = "rgba(241,245,249,0.84)"
-            shell_bg = "#f7f1e7"
-            shell_border = "#d8c8b4"
-            card_bg = "#fffaf2"
-            card_border = "#d9ccb9"
-            title_color = "#182635"
-            text_color = "#314354"
-            input_bg = "#f6efe4"
-            input_border = "#d7c8b4"
-            button_bg = "#fff9ef"
-            button_hover = "#f4e8d7"
-            list_selected = "#f3dfca"
-            primary_bg = "#c76a38"
-            primary_hover = "#b85a25"
-            progress_bg = "rgba(54,73,92,0.12)"
-            ghost_bg = "#eee4d6"
-            ghost_hover = "#e5d7c4"
-            step_bg = "#f1e6d6"
-            step_hover = "#e8dac4"
-            step_border = "#c7b59b"
-            helper_color = "#697887"
-            tab_bg = "#e7ddcf"
-            tab_hover = "#ded1bf"
-            tab_selected = "#fffaf2"
-            badge_bg = "rgba(199,106,56,0.10)"
-            badge_border = "#d9b292"
-            badge_text = "#7b4628"
-            eyebrow_color = "#2f7d6a"
+        pal.setColor(QPalette.Window, QColor(theme["palette_window"]))
+        pal.setColor(QPalette.WindowText, QColor(theme["palette_window_text"]))
+        pal.setColor(QPalette.Base, QColor(theme["palette_base"]))
+        pal.setColor(QPalette.AlternateBase, QColor(theme["card_bg"]))
+        pal.setColor(QPalette.Text, QColor(theme["palette_text"]))
+        pal.setColor(QPalette.Button, QColor(theme["palette_button"]))
+        pal.setColor(QPalette.ButtonText, QColor(theme["palette_button_text"]))
+        pal.setColor(QPalette.ToolTipBase, QColor(theme["card_bg"]))
+        pal.setColor(QPalette.ToolTipText, QColor(theme["title_color"]))
+        pal.setColor(QPalette.Highlight, QColor(theme["palette_highlight"]))
+        pal.setColor(QPalette.HighlightedText, QColor(theme["palette_highlight_text"]))
         QApplication.setPalette(pal)
         app = QApplication.instance()
         if app:
+            base_font = QFont("Segoe UI", 11)
+            app.setFont(base_font)
             app.setStyleSheet("""
-                QWidget { font-family: "Segoe UI"; font-size: 10.5pt; }
+                QWidget { font-size: 11pt; }
                 QMainWindow { background: %(window_bg)s; }
                 QScrollArea { background: transparent; border: none; }
+                QLabel { color: %(text_color)s; }
+                QMainWindow, QDialog { color: %(text_color)s; }
                 #titleBand { border-radius: 28px; background: %(title_band_bg)s; }
                 #workspaceShell { background: %(shell_bg)s; border: 1px solid %(shell_border)s; border-radius: 28px; }
-                #brandTitle { color: white; font-family: "Bahnschrift"; font-size: 20pt; font-weight: 700; }
-                #brandSubtitle { color: %(title_subtle)s; font-size: 10pt; }
-                #runInfo { color: %(text_color)s; font-size: 10pt; }
+                #brandTitle { color: white; font-size: 21pt; font-weight: 700; }
+                #brandSubtitle { color: %(title_subtle)s; font-size: 10.75pt; font-weight: 500; }
+                #runInfo { color: %(text_color)s; font-size: 10.5pt; }
                 #card { background: %(card_bg)s; border: 1px solid %(card_border)s; border-radius: 20px; }
-                #cardTitle { color: %(title_color)s; font-size: 13pt; font-weight: 700; }
-                #eyebrow { color: %(eyebrow_color)s; font-size: 8.5pt; font-weight: 700; }
-                #projectName { color: %(title_color)s; font-size: 18pt; font-weight: 700; }
-                #projectMeta { color: %(helper_color)s; font-size: 10pt; }
-                #summaryBadge { background: %(badge_bg)s; color: %(badge_text)s; border: 1px solid %(badge_border)s; border-radius: 12px; padding: 6px 10px; font-size: 8.75pt; font-weight: 700; }
-                QLabel { color: %(text_color)s; }
-                #helper { color: %(helper_color)s; }
+                #cardTitle { color: %(title_color)s; font-size: 13.5pt; font-weight: 700; }
+                #eyebrow { color: %(eyebrow_color)s; font-size: 9pt; font-weight: 700; }
+                #projectName { color: %(title_color)s; font-size: 19pt; font-weight: 700; }
+                #projectMeta { color: %(helper_color)s; font-size: 10.5pt; }
+                #summaryBadge { background: %(badge_bg)s; color: %(badge_text)s; border: 1px solid %(badge_border)s; border-radius: 12px; padding: 6px 10px; font-size: 9pt; font-weight: 700; }
+                #helper { color: %(helper_color)s; font-size: 10.5pt; }
                 QTabWidget::pane { border: none; background: transparent; margin-top: 8px; }
                 QTabBar::tab { background: %(tab_bg)s; border: 1px solid %(shell_border)s; border-bottom: none; border-top-left-radius: 14px; border-top-right-radius: 14px; padding: 10px 16px; margin-right: 6px; min-width: 110px; color: %(helper_color)s; font-weight: 700; }
                 QTabBar::tab:hover { background: %(tab_hover)s; color: %(title_color)s; }
@@ -1428,14 +1580,14 @@ class ModernMainWindow(QMainWindow):
                 QComboBox QAbstractItemView { background: %(card_bg)s; border: 1px solid %(card_border)s; color: %(title_color)s; selection-background-color: %(list_selected)s; selection-color: %(title_color)s; }
                 QListWidget::item { padding: 7px 10px; border-radius: 10px; margin: 1px 0; }
                 QListWidget::item:selected { background: %(list_selected)s; color: %(title_color)s; }
-                QPushButton { background: %(button_bg)s; border: 1px solid %(input_border)s; border-radius: 14px; padding: 9px 13px; color: %(title_color)s; font-weight: 600; }
+                QPushButton { background: %(button_bg)s; border: 1px solid %(input_border)s; border-radius: 14px; padding: 10px 14px; color: %(title_color)s; font-weight: 600; }
                 QPushButton:hover { border-color: #7fb2cf; background: %(button_hover)s; }
                 QPushButton:disabled { color: %(helper_color)s; background: %(input_bg)s; border-color: %(card_border)s; }
                 QPushButton#primaryButton { background: %(primary_bg)s; color: white; border: none; padding: 10px 16px; }
                 QPushButton#primaryButton:hover { background: %(primary_hover)s; }
-                QPushButton#themeToggle { min-width: 120px; }
                 QPushButton#ghostButton { background: %(ghost_bg)s; }
                 QPushButton#ghostButton:hover { background: %(ghost_hover)s; }
+                QComboBox#themeSelector { min-width: 168px; font-weight: 600; }
                 QPushButton#stepButton { background: %(step_bg)s; border: 1px solid %(step_border)s; border-radius: 12px; padding: 6px 0; font-size: 11pt; font-weight: 700; min-width: 30px; }
                 QPushButton#stepButton:hover { background: %(step_hover)s; border-color: #7fb2cf; }
                 QCheckBox#pillCheck { spacing: 8px; padding: 7px 10px; border: 1px solid %(input_border)s; border-radius: 12px; background: %(ghost_bg)s; color: %(title_color)s; font-weight: 600; }
@@ -1444,43 +1596,15 @@ class ModernMainWindow(QMainWindow):
                 QCheckBox#pillCheck::indicator:checked { background: %(primary_bg)s; border-color: %(primary_bg)s; }
                 QProgressBar { background: %(progress_bg)s; border: 1px solid %(card_border)s; border-radius: 10px; color: %(title_color)s; min-height: 18px; }
                 QProgressBar::chunk { background: %(primary_bg)s; border-radius: 8px; }
-            """ % {
-                "window_bg": window_bg,
-                "title_band_bg": title_band_bg,
-                "title_subtle": title_subtle,
-                "shell_bg": shell_bg,
-                "shell_border": shell_border,
-                "card_bg": card_bg,
-                "card_border": card_border,
-                "title_color": title_color,
-                "text_color": text_color,
-                "input_bg": input_bg,
-                "input_border": input_border,
-                "button_bg": button_bg,
-                "button_hover": button_hover,
-                "list_selected": list_selected,
-                "primary_bg": primary_bg,
-                "primary_hover": primary_hover,
-                "progress_bg": progress_bg,
-                "ghost_bg": ghost_bg,
-                "ghost_hover": ghost_hover,
-                "step_bg": step_bg,
-                "step_hover": step_hover,
-                "step_border": step_border,
-                "helper_color": helper_color,
-                "tab_bg": tab_bg,
-                "tab_hover": tab_hover,
-                "tab_selected": tab_selected,
-                "badge_bg": badge_bg,
-                "badge_border": badge_border,
-                "badge_text": badge_text,
-                "eyebrow_color": eyebrow_color,
-            })
+            """ % theme)
 
-    def _sync_theme_toggle(self):
-        dark = self.theme == "dark"
-        self.theme_toggle.setChecked(dark)
-        self.theme_toggle.setText("Light Theme" if dark else "Dark Theme")
+    def _sync_theme_selector(self):
+        if not hasattr(self, "theme_selector"):
+            return
+        index = self.theme_selector.findData(self.theme)
+        self.theme_selector.blockSignals(True)
+        self.theme_selector.setCurrentIndex(max(0, index))
+        self.theme_selector.blockSignals(False)
 
     def _sync_console_toggle(self):
         visible = self.console_window.isVisible() if hasattr(self, "console_window") else bool(self.store.get("console_visible", False))
@@ -1507,10 +1631,13 @@ class ModernMainWindow(QMainWindow):
         self.console_toggle.setText("Show Console")
         self.store.set("console_visible", False)
 
-    def toggle_theme(self, checked: bool = False):
-        self.theme = "dark" if checked else "light"
+    def on_theme_selected(self, _index: int) -> None:
+        selected = str(self.theme_selector.currentData() or "").strip().lower()
+        if not selected or selected == self.theme:
+            return
+        self.theme = selected if selected in THEME_LABELS else "light"
         self.store.set("theme", self.theme)
-        self._sync_theme_toggle()
+        self._sync_theme_selector()
         self._apply_style()
 
     def toggle_console(self, checked: bool = False):

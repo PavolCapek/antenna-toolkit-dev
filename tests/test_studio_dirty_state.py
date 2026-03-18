@@ -131,6 +131,20 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.width(), 1234)
         self.assertEqual(self.window.height(), 777)
 
+    def test_theme_selector_supports_additional_themes_and_persists_selection(self) -> None:
+        self.assertEqual(self.window.theme_selector.count(), 5)
+        theme_index = self.window.theme_selector.findData("sage")
+
+        self.assertGreaterEqual(theme_index, 0)
+
+        self.window.theme_selector.setCurrentIndex(theme_index)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.theme, "sage")
+        self.assertEqual(self.window.store.get("theme"), "sage")
+        self.assertEqual(self.window.theme_selector.currentText(), "Sage")
+        self.assertGreaterEqual(QApplication.font().pointSizeF(), 11.0)
+
 
 if __name__ == "__main__":
     unittest.main()
