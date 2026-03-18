@@ -15,8 +15,8 @@ from PySide6.QtWidgets import (
     QComboBox, QColorDialog,
     QCheckBox,
     QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QProgressBar,
-    QFormLayout, QFrame, QSplitter, QSizePolicy, QStyleFactory, QMessageBox, QInputDialog,
-    QDialog, QDialogButtonBox, QScrollArea, QGridLayout
+    QFormLayout, QFrame, QSizePolicy, QStyleFactory, QMessageBox, QInputDialog,
+    QDialog, QDialogButtonBox, QScrollArea, QGridLayout, QTabWidget
 )
 
 from antenna_toolkit_qt import (
@@ -123,8 +123,10 @@ class Card(QFrame):
 
 
 class ResponsiveCardPanel(QWidget):
-    def __init__(self):
+    def __init__(self, max_columns: int = 3, min_card_width: int = 360):
         super().__init__()
+        self.max_columns = max(1, max_columns)
+        self.min_card_width = max(220, min_card_width)
         self._cards: list[QWidget] = []
         self._columns = 0
         self.grid = QGridLayout(self)
@@ -141,12 +143,11 @@ class ResponsiveCardPanel(QWidget):
         self.refresh_layout()
 
     def _desired_columns(self) -> int:
-        width = max(0, self.width())
-        if width < 820:
+        if not self._cards:
             return 1
-        if width < 1220:
-            return 2
-        return 3
+        width = max(0, self.width())
+        columns = max(1, width // self.min_card_width)
+        return min(self.max_columns, len(self._cards), columns)
 
     def refresh_layout(self, force: bool = False) -> None:
         columns = self._desired_columns()
@@ -184,8 +185,11 @@ class ResponsiveButtonPanel(QWidget):
         self.refresh_layout()
 
     def _desired_columns(self) -> int:
+        if not self._buttons:
+            return 1
         width = max(self.width(), self.min_button_width)
-        return max(1, min(self.max_columns, width // self.min_button_width))
+        columns = max(1, min(self.max_columns, width // self.min_button_width))
+        return min(columns, len(self._buttons))
 
     def refresh_layout(self, force: bool = False) -> None:
         columns = self._desired_columns()
@@ -555,36 +559,110 @@ class ModernMainWindow(QMainWindow):
     def _build_ui(self):
         root = QWidget()
         root_lay = QVBoxLayout(root)
-        root_lay.setContentsMargins(16, 16, 16, 16)
-        root_lay.setSpacing(12)
+        root_lay.setContentsMargins(18, 18, 18, 18)
+        root_lay.setSpacing(16)
 
-        hero = QFrame()
-        hero.setObjectName("hero")
-        hero.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        hero_lay = QHBoxLayout(hero)
-        hero_lay.setContentsMargins(20, 18, 20, 18)
-        hero_lay.setSpacing(14)
+        title_band = QFrame()
+        title_band.setObjectName("titleBand")
+        title_lay = QHBoxLayout(title_band)
+        title_lay.setContentsMargins(22, 20, 22, 20)
+        title_lay.setSpacing(16)
 
-        title_col = QVBoxLayout()
-        title_col.setSpacing(4)
+        brand_lay = QVBoxLayout()
+        brand_lay.setContentsMargins(0, 0, 0, 0)
+        brand_lay.setSpacing(6)
         self.hero_title = QLabel("Antenna Toolkit Studio")
-        self.hero_title.setObjectName("heroTitle")
-        self.project_badge = QLabel("Project: results")
-        self.project_badge.setObjectName("badge")
-        self.count_badge = QLabel("0 far-field files")
-        self.count_badge.setObjectName("badge")
-        badge_row = QHBoxLayout()
-        badge_row.setContentsMargins(0, 0, 0, 0)
-        badge_row.setSpacing(8)
-        badge_row.addWidget(self.project_badge)
-        badge_row.addWidget(self.count_badge)
-        badge_row.addStretch(1)
-        title_col.addWidget(self.hero_title)
-        title_col.addLayout(badge_row)
-        hero_lay.addLayout(title_col, 1)
+        self.hero_title.setObjectName("brandTitle")
+        brand_subtitle = QLabel("Projects now keep inputs, presets, settings, and generated results together in one workspace.")
+        brand_subtitle.setObjectName("brandSubtitle")
+        brand_subtitle.setWordWrap(True)
+        brand_lay.addWidget(self.hero_title)
+        brand_lay.addWidget(brand_subtitle)
+        title_lay.addLayout(brand_lay, 1)
 
-        action_col = QVBoxLayout()
-        action_col.setSpacing(8)
+        title_tools = QHBoxLayout()
+        title_tools.setContentsMargins(0, 0, 0, 0)
+        title_tools.setSpacing(10)
+        self.console_toggle = QPushButton()
+        self.console_toggle.setObjectName("ghostButton")
+        self.console_toggle.setCheckable(True)
+        self.console_toggle.clicked.connect(self.toggle_console)
+        self.theme_toggle = QPushButton()
+        self.theme_toggle.setObjectName("themeToggle")
+        self.theme_toggle.setCheckable(True)
+        self.theme_toggle.clicked.connect(self.toggle_theme)
+        self.console_toggle.setToolTip("Show or hide the separate output console window.")
+        self.theme_toggle.setToolTip("Switch between the light and dark studio themes.")
+        title_tools.addWidget(self.console_toggle)
+        title_tools.addWidget(self.theme_toggle)
+        title_lay.addLayout(title_tools)
+        root_lay.addWidget(title_band)
+
+        command_panel = ResponsiveCardPanel(max_columns=2, min_card_width=480)
+
+        project_card = Card("Project workspace", "Command center")
+        project_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        project_help = QLabel("Select a project first. Everything else in the window follows that project: inputs, presets, processing settings, and outputs.")
+        project_help.setWordWrap(True)
+        project_help.setObjectName("helper")
+        project_card.body.addWidget(project_help)
+        project_row = QVBoxLayout()
+        project_row.setContentsMargins(0, 0, 0, 0)
+        project_row.setSpacing(8)
+        self.project_combo = QComboBox()
+        self.project_combo.currentIndexChanged.connect(self.on_project_selected)
+        self.project_combo.setToolTip("Select the active project.")
+        self.project_new_button = QPushButton("New project")
+        self.project_new_button.clicked.connect(self.create_project)
+        self.project_edit_button = QPushButton("Edit project")
+        self.project_edit_button.clicked.connect(self.edit_project)
+        self.project_delete_button = QPushButton("Delete project")
+        self.project_delete_button.clicked.connect(self.delete_project)
+        self.project_new_button.setToolTip("Create a new project and store its inputs in the Projects directory.")
+        self.project_edit_button.setToolTip("Rename the active project or update its input files.")
+        self.project_delete_button.setToolTip("Delete the active project and everything saved inside its folder.")
+        project_row.addWidget(self.project_combo)
+        project_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=130)
+        project_actions.set_buttons([
+            self.project_new_button,
+            self.project_edit_button,
+            self.project_delete_button,
+        ])
+        project_row.addWidget(project_actions)
+        project_card.body.addLayout(project_row)
+        self.project_name = QLabel("No project selected")
+        self.project_name.setObjectName("projectName")
+        project_card.body.addWidget(self.project_name)
+        self.project_meta = QLabel("Create a project to keep inputs, presets, and generated results together.")
+        self.project_meta.setObjectName("projectMeta")
+        self.project_meta.setWordWrap(True)
+        project_card.body.addWidget(self.project_meta)
+        badge_grid = QGridLayout()
+        badge_grid.setContentsMargins(0, 0, 0, 0)
+        badge_grid.setHorizontalSpacing(8)
+        badge_grid.setVerticalSpacing(8)
+        self.project_badge = QLabel("Project: none")
+        self.project_badge.setObjectName("summaryBadge")
+        self.count_badge = QLabel("0 far-field files")
+        self.count_badge.setObjectName("summaryBadge")
+        self.preset_badge = QLabel("Preset: none")
+        self.preset_badge.setObjectName("summaryBadge")
+        badge_grid.addWidget(self.project_badge, 0, 0)
+        badge_grid.addWidget(self.count_badge, 0, 1)
+        badge_grid.addWidget(self.preset_badge, 1, 0, 1, 2)
+        project_card.body.addLayout(badge_grid)
+        self.project_folder_button = QPushButton("Open Project Folder")
+        self.project_folder_button.setObjectName("ghostButton")
+        self.project_folder_button.setToolTip("Open the active project's folder in File Explorer.")
+        self.project_folder_button.clicked.connect(lambda: open_in_file_manager(self.project_results_dir()))
+        project_card.body.addWidget(self.project_folder_button, 0, Qt.AlignLeft)
+
+        quick_actions = Card("Pipeline", "Run")
+        quick_actions.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        run_help = QLabel("Use Full Pipeline for the usual workflow. The other actions are for rerunning only one stage after you change inputs or settings.")
+        run_help.setObjectName("helper")
+        run_help.setWordWrap(True)
+        quick_actions.body.addWidget(run_help)
         self.btn_full = QPushButton("Run Full Pipeline")
         self.btn_full.setObjectName("primaryButton")
         self.btn_full.clicked.connect(self.run_full)
@@ -596,89 +674,55 @@ class ModernMainWindow(QMainWindow):
         self.btn_plot.clicked.connect(self.run_plot)
         self.btn_vswr = QPushButton("VSWR Only")
         self.btn_vswr.clicked.connect(self.run_vswr)
-        self.console_toggle = QPushButton()
-        self.console_toggle.setObjectName("ghostButton")
-        self.console_toggle.setCheckable(True)
-        self.console_toggle.clicked.connect(self.toggle_console)
-        self.theme_toggle = QPushButton()
-        self.theme_toggle.setObjectName("themeToggle")
-        self.theme_toggle.setCheckable(True)
-        self.theme_toggle.clicked.connect(self.toggle_theme)
         self.btn_full.setToolTip("Run workbook generation, chart generation, and VSWR generation in sequence.")
         self.btn_beam.setToolTip("Generate only the Excel workbook from the selected far-field files.")
         self.btn_extract.setToolTip("Generate a separate Excel workbook with extracted gain, beamwidth, VSWR, impedance, and front-to-back metrics.")
         self.btn_plot.setToolTip("Generate only the plots that are based on the derived workbook.")
         self.btn_vswr.setToolTip("Generate only the VSWR plot from the current Touchstone file.")
-        self.console_toggle.setToolTip("Show or hide the separate output console window.")
-        self.theme_toggle.setToolTip("Switch between the light and dark studio themes.")
-        self.hero_actions = ResponsiveButtonPanel(max_columns=4, min_button_width=150)
+        self.hero_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=150)
         self.hero_actions.set_buttons([
             self.btn_full,
             self.btn_beam,
             self.btn_extract,
             self.btn_plot,
             self.btn_vswr,
-            self.console_toggle,
-            self.theme_toggle,
         ])
+        quick_actions.body.addWidget(self.hero_actions)
         self.run_info = QLabel("Idle")
         self.run_info.setObjectName("runInfo")
+        self.run_info.setWordWrap(True)
         self.busy = QProgressBar()
         self.busy.setVisible(False)
         self.busy.setRange(0, 0)
-        self.busy.setFixedWidth(220)
-        info_row = QHBoxLayout()
-        info_row.setContentsMargins(0, 0, 0, 0)
-        info_row.setSpacing(10)
-        info_row.addWidget(self.run_info, 1)
-        info_row.addWidget(self.busy)
-        action_col.addWidget(self.hero_actions)
-        action_col.addLayout(info_row)
-        hero_lay.addLayout(action_col)
-        root_lay.addWidget(hero, 0)
-        self._sync_theme_toggle()
-        self._sync_console_toggle()
+        self.busy.setTextVisible(False)
+        quick_actions.body.addWidget(self.run_info)
+        quick_actions.body.addWidget(self.busy)
+        command_panel.set_cards([project_card, quick_actions])
+        root_lay.addWidget(command_panel)
 
-        split = QSplitter(Qt.Horizontal)
-        split.setChildrenCollapsible(False)
-        split.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        workspace_shell = QFrame()
+        workspace_shell.setObjectName("workspaceShell")
+        workspace_shell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        shell_lay = QVBoxLayout(workspace_shell)
+        shell_lay.setContentsMargins(20, 20, 20, 20)
+        shell_lay.setSpacing(14)
+        self.workflow_tabs = QTabWidget()
+        self.workflow_tabs.setObjectName("workflowTabs")
+        self.workflow_tabs.currentChanged.connect(self.on_tab_changed)
+        shell_lay.addWidget(self.workflow_tabs, 1)
+        root_lay.addWidget(workspace_shell, 1)
 
-        left_content = QWidget()
-        left_content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        left_lay = QVBoxLayout(left_content)
-        left_lay.setContentsMargins(0, 0, 0, 0)
-        left_lay.setSpacing(12)
+        overview_scroll, _overview_page, overview_lay = self._make_scroll_page()
+        inputs_scroll, _inputs_page, inputs_lay = self._make_scroll_page()
+        processing_scroll, _processing_page, processing_lay = self._make_scroll_page()
+        charts_scroll, _charts_page, charts_lay = self._make_scroll_page()
 
-        summary = Card("Project workspace", "Project")
-        summary.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        project_help = QLabel("Each project stores its own far-field files, Touchstone file, UI settings, and generated outputs under Projects/<name>/.")
-        project_help.setWordWrap(True)
-        project_help.setObjectName("helper")
-        summary.body.addWidget(project_help)
-        project_row = QVBoxLayout()
-        project_row.setContentsMargins(0, 0, 0, 0)
-        project_row.setSpacing(8)
-        self.project_combo = QComboBox()
-        self.project_combo.currentIndexChanged.connect(self.on_project_selected)
-        self.project_combo.setToolTip("Select the active project.")
-        self.project_new_button = QPushButton("New")
-        self.project_new_button.clicked.connect(self.create_project)
-        self.project_edit_button = QPushButton("Edit")
-        self.project_edit_button.clicked.connect(self.edit_project)
-        self.project_delete_button = QPushButton("Delete")
-        self.project_delete_button.clicked.connect(self.delete_project)
-        project_row.addWidget(self.project_combo)
-        project_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=110)
-        project_actions.set_buttons([
-            self.project_new_button,
-            self.project_edit_button,
-            self.project_delete_button,
-        ])
-        project_row.addWidget(project_actions)
-        summary.body.addLayout(project_row)
-        self.project_name = QLabel("No project selected")
-        self.project_name.setObjectName("projectName")
-        summary.body.addWidget(self.project_name)
+        outputs_card = Card("Project outputs", "Overview")
+        outputs_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        outputs_help = QLabel("All generated files stay inside the active project folder so the deliverables are always tied to the correct input set.")
+        outputs_help.setWordWrap(True)
+        outputs_help.setObjectName("helper")
+        outputs_card.body.addWidget(outputs_help)
         self.workbook_field = QLineEdit(); self.workbook_field.setReadOnly(True)
         self.extract_field = QLineEdit(); self.extract_field.setReadOnly(True)
         self.results_field = QLineEdit(); self.results_field.setReadOnly(True)
@@ -688,12 +732,11 @@ class ModernMainWindow(QMainWindow):
         self.results_field.setToolTip("Project directory containing metadata and generated outputs.")
         self.vswr_field.setToolTip("VSWR plot stored inside the selected project directory.")
         form = QFormLayout()
+        form.addRow("Project folder", self._path_row(self.results_field))
         form.addRow("Workbook", self._path_row(self.workbook_field))
         form.addRow("Extract workbook", self._path_row(self.extract_field))
-        form.addRow("Project folder", self._path_row(self.results_field))
         form.addRow("VSWR output", self._path_row(self.vswr_field))
-        summary.body.addLayout(form)
-        left_lay.addWidget(summary)
+        outputs_card.body.addLayout(form)
 
         preset_card = Card("Presets", "Workflow")
         preset_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -705,25 +748,38 @@ class ModernMainWindow(QMainWindow):
         self.preset_combo.currentTextChanged.connect(self.on_preset_selected)
         self.preset_combo.setToolTip("Choose a saved preset to apply its control, range, and style settings.")
         preset_card.body.addWidget(self.preset_combo)
-        preset_new = QPushButton("New"); preset_new.clicked.connect(self.create_preset)
-        preset_save = QPushButton("Save"); preset_save.clicked.connect(self.save_preset)
-        preset_rename = QPushButton("Rename"); preset_rename.clicked.connect(self.rename_preset)
-        preset_delete = QPushButton("Delete"); preset_delete.clicked.connect(self.delete_preset)
-        preset_new.setToolTip("Create a new preset from the current GUI settings.")
-        preset_save.setToolTip("Overwrite the selected preset with the current GUI settings.")
-        preset_rename.setToolTip("Rename the selected preset without changing its settings.")
-        preset_delete.setToolTip("Delete the selected preset.")
+        self.preset_new_button = QPushButton("New"); self.preset_new_button.clicked.connect(self.create_preset)
+        self.preset_save_button = QPushButton("Save"); self.preset_save_button.clicked.connect(self.save_preset)
+        self.preset_rename_button = QPushButton("Rename"); self.preset_rename_button.clicked.connect(self.rename_preset)
+        self.preset_delete_button = QPushButton("Delete"); self.preset_delete_button.clicked.connect(self.delete_preset)
+        self.preset_new_button.setToolTip("Create a new preset from the current GUI settings.")
+        self.preset_save_button.setToolTip("Overwrite the selected preset with the current GUI settings.")
+        self.preset_rename_button.setToolTip("Rename the selected preset without changing its settings.")
+        self.preset_delete_button.setToolTip("Delete the selected preset.")
         preset_actions = ResponsiveButtonPanel(max_columns=4, min_button_width=110)
-        preset_actions.set_buttons([preset_new, preset_save, preset_rename, preset_delete])
+        preset_actions.set_buttons([self.preset_new_button, self.preset_save_button, self.preset_rename_button, self.preset_delete_button])
         preset_card.body.addWidget(preset_actions)
-        preset_import = QPushButton("Import"); preset_import.clicked.connect(self.import_presets)
-        preset_export = QPushButton("Export"); preset_export.clicked.connect(self.export_presets)
-        preset_import.setToolTip("Import presets from a JSON file and merge them into the current list.")
-        preset_export.setToolTip("Export all saved presets to a JSON file.")
+        self.preset_import_button = QPushButton("Import"); self.preset_import_button.clicked.connect(self.import_presets)
+        self.preset_export_button = QPushButton("Export"); self.preset_export_button.clicked.connect(self.export_presets)
+        self.preset_import_button.setToolTip("Import presets from a JSON file and merge them into the current list.")
+        self.preset_export_button.setToolTip("Export all saved presets to a JSON file.")
         preset_io = ResponsiveButtonPanel(max_columns=2, min_button_width=120)
-        preset_io.set_buttons([preset_import, preset_export])
+        preset_io.set_buttons([self.preset_import_button, self.preset_export_button])
         preset_card.body.addWidget(preset_io)
-        left_lay.addWidget(preset_card)
+        storage_card = Card("What lives in a project", "Guide")
+        storage_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        storage_note = QLabel(
+            "1. Add or edit project inputs on the Inputs tab.\n"
+            "2. Tune smoothing and frequency limits on Processing.\n"
+            "3. Adjust chart ranges and colors on Charts, then run the pipeline from the top command area."
+        )
+        storage_note.setWordWrap(True)
+        storage_note.setObjectName("helper")
+        storage_card.body.addWidget(storage_note)
+        overview_panel = ResponsiveCardPanel(max_columns=2, min_card_width=380)
+        overview_panel.set_cards([outputs_card, preset_card, storage_card])
+        overview_lay.addWidget(overview_panel)
+        overview_lay.addStretch(1)
 
         ffs_card = Card("Far-field exports", "Inputs")
         ffs_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -736,16 +792,26 @@ class ModernMainWindow(QMainWindow):
         self.ffs_list.setMinimumHeight(230)
         self.ffs_list.setToolTip("Add one or more CST far-field export files (.ffs). Their names drive project-name deduction.")
         ffs_card.body.addWidget(self.ffs_list, 1)
-        addb = QPushButton("Add .ffs"); addb.clicked.connect(self.add_ffs)
-        remb = QPushButton("Remove selected"); remb.clicked.connect(self.remove_ffs)
-        clearb = QPushButton("Clear list"); clearb.clicked.connect(self.clear_ffs)
-        addb.setToolTip("Browse for CST far-field export files to include in this project.")
-        remb.setToolTip("Remove the highlighted far-field files from the current project.")
-        clearb.setToolTip("Clear the full far-field file list.")
+        self.add_ffs_button = QPushButton("Add .ffs"); self.add_ffs_button.clicked.connect(self.add_ffs)
+        self.remove_ffs_button = QPushButton("Remove selected"); self.remove_ffs_button.clicked.connect(self.remove_ffs)
+        self.clear_ffs_button = QPushButton("Clear list"); self.clear_ffs_button.clicked.connect(self.clear_ffs)
+        self.add_ffs_button.setToolTip("Browse for CST far-field export files to include in this project.")
+        self.remove_ffs_button.setToolTip("Remove the highlighted far-field files from the current project.")
+        self.clear_ffs_button.setToolTip("Clear the full far-field file list.")
         ffs_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=135)
-        ffs_actions.set_buttons([addb, remb, clearb])
+        ffs_actions.set_buttons([self.add_ffs_button, self.remove_ffs_button, self.clear_ffs_button])
         ffs_card.body.addWidget(ffs_actions)
-        left_lay.addWidget(ffs_card, 1)
+
+        inputs_help_card = Card("Input guidance", "Guide")
+        inputs_help_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        inputs_help = QLabel(
+            "The far-field list is the main input for workbook generation.\n"
+            "Touchstone is optional unless you need the VSWR plot.\n"
+            "Project changes are saved automatically as you edit the inputs."
+        )
+        inputs_help.setWordWrap(True)
+        inputs_help.setObjectName("helper")
+        inputs_help_card.body.addWidget(inputs_help)
 
         s2p_card = Card("Touchstone", "Inputs")
         s2p_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -753,39 +819,21 @@ class ModernMainWindow(QMainWindow):
         self.s2p_field.setReadOnly(True)
         self.s2p_field.setToolTip("Detected or manually selected Touchstone file used for the VSWR plot (.s1p or .s2p).")
         s2p_card.body.addWidget(self.s2p_field)
-        sel = QPushButton("Select Touchstone"); sel.clicked.connect(self.browse_s2p)
-        clr = QPushButton("Clear"); clr.clicked.connect(self.clear_s2p)
-        opn = QPushButton("Open"); opn.clicked.connect(lambda: open_in_file_manager(resolve_workspace_path(self.s2p_field.text())))
-        sel.setToolTip("Choose a Touchstone file manually if the automatic project match is not the one you want.")
-        clr.setToolTip("Clear the current Touchstone selection and let deduction run again.")
-        opn.setToolTip("Open the selected Touchstone file in File Explorer.")
+        self.select_s2p_button = QPushButton("Select Touchstone"); self.select_s2p_button.clicked.connect(self.browse_s2p)
+        self.clear_s2p_button = QPushButton("Clear"); self.clear_s2p_button.clicked.connect(self.clear_s2p)
+        self.open_s2p_button = QPushButton("Open"); self.open_s2p_button.clicked.connect(lambda: open_in_file_manager(resolve_workspace_path(self.s2p_field.text())))
+        self.select_s2p_button.setToolTip("Choose a Touchstone file manually if the automatic project match is not the one you want.")
+        self.clear_s2p_button.setToolTip("Clear the current Touchstone selection and let deduction run again.")
+        self.open_s2p_button.setToolTip("Open the selected Touchstone file in File Explorer.")
         s2p_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=145)
-        s2p_actions.set_buttons([sel, clr, opn])
+        s2p_actions.set_buttons([self.select_s2p_button, self.clear_s2p_button, self.open_s2p_button])
         s2p_card.body.addWidget(s2p_actions)
-        left_lay.addWidget(s2p_card)
-        left_lay.setStretch(0, 0)
-        left_lay.setStretch(1, 0)
-        left_lay.setStretch(2, 1)
-        left_lay.setStretch(3, 0)
+        inputs_top = ResponsiveCardPanel(max_columns=2, min_card_width=360)
+        inputs_top.set_cards([inputs_help_card, s2p_card])
+        inputs_lay.addWidget(inputs_top)
+        inputs_lay.addWidget(ffs_card)
+        inputs_lay.addStretch(1)
 
-        left_lay.addStretch(1)
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFrameShape(QFrame.NoFrame)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        left_scroll.setWidget(left_content)
-        left_scroll.setMinimumWidth(360)
-        split.addWidget(left_scroll)
-
-        right_content = QWidget()
-        right_content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        right_lay = QVBoxLayout(right_content)
-        right_lay.setContentsMargins(0, 0, 0, 0)
-        right_lay.setSpacing(12)
-
-        proc_card = Card("Processing controls", "Workflow")
-        proc_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        proc_card.setMinimumWidth(320)
         self.beam_smooth = NoWheelSpinBox(); self.beam_smooth.setRange(1, 99); self.beam_smooth.setValue(int(self.store.get("smooth", 5))); self.beam_smooth.valueChanged.connect(lambda v: self.store.set("smooth", int(v)))
         self.theta_window = TrimmedDoubleSpinBox(); self.theta_window.setRange(0.0, 90.0); self.theta_window.setDecimals(6); self.theta_window.setSingleStep(0.5); self.theta_window.setValue(float(self.store.get("theta", 8.0))); self.theta_window.valueChanged.connect(lambda v: self.store.set("theta", float(v)))
         self.plot_smooth = NoWheelSpinBox(); self.plot_smooth.setRange(1, 99); self.plot_smooth.setValue(int(self.store.get("smooth2", 5))); self.plot_smooth.valueChanged.connect(lambda v: self.store.set("smooth2", int(v)))
@@ -810,47 +858,88 @@ class ModernMainWindow(QMainWindow):
         self.vswr_ymax = TrimmedDoubleSpinBox(); self.vswr_ymax.setRange(0.0, 1000.0); self.vswr_ymax.setDecimals(6); self.vswr_ymax.setValue(float(self.store.get("vswr_ymax", 10.0))); self.vswr_ymax.valueChanged.connect(lambda v: self.store.set("vswr_ymax", float(v)))
         self.vswr_ystep = TrimmedDoubleSpinBox(); self.vswr_ystep.setRange(0.01, 100.0); self.vswr_ystep.setDecimals(6); self.vswr_ystep.setValue(float(self.store.get("vswr_ystep", 1.0))); self.vswr_ystep.valueChanged.connect(lambda v: self.store.set("vswr_ystep", float(v)))
         self.vswr_smooth = NoWheelSpinBox(); self.vswr_smooth.setRange(1, 99); self.vswr_smooth.setValue(int(self.store.get("vswr_smooth", 5))); self.vswr_smooth.valueChanged.connect(lambda v: self.store.set("vswr_smooth", int(v)))
-        proc_form = QFormLayout()
-        proc_form.setContentsMargins(0, 0, 0, 0)
-        proc_form.setHorizontalSpacing(10)
-        proc_form.setVerticalSpacing(8)
-        proc_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        proc_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        add_form_row(proc_form, "Beam smooth", StepperField(self.beam_smooth), "Smoothing window used while creating the workbook from the far-field files. Higher values smooth more aggressively.")
-        add_form_row(proc_form, "Theta window", StepperField(self.theta_window), "Angular window in degrees used for the beamwidth calculation around the main lobe.")
-        add_form_row(proc_form, "Plot smooth", StepperField(self.plot_smooth), "Smoothing window applied to the workbook-based line plots.")
-        add_form_row(proc_form, "Shared x tick", StepperField(self.shared_xstep), "Spacing between x-axis tick labels used by both workbook plots and the VSWR plot, in GHz.")
-        add_form_row(proc_form, "Shared fmin", StepperField(self.shared_fmin), "Lower frequency bound used by both workbook plots and the VSWR plot, in GHz. Use 0 to keep the full range.")
-        add_form_row(proc_form, "Shared fmax", StepperField(self.shared_fmax), "Upper frequency bound used by both workbook plots and the VSWR plot, in GHz. Use 0 to keep the full range.")
-        add_form_row(proc_form, "Shared x axis", self.shared_xlog, "Switch both workbook plots and the VSWR plot between linear and logarithmic x-axis scaling.")
-        add_form_row(proc_form, "VSWR smooth", StepperField(self.vswr_smooth), "Smoothing window applied to the VSWR traces.")
-        proc_card.body.addLayout(proc_form)
-        range_card = Card("Y-Axis Ranges", "Charts")
-        range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        range_card.setMinimumWidth(320)
+        workbook_card = Card("Workbook and extraction", "Processing")
+        workbook_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        workbook_card.setMinimumWidth(320)
+        workbook_form = QFormLayout()
+        workbook_form.setContentsMargins(0, 0, 0, 0)
+        workbook_form.setHorizontalSpacing(10)
+        workbook_form.setVerticalSpacing(8)
+        workbook_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        workbook_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(workbook_form, "Beam smooth", StepperField(self.beam_smooth), "Smoothing window used while creating the workbook from the far-field files. Higher values smooth more aggressively.")
+        add_form_row(workbook_form, "Theta window", StepperField(self.theta_window), "Angular window in degrees used for the beamwidth calculation around the main lobe.")
+        add_form_row(workbook_form, "Plot smooth", StepperField(self.plot_smooth), "Smoothing window applied to the workbook-based line plots.")
+        workbook_card.body.addLayout(workbook_form)
 
-        range_form = QFormLayout()
-        range_form.setContentsMargins(0, 0, 0, 0)
-        range_form.setHorizontalSpacing(10)
-        range_form.setVerticalSpacing(8)
-        range_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        range_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        add_form_row(range_form, "Gain y min", StepperField(self.gain_ymin), "Lower limit override for the gain plot. Use 0 to keep the default automatic minimum.")
-        add_form_row(range_form, "Gain y max", StepperField(self.gain_ymax), "Upper limit override for the gain plot. Use 0 to keep the default automatic maximum.")
-        add_form_row(range_form, "Gain y tick", StepperField(self.gain_y_step), "Y-axis tick spacing override for the gain plot. Use 0 to keep the default tick spacing.")
-        add_form_row(range_form, "Beamwidth y min", StepperField(self.beamwidth_ymin), "Lower limit override for the beamwidth plot. Use 0 to keep the default automatic minimum.")
-        add_form_row(range_form, "Beamwidth y max", StepperField(self.beamwidth_ymax), "Upper limit override for the beamwidth plot. Use 0 to keep the default automatic maximum.")
-        add_form_row(range_form, "Beamwidth y tick", StepperField(self.beamwidth_y_step), "Y-axis tick spacing override for the beamwidth plot. Use 0 to keep the default tick spacing.")
-        add_form_row(range_form, "Beam eff y min", StepperField(self.beam_eff_ymin), "Lower limit override for the beam efficiency plot. Use 0 to keep the default automatic minimum.")
-        add_form_row(range_form, "Beam eff y max", StepperField(self.beam_eff_ymax), "Upper limit override for the beam efficiency plot. Use 0 to keep the default automatic maximum.")
-        add_form_row(range_form, "Beam eff y tick", StepperField(self.beam_eff_y_step), "Y-axis tick spacing override for the beam efficiency plot. Use 0 to keep the default tick spacing.")
-        add_form_row(range_form, "VSWR y min", StepperField(self.vswr_ymin), "Lower limit of the VSWR y-axis.")
-        add_form_row(range_form, "VSWR y max", StepperField(self.vswr_ymax), "Upper limit of the VSWR y-axis.")
-        add_form_row(range_form, "VSWR y tick", StepperField(self.vswr_ystep), "Spacing between VSWR y-axis tick labels.")
-        range_card.body.addLayout(range_form)
-        style_card = Card("Visual style", "Charts")
-        style_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        style_card.setMinimumWidth(320)
+        frequency_card = Card("Shared frequency and VSWR", "Processing")
+        frequency_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        frequency_card.setMinimumWidth(320)
+        frequency_form = QFormLayout()
+        frequency_form.setContentsMargins(0, 0, 0, 0)
+        frequency_form.setHorizontalSpacing(10)
+        frequency_form.setVerticalSpacing(8)
+        frequency_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        frequency_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(frequency_form, "Shared x tick", StepperField(self.shared_xstep), "Spacing between x-axis tick labels used by both workbook plots and the VSWR plot, in GHz.")
+        add_form_row(frequency_form, "Shared fmin", StepperField(self.shared_fmin), "Lower frequency bound used by both workbook plots and the VSWR plot, in GHz. Use 0 to keep the full range.")
+        add_form_row(frequency_form, "Shared fmax", StepperField(self.shared_fmax), "Upper frequency bound used by both workbook plots and the VSWR plot, in GHz. Use 0 to keep the full range.")
+        add_form_row(frequency_form, "Shared x axis", self.shared_xlog, "Switch both workbook plots and the VSWR plot between linear and logarithmic x-axis scaling.")
+        add_form_row(frequency_form, "VSWR smooth", StepperField(self.vswr_smooth), "Smoothing window applied to the VSWR traces.")
+        frequency_card.body.addLayout(frequency_form)
+        processing_help = Card("Run order", "Guide")
+        processing_help.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        processing_note = QLabel(
+            "Run Full Pipeline when the inputs changed and you want the full deliverable.\n"
+            "Use Workbook Only after changing far-field files or smoothing.\n"
+            "Use Plots Only after changing chart ranges or colors.\n"
+            "Use VSWR Only after changing the Touchstone file or VSWR settings."
+        )
+        processing_note.setWordWrap(True)
+        processing_note.setObjectName("helper")
+        processing_help.body.addWidget(processing_note)
+        processing_panel = ResponsiveCardPanel(max_columns=2, min_card_width=360)
+        processing_panel.set_cards([workbook_card, frequency_card, processing_help])
+        processing_lay.addWidget(processing_panel)
+        processing_lay.addStretch(1)
+
+        workbook_range_card = Card("Workbook ranges", "Charts")
+        workbook_range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        workbook_range_card.setMinimumWidth(320)
+        workbook_range_form = QFormLayout()
+        workbook_range_form.setContentsMargins(0, 0, 0, 0)
+        workbook_range_form.setHorizontalSpacing(10)
+        workbook_range_form.setVerticalSpacing(8)
+        workbook_range_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        workbook_range_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(workbook_range_form, "Gain y min", StepperField(self.gain_ymin), "Lower limit override for the gain plot. Use 0 to keep the default automatic minimum.")
+        add_form_row(workbook_range_form, "Gain y max", StepperField(self.gain_ymax), "Upper limit override for the gain plot. Use 0 to keep the default automatic maximum.")
+        add_form_row(workbook_range_form, "Gain y tick", StepperField(self.gain_y_step), "Y-axis tick spacing override for the gain plot. Use 0 to keep the default tick spacing.")
+        add_form_row(workbook_range_form, "Beamwidth y min", StepperField(self.beamwidth_ymin), "Lower limit override for the beamwidth plot. Use 0 to keep the default automatic minimum.")
+        add_form_row(workbook_range_form, "Beamwidth y max", StepperField(self.beamwidth_ymax), "Upper limit override for the beamwidth plot. Use 0 to keep the default automatic maximum.")
+        add_form_row(workbook_range_form, "Beamwidth y tick", StepperField(self.beamwidth_y_step), "Y-axis tick spacing override for the beamwidth plot. Use 0 to keep the default tick spacing.")
+        add_form_row(workbook_range_form, "Beam eff y min", StepperField(self.beam_eff_ymin), "Lower limit override for the beam efficiency plot. Use 0 to keep the default automatic minimum.")
+        add_form_row(workbook_range_form, "Beam eff y max", StepperField(self.beam_eff_ymax), "Upper limit override for the beam efficiency plot. Use 0 to keep the default automatic maximum.")
+        add_form_row(workbook_range_form, "Beam eff y tick", StepperField(self.beam_eff_y_step), "Y-axis tick spacing override for the beam efficiency plot. Use 0 to keep the default tick spacing.")
+        workbook_range_card.body.addLayout(workbook_range_form)
+
+        vswr_range_card = Card("VSWR range", "Charts")
+        vswr_range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        vswr_range_card.setMinimumWidth(320)
+        vswr_range_form = QFormLayout()
+        vswr_range_form.setContentsMargins(0, 0, 0, 0)
+        vswr_range_form.setHorizontalSpacing(10)
+        vswr_range_form.setVerticalSpacing(8)
+        vswr_range_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        vswr_range_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(vswr_range_form, "VSWR y min", StepperField(self.vswr_ymin), "Lower limit of the VSWR y-axis.")
+        add_form_row(vswr_range_form, "VSWR y max", StepperField(self.vswr_ymax), "Upper limit of the VSWR y-axis.")
+        add_form_row(vswr_range_form, "VSWR y tick", StepperField(self.vswr_ystep), "Spacing between VSWR y-axis tick labels.")
+        vswr_range_card.body.addLayout(vswr_range_form)
+
+        polar_card = Card("Polar presentation", "Charts")
+        polar_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        polar_card.setMinimumWidth(320)
         self.plot_grid = StudioColorSelector(self.store, "grid_color", DEFAULT_GRID_COLOR, presets=GREY_COLOR_OPTIONS)
         self.plot_line1 = StudioColorSelector(self.store, "plot_line_1", DEFAULT_LINE_COLORS[0][1])
         self.plot_line2 = StudioColorSelector(self.store, "plot_line_2", DEFAULT_LINE_COLORS[1][1])
@@ -861,41 +950,55 @@ class ModernMainWindow(QMainWindow):
         self.vswr_line1 = StudioColorSelector(self.store, "vswr_line_1", DEFAULT_LINE_COLORS[0][1])
         self.vswr_line2 = StudioColorSelector(self.store, "vswr_line_2", DEFAULT_LINE_COLORS[1][1])
         self.rings.setToolTip("Comma-separated dB ring values used on the polar plots.")
-        style_form = QFormLayout()
-        style_form.setContentsMargins(0, 0, 0, 0)
-        style_form.setHorizontalSpacing(10)
-        style_form.setVerticalSpacing(8)
-        style_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        style_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        add_form_row(style_form, "Plot grid color", self.plot_grid, "Grid and axis color for the workbook-based cartesian plots. Presets are neutral greys, with a custom color option.")
-        add_form_row(style_form, "Plot line color 1", self.plot_line1, "Primary line color for the first workbook-based plot trace.")
-        add_form_row(style_form, "Plot line color 2", self.plot_line2, "Secondary line color for the second workbook-based plot trace.")
-        add_form_row(style_form, "Polar rings", self.rings, "Comma-separated dB ring values used on the polar plots.")
-        add_form_row(style_form, "Polar angle step", StepperField(self.angle_step), "Angle spacing, in degrees, for polar plot annotations.")
-        add_form_row(style_form, "Polar clip below", StepperField(self.clip_db), "Clip polar-plot values below this dB level to keep the chart readable.")
-        add_form_row(style_form, "VSWR grid color", self.vswr_grid, "Grid and axis color for the VSWR plot. Presets are neutral greys, with a custom color option.")
-        add_form_row(style_form, "VSWR line color 1", self.vswr_line1, "Primary line color for the first VSWR trace.")
-        add_form_row(style_form, "VSWR line color 2", self.vswr_line2, "Secondary line color for the second VSWR trace.")
-        style_card.body.addLayout(style_form)
-        self.control_panel = ResponsiveCardPanel()
-        self.control_panel.set_cards([proc_card, range_card, style_card])
-        right_lay.addWidget(self.control_panel)
-        right_lay.addStretch(1)
+        polar_form = QFormLayout()
+        polar_form.setContentsMargins(0, 0, 0, 0)
+        polar_form.setHorizontalSpacing(10)
+        polar_form.setVerticalSpacing(8)
+        polar_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        polar_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(polar_form, "Polar rings", self.rings, "Comma-separated dB ring values used on the polar plots.")
+        add_form_row(polar_form, "Polar angle step", StepperField(self.angle_step), "Angle spacing, in degrees, for polar plot annotations.")
+        add_form_row(polar_form, "Polar clip below", StepperField(self.clip_db), "Clip polar-plot values below this dB level to keep the chart readable.")
+        polar_card.body.addLayout(polar_form)
 
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setFrameShape(QFrame.NoFrame)
-        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        right_scroll.setWidget(right_content)
-        right_scroll.setMinimumWidth(360)
+        workbook_color_card = Card("Workbook colors", "Charts")
+        workbook_color_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        workbook_color_card.setMinimumWidth(320)
+        workbook_color_form = QFormLayout()
+        workbook_color_form.setContentsMargins(0, 0, 0, 0)
+        workbook_color_form.setHorizontalSpacing(10)
+        workbook_color_form.setVerticalSpacing(8)
+        workbook_color_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        workbook_color_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(workbook_color_form, "Plot grid color", self.plot_grid, "Grid and axis color for the workbook-based cartesian plots. Presets are neutral greys, with a custom color option.")
+        add_form_row(workbook_color_form, "Plot line color 1", self.plot_line1, "Primary line color for the first workbook-based plot trace.")
+        add_form_row(workbook_color_form, "Plot line color 2", self.plot_line2, "Secondary line color for the second workbook-based plot trace.")
+        workbook_color_card.body.addLayout(workbook_color_form)
 
-        split.addWidget(right_scroll)
-        split.setStretchFactor(0, 5)
-        split.setStretchFactor(1, 7)
-        split.setSizes(self.store.get("studio_split_sizes", [560, 900]))
-        root_lay.addWidget(split, 1)
+        vswr_color_card = Card("VSWR colors", "Charts")
+        vswr_color_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        vswr_color_card.setMinimumWidth(320)
+        vswr_color_form = QFormLayout()
+        vswr_color_form.setContentsMargins(0, 0, 0, 0)
+        vswr_color_form.setHorizontalSpacing(10)
+        vswr_color_form.setVerticalSpacing(8)
+        vswr_color_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        vswr_color_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(vswr_color_form, "VSWR grid color", self.vswr_grid, "Grid and axis color for the VSWR plot. Presets are neutral greys, with a custom color option.")
+        add_form_row(vswr_color_form, "VSWR line color 1", self.vswr_line1, "Primary line color for the first VSWR trace.")
+        add_form_row(vswr_color_form, "VSWR line color 2", self.vswr_line2, "Secondary line color for the second VSWR trace.")
+        vswr_color_card.body.addLayout(vswr_color_form)
+
+        charts_panel = ResponsiveCardPanel(max_columns=2, min_card_width=380)
+        charts_panel.set_cards([workbook_range_card, vswr_range_card, polar_card, workbook_color_card, vswr_color_card])
+        charts_lay.addWidget(charts_panel)
+        charts_lay.addStretch(1)
+
+        self.workflow_tabs.addTab(overview_scroll, "Overview")
+        self.workflow_tabs.addTab(inputs_scroll, "Inputs")
+        self.workflow_tabs.addTab(processing_scroll, "Processing")
+        self.workflow_tabs.addTab(charts_scroll, "Charts")
         self.setCentralWidget(root)
-        self._body_split = split
 
         self.console_window = ConsoleWindow(self, self.store)
         self.console = self.console_window.console
@@ -903,6 +1006,31 @@ class ModernMainWindow(QMainWindow):
 
         self._bind_project_persistence()
         self.refresh_preset_list()
+        self._sync_theme_toggle()
+        self._sync_console_toggle()
+        initial_page = int(self.store.get("studio_nav_index", 0))
+        if 0 <= initial_page < self.workflow_tabs.count():
+            self.workflow_tabs.setCurrentIndex(initial_page)
+        else:
+            self.workflow_tabs.setCurrentIndex(0)
+        self.on_tab_changed(self.workflow_tabs.currentIndex())
+
+    def _make_scroll_page(self) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        return scroll, content, layout
+
+    def on_tab_changed(self, index: int) -> None:
+        if index < 0:
+            return
+        self.store.set("studio_nav_index", index)
 
     def _path_row(self, field: QLineEdit) -> QWidget:
         row = QWidget()
@@ -913,6 +1041,8 @@ class ModernMainWindow(QMainWindow):
         btn = QPushButton("Open")
         btn.setToolTip("Open this location in File Explorer.")
         btn.clicked.connect(lambda: open_in_file_manager(resolve_workspace_path(field.text())))
+        field.textChanged.connect(lambda text: btn.setEnabled(bool(str(text).strip())))
+        btn.setEnabled(bool(field.text().strip()))
         lay.addWidget(btn)
         return row
 
@@ -920,85 +1050,114 @@ class ModernMainWindow(QMainWindow):
         QApplication.setStyle(QStyleFactory.create("Fusion"))
         pal = QPalette()
         if self.theme == "dark":
-            pal.setColor(QPalette.Window, QColor("#0b1220"))
-            pal.setColor(QPalette.WindowText, QColor("#e5eef7"))
-            pal.setColor(QPalette.Base, QColor("#131c2b"))
-            pal.setColor(QPalette.Text, QColor("#e5eef7"))
-            pal.setColor(QPalette.Highlight, QColor("#38bdf8"))
-            pal.setColor(QPalette.HighlightedText, QColor("#08111d"))
-            window_bg = "#0b1220"
-            hero_bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #020617, stop:0.55 #172554, stop:1 #0f766e)"
-            hero_subtle = "rgba(226,232,240,0.82)"
-            card_bg = "rgba(15,23,42,0.96)"
-            card_border = "#22304a"
-            title_color = "#f8fafc"
-            text_color = "#d7e3ef"
-            input_bg = "#131c2b"
-            input_border = "#2a3a56"
-            button_bg = "#162234"
-            button_hover = "#1b2a41"
-            list_selected = "#18324a"
-            primary_bg = "#22c55e"
-            primary_hover = "#16a34a"
+            pal.setColor(QPalette.Window, QColor("#10161d"))
+            pal.setColor(QPalette.WindowText, QColor("#f4f6f8"))
+            pal.setColor(QPalette.Base, QColor("#121a22"))
+            pal.setColor(QPalette.Text, QColor("#f4f6f8"))
+            pal.setColor(QPalette.Highlight, QColor("#e4874a"))
+            pal.setColor(QPalette.HighlightedText, QColor("#10161d"))
+            window_bg = "#10161d"
+            title_band_bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #0d1722, stop:0.55 #163247, stop:1 #214e4a)"
+            title_subtle = "rgba(226,232,240,0.82)"
+            shell_bg = "#16202a"
+            shell_border = "#283645"
+            card_bg = "#1b2630"
+            card_border = "#30414f"
+            title_color = "#f4f6f8"
+            text_color = "#d5dee5"
+            input_bg = "#121a22"
+            input_border = "#32424f"
+            button_bg = "#202b35"
+            button_hover = "#283640"
+            list_selected = "#29414c"
+            primary_bg = "#e4874a"
+            primary_hover = "#d77433"
             progress_bg = "rgba(255,255,255,0.08)"
-            ghost_bg = "#1e293b"
-            ghost_hover = "#273449"
-            step_bg = "#0f172a"
-            step_hover = "#172033"
-            step_border = "#314158"
-            helper_color = "#9eb5cb"
+            ghost_bg = "#1f2a33"
+            ghost_hover = "#293640"
+            step_bg = "#141c24"
+            step_hover = "#1c2630"
+            step_border = "#3a4a57"
+            helper_color = "#9fb1bf"
+            tab_bg = "#202c37"
+            tab_hover = "#253440"
+            tab_selected = "#1b2630"
+            badge_bg = "rgba(228,135,74,0.14)"
+            badge_border = "#7b4d2f"
+            badge_text = "#ffd8c2"
+            eyebrow_color = "#6fc7ae"
         else:
-            pal.setColor(QPalette.Window, QColor("#edf3f8"))
-            pal.setColor(QPalette.WindowText, QColor("#0c1d2c"))
-            pal.setColor(QPalette.Base, QColor("#ffffff"))
-            pal.setColor(QPalette.Text, QColor("#102336"))
-            pal.setColor(QPalette.Highlight, QColor("#0ea5e9"))
-            pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
-            window_bg = "#edf3f8"
-            hero_bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #0f172a, stop:0.55 #123455, stop:1 #0ea5e9)"
-            hero_subtle = "rgba(255,255,255,0.82)"
-            card_bg = "rgba(255,255,255,0.95)"
-            card_border = "#d6e1ea"
-            title_color = "#102336"
-            text_color = "#21374a"
-            input_bg = "#f8fbfd"
-            input_border = "#d4e0ea"
-            button_bg = "#ffffff"
-            button_hover = "#f7fbfe"
-            list_selected = "#d9f1ff"
-            primary_bg = "#f97316"
-            primary_hover = "#ea580c"
-            progress_bg = "rgba(255,255,255,0.16)"
-            ghost_bg = "#eef6fb"
-            ghost_hover = "#e4f0f8"
-            step_bg = "#f1f7fb"
-            step_hover = "#e5f1f8"
-            step_border = "#bfd4e3"
-            helper_color = "#597185"
+            pal.setColor(QPalette.Window, QColor("#efe7dc"))
+            pal.setColor(QPalette.WindowText, QColor("#182635"))
+            pal.setColor(QPalette.Base, QColor("#fffaf2"))
+            pal.setColor(QPalette.Text, QColor("#182635"))
+            pal.setColor(QPalette.Highlight, QColor("#c76a38"))
+            pal.setColor(QPalette.HighlightedText, QColor("#fffaf2"))
+            window_bg = "#efe7dc"
+            title_band_bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #142033, stop:0.55 #26445b, stop:1 #496f63)"
+            title_subtle = "rgba(241,245,249,0.84)"
+            shell_bg = "#f7f1e7"
+            shell_border = "#d8c8b4"
+            card_bg = "#fffaf2"
+            card_border = "#d9ccb9"
+            title_color = "#182635"
+            text_color = "#314354"
+            input_bg = "#f6efe4"
+            input_border = "#d7c8b4"
+            button_bg = "#fff9ef"
+            button_hover = "#f4e8d7"
+            list_selected = "#f3dfca"
+            primary_bg = "#c76a38"
+            primary_hover = "#b85a25"
+            progress_bg = "rgba(54,73,92,0.12)"
+            ghost_bg = "#eee4d6"
+            ghost_hover = "#e5d7c4"
+            step_bg = "#f1e6d6"
+            step_hover = "#e8dac4"
+            step_border = "#c7b59b"
+            helper_color = "#697887"
+            tab_bg = "#e7ddcf"
+            tab_hover = "#ded1bf"
+            tab_selected = "#fffaf2"
+            badge_bg = "rgba(199,106,56,0.10)"
+            badge_border = "#d9b292"
+            badge_text = "#7b4628"
+            eyebrow_color = "#2f7d6a"
         QApplication.setPalette(pal)
         app = QApplication.instance()
         if app:
             app.setStyleSheet("""
                 QWidget { font-family: "Segoe UI"; font-size: 10.5pt; }
                 QMainWindow { background: %(window_bg)s; }
-                #hero { border-radius: 24px; background: %(hero_bg)s; }
-                #heroTitle { color: white; font-size: 20pt; font-weight: 700; }
-                #runInfo { color: %(hero_subtle)s; }
-                #badge { background: rgba(255,255,255,0.12); color: white; border: 1px solid rgba(255,255,255,0.14); border-radius: 12px; padding: 5px 10px; font-size: 8.75pt; font-weight: 600; }
+                QScrollArea { background: transparent; border: none; }
+                #titleBand { border-radius: 28px; background: %(title_band_bg)s; }
+                #workspaceShell { background: %(shell_bg)s; border: 1px solid %(shell_border)s; border-radius: 28px; }
+                #brandTitle { color: white; font-family: "Bahnschrift"; font-size: 20pt; font-weight: 700; }
+                #brandSubtitle { color: %(title_subtle)s; font-size: 10pt; }
+                #runInfo { color: %(text_color)s; font-size: 10pt; }
                 #card { background: %(card_bg)s; border: 1px solid %(card_border)s; border-radius: 20px; }
                 #cardTitle { color: %(title_color)s; font-size: 13pt; font-weight: 700; }
-                #eyebrow { color: #38bdf8; font-size: 8.5pt; font-weight: 700; }
-                #projectName { color: %(title_color)s; font-size: 17pt; font-weight: 700; }
+                #eyebrow { color: %(eyebrow_color)s; font-size: 8.5pt; font-weight: 700; }
+                #projectName { color: %(title_color)s; font-size: 18pt; font-weight: 700; }
+                #projectMeta { color: %(helper_color)s; font-size: 10pt; }
+                #summaryBadge { background: %(badge_bg)s; color: %(badge_text)s; border: 1px solid %(badge_border)s; border-radius: 12px; padding: 6px 10px; font-size: 8.75pt; font-weight: 700; }
                 QLabel { color: %(text_color)s; }
                 #helper { color: %(helper_color)s; }
-                QLineEdit, QSpinBox, QDoubleSpinBox, QListWidget, QPlainTextEdit { background: %(input_bg)s; border: 1px solid %(input_border)s; border-radius: 14px; padding: 8px 11px; color: %(title_color)s; }
+                QTabWidget::pane { border: none; background: transparent; }
+                QTabBar::tab { background: %(tab_bg)s; border: 1px solid %(shell_border)s; border-bottom: none; border-top-left-radius: 14px; border-top-right-radius: 14px; padding: 10px 16px; margin-right: 6px; min-width: 110px; color: %(helper_color)s; font-weight: 700; }
+                QTabBar::tab:hover { background: %(tab_hover)s; color: %(title_color)s; }
+                QTabBar::tab:selected { background: %(tab_selected)s; color: %(title_color)s; }
+                QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget, QPlainTextEdit { background: %(input_bg)s; border: 1px solid %(input_border)s; border-radius: 14px; padding: 8px 11px; color: %(title_color)s; }
+                QComboBox::drop-down { border: none; width: 28px; }
+                QComboBox QAbstractItemView { background: %(card_bg)s; border: 1px solid %(card_border)s; color: %(title_color)s; selection-background-color: %(list_selected)s; selection-color: %(title_color)s; }
                 QListWidget::item { padding: 7px 10px; border-radius: 10px; margin: 1px 0; }
                 QListWidget::item:selected { background: %(list_selected)s; color: %(title_color)s; }
                 QPushButton { background: %(button_bg)s; border: 1px solid %(input_border)s; border-radius: 14px; padding: 9px 13px; color: %(title_color)s; font-weight: 600; }
                 QPushButton:hover { border-color: #7fb2cf; background: %(button_hover)s; }
+                QPushButton:disabled { color: %(helper_color)s; background: %(input_bg)s; border-color: %(card_border)s; }
                 QPushButton#primaryButton { background: %(primary_bg)s; color: white; border: none; padding: 10px 16px; }
                 QPushButton#primaryButton:hover { background: %(primary_hover)s; }
-                QPushButton#themeToggle { min-width: 108px; }
+                QPushButton#themeToggle { min-width: 120px; }
                 QPushButton#ghostButton { background: %(ghost_bg)s; }
                 QPushButton#ghostButton:hover { background: %(ghost_hover)s; }
                 QPushButton#stepButton { background: %(step_bg)s; border: 1px solid %(step_border)s; border-radius: 12px; padding: 6px 0; font-size: 11pt; font-weight: 700; min-width: 30px; }
@@ -1007,12 +1166,14 @@ class ModernMainWindow(QMainWindow):
                 QCheckBox#pillCheck:hover { border-color: #7fb2cf; background: %(ghost_hover)s; }
                 QCheckBox#pillCheck::indicator { width: 16px; height: 16px; border-radius: 8px; border: 1px solid %(step_border)s; background: transparent; }
                 QCheckBox#pillCheck::indicator:checked { background: %(primary_bg)s; border-color: %(primary_bg)s; }
-                QProgressBar { background: %(progress_bg)s; border: 1px solid rgba(255,255,255,0.18); border-radius: 10px; color: white; min-height: 18px; }
+                QProgressBar { background: %(progress_bg)s; border: 1px solid %(card_border)s; border-radius: 10px; color: %(title_color)s; min-height: 18px; }
                 QProgressBar::chunk { background: %(primary_bg)s; border-radius: 8px; }
             """ % {
                 "window_bg": window_bg,
-                "hero_bg": hero_bg,
-                "hero_subtle": hero_subtle,
+                "title_band_bg": title_band_bg,
+                "title_subtle": title_subtle,
+                "shell_bg": shell_bg,
+                "shell_border": shell_border,
                 "card_bg": card_bg,
                 "card_border": card_border,
                 "title_color": title_color,
@@ -1031,6 +1192,13 @@ class ModernMainWindow(QMainWindow):
                 "step_hover": step_hover,
                 "step_border": step_border,
                 "helper_color": helper_color,
+                "tab_bg": tab_bg,
+                "tab_hover": tab_hover,
+                "tab_selected": tab_selected,
+                "badge_bg": badge_bg,
+                "badge_border": badge_border,
+                "badge_text": badge_text,
+                "eyebrow_color": eyebrow_color,
             })
 
     def _sync_theme_toggle(self):
@@ -1150,6 +1318,7 @@ class ModernMainWindow(QMainWindow):
         if self.active_project_slug:
             project_label = self.active_project_name or self.active_project_slug
             self.project_name.setText(project_label)
+            self.project_meta.setText(f"Folder: {display_workspace_path(self.project_results_dir())}")
             self.project_badge.setText(f"Project: {project_label}")
             self.workbook_field.setText(display_workspace_path(self.deduced_beam_output()))
             self.extract_field.setText(display_workspace_path(self.deduced_extract_output()))
@@ -1157,6 +1326,7 @@ class ModernMainWindow(QMainWindow):
             self.vswr_field.setText(display_workspace_path(self.deduced_vswr_output()))
         else:
             self.project_name.setText("No project selected")
+            self.project_meta.setText("Create a project to keep inputs, presets, and generated results together.")
             self.project_badge.setText("Project: none")
             self.workbook_field.clear()
             self.extract_field.clear()
@@ -1178,8 +1348,31 @@ class ModernMainWindow(QMainWindow):
             self.btn_vswr,
             self.ffs_list,
             self.s2p_field,
+            self.add_ffs_button,
+            self.remove_ffs_button,
+            self.clear_ffs_button,
+            self.select_s2p_button,
+            self.clear_s2p_button,
+            self.open_s2p_button,
+            self.project_folder_button,
         ):
             widget.setEnabled(has_project)
+        self._update_preset_action_state()
+
+    def _update_preset_action_state(self) -> None:
+        if not hasattr(self, "preset_combo"):
+            return
+        has_project = bool(self.active_project_slug)
+        has_preset = bool(self.current_preset_name())
+        self.preset_combo.setEnabled(has_project)
+        self.preset_new_button.setEnabled(has_project)
+        self.preset_save_button.setEnabled(has_project)
+        self.preset_rename_button.setEnabled(has_project and has_preset)
+        self.preset_delete_button.setEnabled(has_project and has_preset)
+        self.preset_import_button.setEnabled(has_project)
+        self.preset_export_button.setEnabled(has_project and bool(self.project_presets))
+        preset_label = self.project_active_preset or ("Manual" if has_project else "none")
+        self.preset_badge.setText(f"Preset: {preset_label}")
 
     def refresh_project_list(self, select_slug: str = "") -> None:
         projects = self.project_store.list_projects()
@@ -1362,6 +1555,7 @@ class ModernMainWindow(QMainWindow):
         index = max(0, self.preset_combo.findData(select_name))
         self.preset_combo.setCurrentIndex(index)
         self.preset_combo.blockSignals(False)
+        self._update_preset_action_state()
 
     def collect_preset_values(self) -> dict[str, object]:
         return {
@@ -1432,6 +1626,7 @@ class ModernMainWindow(QMainWindow):
     def on_preset_selected(self, _text: str) -> None:
         name = self.current_preset_name()
         self.project_active_preset = name
+        self._update_preset_action_state()
         if not name:
             self.save_active_project()
             return
@@ -1833,7 +2028,6 @@ class ModernMainWindow(QMainWindow):
         try:
             ba = self.saveGeometry().toBase64().data().decode("ascii")
             self.store.set("geometry", ba)
-            self.store.set("studio_split_sizes", self._body_split.sizes())
             if hasattr(self, "console_window"):
                 self.console_window._save_geometry()
         except Exception:
