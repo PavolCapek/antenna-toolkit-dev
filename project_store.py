@@ -173,6 +173,17 @@ class ProjectStore:
             renamed.parent.mkdir(parents=True, exist_ok=True)
             path.rename(renamed)
 
+    def _bundle_member_output_path(self, target_dir: Path, member: str) -> Path:
+        relative = member.split("/", 1)[1] if "/" in member else ""
+        if not relative:
+            raise ValueError("Bundle contains an invalid member path.")
+        out_path = (target_dir / Path(relative)).resolve()
+        try:
+            out_path.relative_to(target_dir.resolve())
+        except ValueError as exc:
+            raise ValueError("Bundle contains an unsafe member path.") from exc
+        return out_path
+
     def list_projects(self) -> list[ProjectRecord]:
         if not self.projects_dir.exists():
             return []
@@ -203,6 +214,7 @@ class ProjectStore:
                 raise FileExistsError(f"Project '{project.name}' already exists.")
             if source_dir.exists():
                 source_dir.rename(target_dir)
+                self._rename_slugged_outputs(target_dir, previous_slug, project.slug)
         target_dir.mkdir(parents=True, exist_ok=True)
         project_file = target_dir / PROJECT_FILE_NAME
         project_file.write_text(json.dumps(project.to_dict(), indent=2), encoding="utf-8")
@@ -273,10 +285,7 @@ class ProjectStore:
             target_dir = project.project_dir(self.root)
             target_dir.mkdir(parents=True, exist_ok=True)
             for member in members:
-                relative = member.split("/", 1)[1] if "/" in member else ""
-                if not relative:
-                    continue
-                out_path = target_dir / relative
+                out_path = self._bundle_member_output_path(target_dir, member)
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 out_path.write_bytes(archive.read(member))
             self._rename_slugged_outputs(target_dir, original_slug, project.slug)

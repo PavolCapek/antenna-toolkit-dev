@@ -9,7 +9,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
 
 from antenna_toolkit_studio import ModernMainWindow, StepperField
 from project_store import ProjectRecord, ProjectStore
@@ -144,6 +144,53 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.store.get("theme"), "sage")
         self.assertEqual(self.window.theme_selector.currentText(), "Sage")
         self.assertGreaterEqual(QApplication.font().pointSizeF(), 11.0)
+
+    def test_create_project_starts_blank_until_user_saves_inputs(self) -> None:
+        self.window._add_ffs_files(["Input data/a.ffs"])
+        self.window._set_touchstone("Input data/a.s2p")
+        self.window.beam_smooth.setValue(11)
+        self.window.save_project_changes()
+        self.app.processEvents()
+
+        with (
+            mock.patch("antenna_toolkit_studio.ProjectDialog.exec", return_value=QDialog.Accepted),
+            mock.patch("antenna_toolkit_studio.ProjectDialog.project_name", return_value="Fresh Project"),
+        ):
+            self.window.create_project()
+        self.app.processEvents()
+
+        loaded = self.window.project_store.load_project("Fresh_Project")
+
+        self.assertEqual(self.window.active_project_slug, "Fresh_Project")
+        self.assertEqual(self.window.ffs_list.count(), 0)
+        self.assertEqual(self.window.s2p_field.text(), "")
+        self.assertEqual(loaded.ffs_items, [])
+        self.assertEqual(loaded.touchstone_file, "")
+        self.assertEqual(loaded.presets, {})
+        self.assertEqual(loaded.active_preset, "")
+        self.assertEqual(loaded.settings["smooth"], 5)
+
+    def test_edit_project_renames_project_and_keeps_saved_inputs(self) -> None:
+        self.window._add_ffs_files(["Input data/a.ffs"])
+        self.window._set_touchstone("Input data/a.s2p")
+        self.window.save_project_changes()
+        project_dir = self.window.project_store.projects_dir / self.project.slug
+        (project_dir / "dirty_project.xlsx").write_text("workbook", encoding="utf-8")
+        self.app.processEvents()
+
+        with (
+            mock.patch("antenna_toolkit_studio.ProjectDialog.exec", return_value=QDialog.Accepted),
+            mock.patch("antenna_toolkit_studio.ProjectDialog.project_name", return_value="Renamed Project"),
+        ):
+            self.window.edit_project()
+        self.app.processEvents()
+
+        loaded = self.window.project_store.load_project("Renamed_Project")
+
+        self.assertEqual(self.window.active_project_slug, "Renamed_Project")
+        self.assertEqual(loaded.ffs_items, [{"path": "Input data/a.ffs", "enabled": True}])
+        self.assertEqual(loaded.touchstone_file, "Input data/a.s2p")
+        self.assertTrue((self.window.project_store.projects_dir / "Renamed_Project" / "Renamed_Project.xlsx").exists())
 
 
 if __name__ == "__main__":

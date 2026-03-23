@@ -512,10 +512,10 @@ class DropList(QListWidget):
 
 
 class ProjectDialog(QDialog):
-    def __init__(self, parent: QWidget, name: str = "", ffs_files: list[str] | None = None, touchstone_file: str = ""):
+    def __init__(self, parent: QWidget, name: str = "", title: str = "Project", note_text: str = ""):
         super().__init__(parent)
-        self.setWindowTitle("Project")
-        self.resize(760, 520)
+        self.setWindowTitle(title)
+        self.resize(440, 180)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -527,39 +527,10 @@ class ProjectDialog(QDialog):
         form.addRow("Name", self.name_field)
         layout.addLayout(form)
 
-        layout.addWidget(QLabel("Far-field files (.ffs)"))
-        self.ffs_list = DropList(self._add_ffs_files)
-        self.ffs_list.setMinimumHeight(220)
-        self.ffs_list.setToolTip("Files saved as part of the project definition.")
-        layout.addWidget(self.ffs_list, 1)
-
-        ffs_actions = QHBoxLayout()
-        add_button = QPushButton("Add .ffs")
-        add_button.clicked.connect(self.add_ffs)
-        remove_button = QPushButton("Remove selected")
-        remove_button.clicked.connect(self.remove_ffs)
-        clear_button = QPushButton("Clear list")
-        clear_button.clicked.connect(self.clear_ffs)
-        ffs_actions.addWidget(add_button)
-        ffs_actions.addWidget(remove_button)
-        ffs_actions.addWidget(clear_button)
-        ffs_actions.addStretch(1)
-        layout.addLayout(ffs_actions)
-
-        layout.addWidget(QLabel("Touchstone (.s1p/.s2p)"))
-        touchstone_row = QHBoxLayout()
-        self.touchstone_field = QLineEdit(display_workspace_path(touchstone_file))
-        self.touchstone_field.setReadOnly(True)
-        browse_button = QPushButton("Browse")
-        browse_button.clicked.connect(self.browse_touchstone)
-        clear_touchstone = QPushButton("Clear")
-        clear_touchstone.clicked.connect(self.clear_touchstone)
-        touchstone_row.addWidget(self.touchstone_field, 1)
-        touchstone_row.addWidget(browse_button)
-        touchstone_row.addWidget(clear_touchstone)
-        layout.addLayout(touchstone_row)
-
-        note = QLabel("Processing controls and chart styles stay on the main screen and are saved into the selected project automatically.")
+        note = QLabel(
+            note_text
+            or "Projects are created by name. Add far-field and Touchstone inputs on the Inputs tab, then click Save project to persist them."
+        )
         note.setWordWrap(True)
         note.setObjectName("helper")
         layout.addWidget(note)
@@ -569,50 +540,8 @@ class ProjectDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        self._add_ffs_files(ffs_files or [])
-
-    def _item_path(self, item: QListWidgetItem) -> str:
-        return item.data(Qt.UserRole) or str(resolve_workspace_path(item.text()))
-
-    def _add_ffs_files(self, files: list[str]) -> None:
-        existing = {self._item_path(self.ffs_list.item(i)) for i in range(self.ffs_list.count())}
-        for path in files:
-            actual = str(resolve_workspace_path(path))
-            if actual.lower().endswith(".ffs") and actual not in existing:
-                item = QListWidgetItem(display_workspace_path(actual))
-                item.setData(Qt.UserRole, actual)
-                self.ffs_list.addItem(item)
-                existing.add(actual)
-
-    def add_ffs(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(self, "Add .ffs", str(THIS_DIR), "CST Farfield (*.ffs)")
-        if files:
-            self._add_ffs_files(files)
-
-    def remove_ffs(self) -> None:
-        for item in list(self.ffs_list.selectedItems()):
-            self.ffs_list.takeItem(self.ffs_list.row(item))
-
-    def clear_ffs(self) -> None:
-        self.ffs_list.clear()
-
-    def browse_touchstone(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select Touchstone", str(THIS_DIR), "Touchstone (*.s1p *.s2p)")
-        if path:
-            self.touchstone_field.setText(display_workspace_path(path))
-
-    def clear_touchstone(self) -> None:
-        self.touchstone_field.clear()
-
     def project_name(self) -> str:
         return self.name_field.text().strip()
-
-    def ffs_files(self) -> list[str]:
-        return [self._item_path(self.ffs_list.item(i)) for i in range(self.ffs_list.count())]
-
-    def touchstone_file(self) -> str:
-        value = self.touchstone_field.text().strip()
-        return str(resolve_workspace_path(value)) if value else ""
 
 
 class NoWheelSpinBox(QSpinBox):
@@ -899,7 +828,7 @@ class ModernMainWindow(QMainWindow):
 
         project_card = Card("Project workspace", "Command center")
         project_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        project_help = QLabel("Select a project first. Everything else in the window follows that project: inputs, presets, processing settings, and outputs.")
+        project_help = QLabel("Create or select a project first. Each project keeps its own inputs, selected preset, processing settings, and outputs.")
         project_help.setWordWrap(True)
         project_help.setObjectName("helper")
         project_card.body.addWidget(project_help)
@@ -923,9 +852,9 @@ class ModernMainWindow(QMainWindow):
         self.project_import_button.clicked.connect(self.import_project_bundle)
         self.project_export_button = QPushButton("Export bundle")
         self.project_export_button.clicked.connect(self.export_project_bundle)
-        self.project_new_button.setToolTip("Create a new project and store its inputs in the Projects directory.")
+        self.project_new_button.setToolTip("Create a new project by name. Add inputs on the Inputs tab, then save the project.")
         self.project_save_button.setToolTip("Write the current project inputs, presets, settings, and run metadata to disk.")
-        self.project_edit_button.setToolTip("Rename the active project or update its input files.")
+        self.project_edit_button.setToolTip("Rename the active project. Edit inputs on the Inputs tab and save the project when you are ready.")
         self.project_duplicate_button.setToolTip("Create a copy of the active project with the same settings and inputs.")
         self.project_delete_button.setToolTip("Delete the active project and everything saved inside its folder.")
         self.project_import_button.setToolTip("Import a previously exported project bundle into the Projects directory.")
@@ -1125,9 +1054,11 @@ class ModernMainWindow(QMainWindow):
         storage_card = Card("Workspace guide", "Flow")
         storage_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         storage_note = QLabel(
-            "1. Add or edit project inputs on the Inputs tab.\n"
-            "2. Tune smoothing and frequency limits on Processing.\n"
-            "3. Adjust chart ranges and colors on Charts, then run the pipeline from the top command area."
+            "1. Create a project by name.\n"
+            "2. Add or edit project inputs on the Inputs tab.\n"
+            "3. Choose or update the project preset and tuning controls.\n"
+            "4. Click Save project to persist the current inputs and preset.\n"
+            "5. Run the pipeline from the top command area."
         )
         storage_note.setWordWrap(True)
         storage_note.setObjectName("helper")
@@ -1155,7 +1086,7 @@ class ModernMainWindow(QMainWindow):
 
         ffs_card = Card("Far-field files", "Primary input")
         ffs_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        helper = QLabel("Drop .ffs files here or add them manually. Changes are saved into the active project.")
+        helper = QLabel("Drop .ffs files here or add them manually. The changes stay local to the active project until you click Save project.")
         helper.setWordWrap(True)
         helper.setObjectName("helper")
         ffs_card.body.addWidget(helper)
@@ -1200,7 +1131,7 @@ class ModernMainWindow(QMainWindow):
         inputs_help = QLabel(
             "The far-field list is the main input for workbook generation.\n"
             "Touchstone is optional unless you need the VSWR plot.\n"
-            "Project changes are saved automatically as you edit the inputs."
+            "Input and preset changes are kept as pending project edits until you save."
         )
         inputs_help.setWordWrap(True)
         inputs_help.setObjectName("helper")
@@ -1391,7 +1322,7 @@ class ModernMainWindow(QMainWindow):
         charts_lay.addWidget(charts_panel)
         charts_lay.addStretch(1)
 
-        self.workflow_tabs.addTab(overview_scroll, "Overview")
+        self.workflow_tabs.addTab(overview_scroll, "Project")
         self.workflow_tabs.addTab(inputs_scroll, "Inputs")
         self.workflow_tabs.addTab(processing_scroll, "Processing")
         self.workflow_tabs.addTab(charts_scroll, "Charts")
@@ -1472,6 +1403,36 @@ class ModernMainWindow(QMainWindow):
         self.store.set("active_project", "")
         self._loading_project = False
         self.refresh_derived_paths()
+
+    def _default_project_settings(self) -> dict[str, object]:
+        return {
+            "smooth": 5,
+            "theta": 8.0,
+            "smooth2": 5,
+            "shared_xstep": 0.2,
+            "shared_fmin": 0.0,
+            "shared_fmax": 0.0,
+            "shared_xlog": False,
+            "gain_ymin": 0.0,
+            "gain_ymax": 0.0,
+            "gain_y_step": 0.0,
+            "beamwidth_ymin": 0.0,
+            "beamwidth_ymax": 0.0,
+            "beamwidth_y_step": 0.0,
+            "beam_eff_ymin": 0.0,
+            "beam_eff_ymax": 0.0,
+            "beam_eff_y_step": 0.0,
+            "vswr_ymin": 1.0,
+            "vswr_ymax": 10.0,
+            "vswr_ystep": 1.0,
+            "vswr_smooth": 5,
+            "grid_color": DEFAULT_GRID_COLOR,
+            "plot_line_1": DEFAULT_LINE_COLORS[0][1],
+            "plot_line_2": DEFAULT_LINE_COLORS[1][1],
+            "rings": "0,-7.5,-15,-22.5,-30",
+            "angle": 30,
+            "clip": -30.0,
+        }
 
     def _project_signature(self, project: ProjectRecord | None = None) -> str:
         project = project or self.current_project()
@@ -2257,7 +2218,12 @@ class ModernMainWindow(QMainWindow):
     def create_project(self) -> None:
         seed_ffs = [str(item["path"]) for item in self.collect_ffs_items()]
         suggested_name = deduce_project_name(seed_ffs or [self.selected_s2p()]) if (seed_ffs or self.selected_s2p()) else "New project"
-        dialog = ProjectDialog(self, name=suggested_name, ffs_files=seed_ffs, touchstone_file=self.selected_s2p())
+        dialog = ProjectDialog(
+            self,
+            name=suggested_name,
+            title="Create Project",
+            note_text="Create the project by name first. Add far-field and Touchstone inputs on the Inputs tab, then click Save project.",
+        )
         if dialog.exec() != QDialog.Accepted:
             return
         name = dialog.project_name()
@@ -2268,13 +2234,12 @@ class ModernMainWindow(QMainWindow):
         if self.project_combo.findData(slug) >= 0:
             QMessageBox.information(self, "Project Exists", f"A project named '{name}' already exists.")
             return
-        touchstone = dialog.touchstone_file() or guess_touchstone_path(name, dialog.ffs_files())
         project = ProjectRecord(
             name=name,
             slug=slug,
-            ffs_items=[{"path": serialize_workspace_path(THIS_DIR, path), "enabled": True} for path in dialog.ffs_files()],
-            touchstone_file=serialize_workspace_path(THIS_DIR, touchstone),
-            settings=self.collect_preset_values(),
+            ffs_items=[],
+            touchstone_file="",
+            settings=self._default_project_settings(),
             presets={},
             active_preset="",
             run_state={},
@@ -2290,8 +2255,8 @@ class ModernMainWindow(QMainWindow):
         dialog = ProjectDialog(
             self,
             name=self.active_project_name,
-            ffs_files=[str(item["path"]) for item in self.collect_ffs_items()],
-            touchstone_file=self.selected_s2p(),
+            title="Edit Project",
+            note_text="Rename the project here. Update far-field and Touchstone inputs on the Inputs tab, then click Save project to persist them.",
         )
         if dialog.exec() != QDialog.Accepted:
             return
@@ -2304,27 +2269,11 @@ class ModernMainWindow(QMainWindow):
         if new_slug != current_slug and self.project_combo.findData(new_slug) >= 0:
             QMessageBox.information(self, "Project Exists", f"A project named '{name}' already exists.")
             return
-        touchstone = dialog.touchstone_file() or guess_touchstone_path(name, dialog.ffs_files())
-        enabled_map = {
-            str(item["path"]): bool(item["enabled"])
-            for item in self.collect_ffs_items()
-        }
-        project = ProjectRecord(
-            name=name,
-            slug=new_slug,
-            ffs_items=[
-                {
-                    "path": serialize_workspace_path(THIS_DIR, path),
-                    "enabled": enabled_map.get(str(resolve_workspace_path(path)), True),
-                }
-                for path in dialog.ffs_files()
-            ],
-            touchstone_file=serialize_workspace_path(THIS_DIR, touchstone),
-            settings=self.collect_preset_values(),
-            presets=self.project_presets,
-            active_preset=self.project_active_preset,
-            run_state=self.project_run_state,
-        )
+        project = self.current_project()
+        if not project:
+            return
+        project.name = name
+        project.slug = new_slug
         project.record_activity("edited")
         self.project_store.save_project(project, previous_slug=current_slug)
         self.refresh_project_list(select_slug=project.slug)

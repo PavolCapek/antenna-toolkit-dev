@@ -110,6 +110,34 @@ class ProjectStoreTests(unittest.TestCase):
 
         self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA_VERSION)
 
+    def test_rename_updates_slugged_outputs(self) -> None:
+        project = ProjectRecord(name="Dish E", slug="dish_e")
+
+        project_dir = self.store.save_project(project)
+        (project_dir / "dish_e.xlsx").write_text("workbook", encoding="utf-8")
+
+        renamed = ProjectRecord(name="Dish E Prime", slug="dish_e_prime")
+        renamed_dir = self.store.save_project(renamed, previous_slug="dish_e")
+
+        self.assertTrue((renamed_dir / "dish_e_prime.xlsx").exists())
+        self.assertFalse((renamed_dir / "dish_e.xlsx").exists())
+
+    def test_import_bundle_rejects_unsafe_paths(self) -> None:
+        bundle_path = self.root / "exports" / "unsafe.zip"
+        bundle_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"name": "Unsafe", "slug": "unsafe"}
+
+        import zipfile
+
+        with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("unsafe/project.json", json.dumps(payload))
+            archive.writestr("unsafe/../../outside.txt", "owned")
+
+        with self.assertRaises(ValueError):
+            self.store.import_project_bundle(bundle_path)
+
+        self.assertFalse((self.root / "outside.txt").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

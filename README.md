@@ -65,21 +65,22 @@ python antenna_toolkit_studio.py
 
 ### 1. Create a project
 
-- Create a named project from the Project workspace card
+- Create a named project from the Project workspace
 - Each project stores:
   - one or more `.ffs` files
   - zero or one Touchstone file
   - the current processing and chart settings
-  - the project's saved GUI preset library
+  - the selected preset and the project's saved GUI preset library
 - Project metadata is saved in:
   `Projects\<project>\project.json`
 
 ### 2. Edit the active project
 
-- Add or remove `.ffs` files
-- Select or clear the Touchstone file
-- Change smoothing, frequency ranges, y-axis ranges, and chart colors
-- Changes are saved back into the selected project automatically
+- Rename the project from the Project workspace
+- Add or remove `.ffs` files on the Inputs tab
+- Select or clear the Touchstone file on the Inputs tab
+- Change presets, smoothing, frequency ranges, y-axis ranges, and chart colors
+- Click `Save project` to persist pending project and preset changes
 
 ### 3. Run processing
 
