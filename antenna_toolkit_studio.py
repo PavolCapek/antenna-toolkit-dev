@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QProgressBar,
     QFormLayout, QFrame, QSizePolicy, QStyleFactory, QMessageBox, QInputDialog,
-    QDialog, QDialogButtonBox, QScrollArea, QGridLayout, QTabWidget
+    QDialog, QDialogButtonBox, QScrollArea, QGridLayout, QTabWidget, QMenu, QToolButton
 )
 
 from antenna_toolkit_qt import (
@@ -749,6 +749,67 @@ class ConsoleWindow(QWidget):
         super().closeEvent(event)
 
 
+class HelpWindow(QWidget):
+    def __init__(self, owner: "ModernMainWindow", store: Persist):
+        super().__init__(None, Qt.Window)
+        self.owner = owner
+        self.store = store
+        self.setWindowTitle(f"{APP_TITLE} Help")
+        self.resize(760, 460)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(12)
+
+        workspace_card = Card("Workspace guide", "Flow")
+        workspace_note = QLabel(
+            "1. Create a project by name.\n"
+            "2. Add or edit project inputs on the Inputs tab.\n"
+            "3. Choose or update the project preset and tuning controls.\n"
+            "4. Click Save project to persist the current inputs and preset.\n"
+            "5. Run the pipeline from the top command area."
+        )
+        workspace_note.setWordWrap(True)
+        workspace_note.setObjectName("helper")
+        workspace_card.body.addWidget(workspace_note)
+        lay.addWidget(workspace_card)
+
+        run_card = Card("When to run", "Flow")
+        run_note = QLabel(
+            "Run Full Pipeline when the inputs changed and you want the full deliverable.\n"
+            "Use Workbook Only after changing far-field files or smoothing.\n"
+            "Use Plots Only after changing chart ranges or colors.\n"
+            "Use VSWR Only after changing the Touchstone file or VSWR settings."
+        )
+        run_note.setWordWrap(True)
+        run_note.setObjectName("helper")
+        run_card.body.addWidget(run_note)
+        lay.addWidget(run_card)
+        lay.addStretch(1)
+        self._restore_geometry()
+
+    def _restore_geometry(self):
+        geo = self.store.get("help_geometry", None)
+        if geo:
+            try:
+                ba = QByteArray.fromBase64(geo.encode("ascii"))
+                self.restoreGeometry(ba)
+            except Exception:
+                pass
+
+    def _save_geometry(self):
+        try:
+            ba = self.saveGeometry().toBase64().data().decode("ascii")
+            self.store.set("help_geometry", ba)
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        self._save_geometry()
+        self.owner.on_help_popup_closed()
+        super().closeEvent(event)
+
+
 class ModernMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -812,96 +873,25 @@ class ModernMainWindow(QMainWindow):
         self.console_toggle.setObjectName("ghostButton")
         self.console_toggle.setCheckable(True)
         self.console_toggle.clicked.connect(self.toggle_console)
+        self.help_button = QPushButton()
+        self.help_button.setObjectName("ghostButton")
+        self.help_button.setCheckable(True)
+        self.help_button.clicked.connect(self.toggle_help)
         self.theme_selector = QComboBox()
         self.theme_selector.setObjectName("themeSelector")
         for theme_key, theme_label in THEME_OPTIONS:
             self.theme_selector.addItem(theme_label, theme_key)
         self.theme_selector.currentIndexChanged.connect(self.on_theme_selected)
         self.console_toggle.setToolTip("Show or hide the separate output console window.")
+        self.help_button.setToolTip("Show or hide the separate help window.")
         self.theme_selector.setToolTip("Choose a studio theme.")
         title_tools.addWidget(self.console_toggle)
+        title_tools.addWidget(self.help_button)
         title_tools.addWidget(self.theme_selector)
         title_lay.addLayout(title_tools)
         root_lay.addWidget(title_band)
 
         command_panel = ResponsiveCardPanel(max_columns=2, min_card_width=480)
-
-        project_card = Card("Project workspace", "Command center")
-        project_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        project_help = QLabel("Create or select a project first. Each project keeps its own inputs, selected preset, processing settings, and outputs.")
-        project_help.setWordWrap(True)
-        project_help.setObjectName("helper")
-        project_card.body.addWidget(project_help)
-        project_row = QVBoxLayout()
-        project_row.setContentsMargins(0, 0, 0, 0)
-        project_row.setSpacing(8)
-        self.project_combo = QComboBox()
-        self.project_combo.currentIndexChanged.connect(self.on_project_selected)
-        self.project_combo.setToolTip("Select the active project.")
-        self.project_new_button = QPushButton("New project")
-        self.project_new_button.clicked.connect(self.create_project)
-        self.project_save_button = QPushButton("Save project")
-        self.project_save_button.clicked.connect(self.save_project_changes)
-        self.project_edit_button = QPushButton("Edit project")
-        self.project_edit_button.clicked.connect(self.edit_project)
-        self.project_duplicate_button = QPushButton("Duplicate")
-        self.project_duplicate_button.clicked.connect(self.duplicate_project)
-        self.project_delete_button = QPushButton("Delete project")
-        self.project_delete_button.clicked.connect(self.delete_project)
-        self.project_import_button = QPushButton("Import bundle")
-        self.project_import_button.clicked.connect(self.import_project_bundle)
-        self.project_export_button = QPushButton("Export bundle")
-        self.project_export_button.clicked.connect(self.export_project_bundle)
-        self.project_new_button.setToolTip("Create a new project by name. Add inputs on the Inputs tab, then save the project.")
-        self.project_save_button.setToolTip("Write the current project inputs, presets, settings, and run metadata to disk.")
-        self.project_edit_button.setToolTip("Rename the active project. Edit inputs on the Inputs tab and save the project when you are ready.")
-        self.project_duplicate_button.setToolTip("Create a copy of the active project with the same settings and inputs.")
-        self.project_delete_button.setToolTip("Delete the active project and everything saved inside its folder.")
-        self.project_import_button.setToolTip("Import a previously exported project bundle into the Projects directory.")
-        self.project_export_button.setToolTip("Export the active project directory as a bundle.")
-        project_row.addWidget(self.project_combo)
-        project_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=130)
-        project_actions.set_buttons([
-            self.project_new_button,
-            self.project_save_button,
-            self.project_edit_button,
-            self.project_duplicate_button,
-            self.project_delete_button,
-            self.project_import_button,
-            self.project_export_button,
-        ])
-        project_row.addWidget(project_actions)
-        project_card.body.addLayout(project_row)
-        self.project_name = QLabel("No project selected")
-        self.project_name.setObjectName("projectName")
-        project_card.body.addWidget(self.project_name)
-        self.project_meta = QLabel("Create a project to keep inputs, presets, and generated results together.")
-        self.project_meta.setObjectName("projectMeta")
-        self.project_meta.setWordWrap(True)
-        project_card.body.addWidget(self.project_meta)
-        self.project_health = QLabel("No validation issues to report.")
-        self.project_health.setObjectName("helper")
-        self.project_health.setWordWrap(True)
-        project_card.body.addWidget(self.project_health)
-        badge_grid = QGridLayout()
-        badge_grid.setContentsMargins(0, 0, 0, 0)
-        badge_grid.setHorizontalSpacing(8)
-        badge_grid.setVerticalSpacing(8)
-        self.project_badge = QLabel("Project: none")
-        self.project_badge.setObjectName("summaryBadge")
-        self.count_badge = QLabel("0 far-field files")
-        self.count_badge.setObjectName("summaryBadge")
-        self.preset_badge = QLabel("Preset: none")
-        self.preset_badge.setObjectName("summaryBadge")
-        badge_grid.addWidget(self.project_badge, 0, 0)
-        badge_grid.addWidget(self.count_badge, 0, 1)
-        badge_grid.addWidget(self.preset_badge, 1, 0, 1, 2)
-        project_card.body.addLayout(badge_grid)
-        self.project_folder_button = QPushButton("Open Project Folder")
-        self.project_folder_button.setObjectName("ghostButton")
-        self.project_folder_button.setToolTip("Open the active project's folder in File Explorer.")
-        self.project_folder_button.clicked.connect(lambda: open_in_file_manager(self.project_results_dir()))
-        project_card.body.addWidget(self.project_folder_button, 0, Qt.AlignLeft)
 
         quick_actions = Card("Pipeline", "Run")
         quick_actions.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -945,32 +935,114 @@ class ModernMainWindow(QMainWindow):
         self.run_summary = QLabel("No run summary yet.")
         self.run_summary.setObjectName("helper")
         self.run_summary.setWordWrap(True)
+        self.project_stats_label = QLabel("No project stats yet.")
+        self.project_stats_label.setObjectName("helper")
+        self.project_stats_label.setWordWrap(True)
+        self.artifact_summary_label = QLabel("Artifacts will appear here after the first run.")
+        self.artifact_summary_label.setObjectName("helper")
+        self.artifact_summary_label.setWordWrap(True)
+        self.workbook_field = QLineEdit(); self.workbook_field.setReadOnly(True)
+        self.extract_field = QLineEdit(); self.extract_field.setReadOnly(True)
+        self.results_field = QLineEdit(); self.results_field.setReadOnly(True)
+        self.vswr_field = QLineEdit(); self.vswr_field.setReadOnly(True)
+        self.workbook_field.setToolTip("Workbook stored inside the selected project directory.")
+        self.extract_field.setToolTip("Extracted-data workbook stored inside the selected project directory.")
+        self.results_field.setToolTip("Project directory containing metadata and generated outputs.")
+        self.vswr_field.setToolTip("VSWR plot stored inside the selected project directory.")
         self.busy = QProgressBar()
         self.busy.setVisible(False)
         self.busy.setRange(0, 0)
         self.busy.setTextVisible(False)
         quick_actions.body.addWidget(self.run_info)
-        stage_grid = QGridLayout()
-        stage_grid.setContentsMargins(0, 0, 0, 0)
-        stage_grid.setHorizontalSpacing(8)
-        stage_grid.setVerticalSpacing(8)
+        quick_actions.body.addWidget(self.run_summary)
+        quick_actions.body.addWidget(self.project_stats_label)
+        quick_actions.body.addWidget(self.artifact_summary_label)
+        pipeline_outputs = QFormLayout()
+        pipeline_outputs.addRow("Project folder", self._path_row(self.results_field))
+        pipeline_outputs.addRow("Workbook", self._path_row(self.workbook_field))
+        pipeline_outputs.addRow("Extract workbook", self._path_row(self.extract_field))
+        pipeline_outputs.addRow("VSWR output", self._path_row(self.vswr_field))
+        quick_actions.body.addLayout(pipeline_outputs)
+        quick_actions.body.addWidget(self.busy)
         self.stage_status_labels: dict[str, QLabel] = {}
         self.stage_open_buttons: dict[str, QPushButton] = {}
-        for index, (stage_key, stage_label) in enumerate(STAGE_DEFINITIONS):
-            label = QLabel(f"{stage_label}: waiting")
-            label.setObjectName("helper")
-            button = QPushButton("Open")
-            button.setObjectName("ghostButton")
-            button.setFixedWidth(72)
-            button.clicked.connect(lambda _checked=False, key=stage_key: self.open_stage_output(key))
-            stage_grid.addWidget(label, index, 0)
-            stage_grid.addWidget(button, index, 1)
-            self.stage_status_labels[stage_key] = label
-            self.stage_open_buttons[stage_key] = button
-        quick_actions.body.addLayout(stage_grid)
-        quick_actions.body.addWidget(self.run_summary)
-        quick_actions.body.addWidget(self.busy)
-        command_panel.set_cards([project_card, quick_actions])
+        project_card = Card("Project workspace", "Command center")
+        project_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        project_help = QLabel("Create or select a project first. Each project keeps its own inputs, selected preset, processing settings, and outputs.")
+        project_help.setWordWrap(True)
+        project_help.setObjectName("helper")
+        project_card.body.addWidget(project_help)
+        project_row = QVBoxLayout()
+        project_row.setContentsMargins(0, 0, 0, 0)
+        project_row.setSpacing(8)
+        self.project_combo = QComboBox()
+        self.project_combo.currentIndexChanged.connect(self.on_project_selected)
+        self.project_combo.setToolTip("Select the active project.")
+        self.project_new_button = QPushButton("New project")
+        self.project_new_button.clicked.connect(self.create_project)
+        self.project_save_button = QPushButton("Save project")
+        self.project_save_button.clicked.connect(self.save_project_changes)
+        self.project_new_button.setToolTip("Create a new project by name. Add inputs on the Inputs tab, then save the project.")
+        self.project_save_button.setToolTip("Write the current project inputs, presets, settings, and run metadata to disk.")
+        self.project_more_button = QToolButton()
+        self.project_more_button.setText("More")
+        self.project_more_button.setPopupMode(QToolButton.InstantPopup)
+        self.project_more_button.setToolTip("More project actions.")
+        self.project_more_menu = QMenu(self.project_more_button)
+        self.project_rename_action = self.project_more_menu.addAction("Rename project", self.edit_project)
+        self.project_duplicate_action = self.project_more_menu.addAction("Duplicate project", self.duplicate_project)
+        self.project_delete_action = self.project_more_menu.addAction("Delete project", self.delete_project)
+        self.project_more_menu.addSeparator()
+        self.project_import_action = self.project_more_menu.addAction("Import bundle", self.import_project_bundle)
+        self.project_export_action = self.project_more_menu.addAction("Export bundle", self.export_project_bundle)
+        self.project_more_menu.addSeparator()
+        self.project_open_folder_action = self.project_more_menu.addAction("Open project folder", lambda: open_in_file_manager(self.project_results_dir()))
+        self.project_more_button.setMenu(self.project_more_menu)
+        project_row.addWidget(self.project_combo)
+        project_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=130)
+        project_actions.set_buttons([
+            self.project_new_button,
+            self.project_save_button,
+            self.project_more_button,
+        ])
+        project_row.addWidget(project_actions)
+        project_card.body.addLayout(project_row)
+        self.project_name = QLabel("No project selected")
+        self.project_name.setObjectName("projectName")
+        project_card.body.addWidget(self.project_name)
+        self.project_meta = QLabel("Create a project to keep inputs, presets, and generated results together.")
+        self.project_meta.setObjectName("projectMeta")
+        self.project_meta.setWordWrap(True)
+        project_card.body.addWidget(self.project_meta)
+        self.project_health = QLabel("No validation issues to report.")
+        self.project_health.setObjectName("helper")
+        self.project_health.setWordWrap(True)
+        project_card.body.addWidget(self.project_health)
+        badge_grid = QGridLayout()
+        badge_grid.setContentsMargins(0, 0, 0, 0)
+        badge_grid.setHorizontalSpacing(8)
+        badge_grid.setVerticalSpacing(8)
+        self.count_badge = QLabel("0 far-field files")
+        self.count_badge.setObjectName("summaryBadge")
+        self.preset_badge = QLabel("Preset: none")
+        self.preset_badge.setObjectName("summaryBadge")
+        badge_grid.addWidget(self.count_badge, 0, 0)
+        badge_grid.addWidget(self.preset_badge, 0, 1)
+        project_card.body.addLayout(badge_grid)
+
+        command_left = QWidget()
+        command_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        command_left_layout = QVBoxLayout(command_left)
+        command_left_layout.setContentsMargins(0, 0, 0, 0)
+        command_left_layout.setSpacing(12)
+        command_left_layout.addWidget(project_card)
+        command_right = QWidget()
+        command_right.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        command_right_layout = QVBoxLayout(command_right)
+        command_right_layout.setContentsMargins(0, 0, 0, 0)
+        command_right_layout.setSpacing(12)
+        command_right_layout.addWidget(quick_actions)
+        command_panel.set_cards([command_left, command_right])
         root_lay.addWidget(command_panel)
 
         workspace_shell = QFrame()
@@ -985,39 +1057,9 @@ class ModernMainWindow(QMainWindow):
         shell_lay.addWidget(self.workflow_tabs, 1)
         root_lay.addWidget(workspace_shell, 1)
 
-        overview_scroll, _overview_page, overview_lay = self._make_scroll_page()
         inputs_scroll, _inputs_page, inputs_lay = self._make_scroll_page()
         processing_scroll, _processing_page, processing_lay = self._make_scroll_page()
-        charts_scroll, _charts_page, charts_lay = self._make_scroll_page()
-
-        outputs_card = Card("Output files", "Results")
-        outputs_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        outputs_help = QLabel("All generated files stay inside the active project folder so the deliverables are always tied to the correct input set.")
-        outputs_help.setWordWrap(True)
-        outputs_help.setObjectName("helper")
-        outputs_card.body.addWidget(outputs_help)
-        self.project_stats_label = QLabel("No project stats yet.")
-        self.project_stats_label.setObjectName("helper")
-        self.project_stats_label.setWordWrap(True)
-        outputs_card.body.addWidget(self.project_stats_label)
-        self.artifact_summary_label = QLabel("Artifacts will appear here after the first run.")
-        self.artifact_summary_label.setObjectName("helper")
-        self.artifact_summary_label.setWordWrap(True)
-        outputs_card.body.addWidget(self.artifact_summary_label)
-        self.workbook_field = QLineEdit(); self.workbook_field.setReadOnly(True)
-        self.extract_field = QLineEdit(); self.extract_field.setReadOnly(True)
-        self.results_field = QLineEdit(); self.results_field.setReadOnly(True)
-        self.vswr_field = QLineEdit(); self.vswr_field.setReadOnly(True)
-        self.workbook_field.setToolTip("Workbook stored inside the selected project directory.")
-        self.extract_field.setToolTip("Extracted-data workbook stored inside the selected project directory.")
-        self.results_field.setToolTip("Project directory containing metadata and generated outputs.")
-        self.vswr_field.setToolTip("VSWR plot stored inside the selected project directory.")
-        form = QFormLayout()
-        form.addRow("Project folder", self._path_row(self.results_field))
-        form.addRow("Workbook", self._path_row(self.workbook_field))
-        form.addRow("Extract workbook", self._path_row(self.extract_field))
-        form.addRow("VSWR output", self._path_row(self.vswr_field))
-        outputs_card.body.addLayout(form)
+        colors_scroll, _colors_page, colors_lay = self._make_scroll_page()
 
         preset_card = Card("Saved presets", "Presets")
         preset_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -1035,55 +1077,32 @@ class ModernMainWindow(QMainWindow):
         preset_card.body.addWidget(self.preset_state_label)
         self.preset_new_button = QPushButton("New"); self.preset_new_button.clicked.connect(self.create_preset)
         self.preset_save_button = QPushButton("Save"); self.preset_save_button.clicked.connect(self.save_preset)
-        self.preset_rename_button = QPushButton("Rename"); self.preset_rename_button.clicked.connect(self.rename_preset)
-        self.preset_delete_button = QPushButton("Delete"); self.preset_delete_button.clicked.connect(self.delete_preset)
         self.preset_new_button.setToolTip("Create a new preset from the current GUI settings. Use Save project to persist it.")
         self.preset_save_button.setToolTip("Overwrite the selected preset with the current GUI settings. Use Save project to persist it.")
-        self.preset_rename_button.setToolTip("Rename the selected preset without changing its settings. Use Save project to persist it.")
-        self.preset_delete_button.setToolTip("Delete the selected preset. Use Save project to persist it.")
-        preset_actions = ResponsiveButtonPanel(max_columns=4, min_button_width=110)
-        preset_actions.set_buttons([self.preset_new_button, self.preset_save_button, self.preset_rename_button, self.preset_delete_button])
+        self.preset_more_button = QToolButton()
+        self.preset_more_button.setText("More")
+        self.preset_more_button.setPopupMode(QToolButton.InstantPopup)
+        self.preset_more_button.setToolTip("More preset actions.")
+        self.preset_more_menu = QMenu(self.preset_more_button)
+        self.preset_rename_action = self.preset_more_menu.addAction("Rename preset", self.rename_preset)
+        self.preset_delete_action = self.preset_more_menu.addAction("Delete preset", self.delete_preset)
+        self.preset_more_menu.addSeparator()
+        self.preset_import_action = self.preset_more_menu.addAction("Import presets", self.import_presets)
+        self.preset_export_action = self.preset_more_menu.addAction("Export presets", self.export_presets)
+        self.preset_more_button.setMenu(self.preset_more_menu)
+        preset_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=110)
+        preset_actions.set_buttons([self.preset_new_button, self.preset_save_button, self.preset_more_button])
         preset_card.body.addWidget(preset_actions)
-        self.preset_import_button = QPushButton("Import"); self.preset_import_button.clicked.connect(self.import_presets)
-        self.preset_export_button = QPushButton("Export"); self.preset_export_button.clicked.connect(self.export_presets)
-        self.preset_import_button.setToolTip("Import presets from a JSON file and merge them into the current list. Use Save project to persist them.")
-        self.preset_export_button.setToolTip("Export all saved presets to a JSON file.")
-        preset_io = ResponsiveButtonPanel(max_columns=2, min_button_width=120)
-        preset_io.set_buttons([self.preset_import_button, self.preset_export_button])
-        preset_card.body.addWidget(preset_io)
-        storage_card = Card("Workspace guide", "Flow")
-        storage_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        storage_note = QLabel(
-            "1. Create a project by name.\n"
-            "2. Add or edit project inputs on the Inputs tab.\n"
-            "3. Choose or update the project preset and tuning controls.\n"
-            "4. Click Save project to persist the current inputs and preset.\n"
-            "5. Run the pipeline from the top command area."
-        )
-        storage_note.setWordWrap(True)
-        storage_note.setObjectName("helper")
-        storage_card.body.addWidget(storage_note)
-        validation_card = Card("Validation", "Checks")
-        validation_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        command_left_layout.addWidget(preset_card)
         self.validation_label = QLabel("No validation issues.")
         self.validation_label.setObjectName("helper")
         self.validation_label.setWordWrap(True)
-        validation_card.body.addWidget(self.validation_label)
-        activity_card = Card("Recent activity", "Runs")
-        activity_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.last_run_label = QLabel("Last successful run: never")
         self.last_run_label.setObjectName("helper")
         self.last_run_label.setWordWrap(True)
         self.run_state_label = QLabel("No stage history yet.")
         self.run_state_label.setObjectName("helper")
         self.run_state_label.setWordWrap(True)
-        activity_card.body.addWidget(self.last_run_label)
-        activity_card.body.addWidget(self.run_state_label)
-        overview_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 3, 1, 4, 2]})
-        overview_panel.set_cards([outputs_card, preset_card, storage_card, validation_card, activity_card])
-        overview_lay.addWidget(overview_panel)
-        overview_lay.addStretch(1)
-
         ffs_card = Card("Far-field files", "Primary input")
         ffs_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         helper = QLabel("Drop .ffs files here or add them manually. The changes stay local to the active project until you click Save project.")
@@ -1102,17 +1121,13 @@ class ModernMainWindow(QMainWindow):
         self.clear_ffs_button = QPushButton("Clear list"); self.clear_ffs_button.clicked.connect(self.clear_ffs)
         self.ffs_up_button = QPushButton("Move up"); self.ffs_up_button.clicked.connect(self.move_ffs_up)
         self.ffs_down_button = QPushButton("Move down"); self.ffs_down_button.clicked.connect(self.move_ffs_down)
-        self.ffs_sort_button = QPushButton("Sort"); self.ffs_sort_button.clicked.connect(self.sort_ffs)
         self.ffs_toggle_button = QPushButton("Enable/disable"); self.ffs_toggle_button.clicked.connect(self.toggle_selected_ffs_enabled)
-        self.ffs_missing_button = QPushButton("Remove missing"); self.ffs_missing_button.clicked.connect(self.remove_missing_ffs)
         self.add_ffs_button.setToolTip("Browse for CST far-field export files to include in this project.")
         self.remove_ffs_button.setToolTip("Remove the highlighted far-field files from the current project.")
         self.clear_ffs_button.setToolTip("Clear the full far-field file list.")
         self.ffs_up_button.setToolTip("Move the selected far-field files up in the processing order.")
         self.ffs_down_button.setToolTip("Move the selected far-field files down in the processing order.")
-        self.ffs_sort_button.setToolTip("Sort far-field files alphabetically by display name.")
         self.ffs_toggle_button.setToolTip("Temporarily disable or re-enable the selected far-field files without deleting them.")
-        self.ffs_missing_button.setToolTip("Remove any far-field entries that no longer exist on disk.")
         ffs_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=135)
         ffs_actions.set_buttons([
             self.add_ffs_button,
@@ -1120,9 +1135,7 @@ class ModernMainWindow(QMainWindow):
             self.clear_ffs_button,
             self.ffs_up_button,
             self.ffs_down_button,
-            self.ffs_sort_button,
             self.ffs_toggle_button,
-            self.ffs_missing_button,
         ])
         ffs_card.body.addWidget(ffs_actions)
 
@@ -1152,8 +1165,21 @@ class ModernMainWindow(QMainWindow):
         s2p_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=145)
         s2p_actions.set_buttons([self.select_s2p_button, self.clear_s2p_button, self.open_s2p_button])
         s2p_card.body.addWidget(s2p_actions)
-        inputs_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 2, 1]})
-        inputs_panel.set_cards([ffs_card, s2p_card, inputs_help_card])
+        inputs_panel = QWidget()
+        inputs_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        inputs_panel_layout = QHBoxLayout(inputs_panel)
+        inputs_panel_layout.setContentsMargins(0, 0, 0, 0)
+        inputs_panel_layout.setSpacing(12)
+        inputs_left = QWidget()
+        inputs_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        inputs_left_layout = QVBoxLayout(inputs_left)
+        inputs_left_layout.setContentsMargins(0, 0, 0, 0)
+        inputs_left_layout.setSpacing(12)
+        inputs_left_layout.addWidget(inputs_help_card)
+        inputs_left_layout.addWidget(s2p_card)
+        inputs_left_layout.addStretch(1)
+        inputs_panel_layout.addWidget(inputs_left, 1)
+        inputs_panel_layout.addWidget(ffs_card, 2)
         inputs_lay.addWidget(inputs_panel)
         inputs_lay.addStretch(1)
 
@@ -1210,22 +1236,6 @@ class ModernMainWindow(QMainWindow):
         add_form_row(frequency_form, "Shared fmax", StepperField(self.shared_fmax), "Upper frequency bound used by both workbook plots and the VSWR plot, in GHz. Use 0 to keep the full range.")
         add_form_row(frequency_form, "Shared x axis", self.shared_xlog, "Switch both workbook plots and the VSWR plot between linear and logarithmic x-axis scaling.")
         frequency_card.body.addLayout(frequency_form)
-        processing_help = Card("When to rerun", "Flow")
-        processing_help.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        processing_note = QLabel(
-            "Run Full Pipeline when the inputs changed and you want the full deliverable.\n"
-            "Use Workbook Only after changing far-field files or smoothing.\n"
-            "Use Plots Only after changing chart ranges or colors.\n"
-            "Use VSWR Only after changing the Touchstone file or VSWR settings."
-        )
-        processing_note.setWordWrap(True)
-        processing_note.setObjectName("helper")
-        processing_help.body.addWidget(processing_note)
-        processing_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 2, 1]})
-        processing_panel.set_cards([workbook_card, frequency_card, processing_help])
-        processing_lay.addWidget(processing_panel)
-        processing_lay.addStretch(1)
-
         gain_range_card = Card("Gain range", "Ranges")
         gain_range_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         gain_range_card.setMinimumWidth(320)
@@ -1317,25 +1327,39 @@ class ModernMainWindow(QMainWindow):
         add_form_row(plot_color_form, "Line color 2", self.plot_line2, "Secondary line color used by both the workbook plots and the VSWR plot.")
         plot_color_card.body.addLayout(plot_color_form)
 
-        charts_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 1, 2, 5, 3, 4]})
-        charts_panel.set_cards([gain_range_card, beamwidth_range_card, efficiency_range_card, vswr_range_card, polar_card, plot_color_card])
-        charts_lay.addWidget(charts_panel)
-        charts_lay.addStretch(1)
+        processing_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 2, 1]})
+        processing_panel.set_cards([
+            workbook_card,
+            frequency_card,
+            gain_range_card,
+            beamwidth_range_card,
+            efficiency_range_card,
+            vswr_range_card,
+        ])
+        processing_lay.addWidget(processing_panel)
+        processing_lay.addStretch(1)
 
-        self.workflow_tabs.addTab(overview_scroll, "Project")
+        colors_panel = ResponsiveCardPanel(max_columns=2, min_card_width=320)
+        colors_panel.set_cards([plot_color_card, polar_card])
+        colors_lay.addWidget(colors_panel)
+        colors_lay.addStretch(1)
+
         self.workflow_tabs.addTab(inputs_scroll, "Inputs")
         self.workflow_tabs.addTab(processing_scroll, "Processing")
-        self.workflow_tabs.addTab(charts_scroll, "Charts")
+        self.workflow_tabs.addTab(colors_scroll, "Style")
         self.setCentralWidget(root)
 
         self.console_window = ConsoleWindow(self, self.store)
         self.console = self.console_window.console
+        self.help_window = HelpWindow(self, self.store)
         self._set_console_visible(False, persist=False)
+        self._set_help_visible(False, persist=False)
 
         self._bind_project_persistence()
         self.refresh_preset_list()
         self._sync_theme_selector()
         self._sync_console_toggle()
+        self._sync_help_toggle()
         self.workflow_tabs.setCurrentIndex(0)
         self.on_tab_changed(self.workflow_tabs.currentIndex())
 
@@ -1572,6 +1596,11 @@ class ModernMainWindow(QMainWindow):
         self.console_toggle.setChecked(visible)
         self.console_toggle.setText("Hide Console" if visible else "Show Console")
 
+    def _sync_help_toggle(self):
+        visible = self.help_window.isVisible() if hasattr(self, "help_window") else bool(self.store.get("help_visible", False))
+        self.help_button.setChecked(visible)
+        self.help_button.setText("Hide Help" if visible else "Show Help")
+
     def _set_console_visible(self, visible: bool, persist: bool = True):
         if visible:
             self.console_window.show()
@@ -1585,12 +1614,32 @@ class ModernMainWindow(QMainWindow):
         if persist:
             self.store.set("console_visible", visible)
 
+    def _set_help_visible(self, visible: bool, persist: bool = True):
+        if visible:
+            self.help_window.show()
+            self.help_window.raise_()
+            self.help_window.activateWindow()
+        else:
+            self.help_window._save_geometry()
+            self.help_window.hide()
+        self.help_button.setChecked(visible)
+        self.help_button.setText("Hide Help" if visible else "Show Help")
+        if persist:
+            self.store.set("help_visible", visible)
+
     def on_console_popup_closed(self):
         if self._closing_app:
             return
         self.console_toggle.setChecked(False)
         self.console_toggle.setText("Show Console")
         self.store.set("console_visible", False)
+
+    def on_help_popup_closed(self):
+        if self._closing_app:
+            return
+        self.help_button.setChecked(False)
+        self.help_button.setText("Show Help")
+        self.store.set("help_visible", False)
 
     def on_theme_selected(self, _index: int) -> None:
         selected = str(self.theme_selector.currentData() or "").strip().lower()
@@ -1603,6 +1652,9 @@ class ModernMainWindow(QMainWindow):
 
     def toggle_console(self, checked: bool = False):
         self._set_console_visible(checked)
+
+    def toggle_help(self, checked: bool = False):
+        self._set_help_visible(checked)
 
     def _bind_project_persistence(self) -> None:
         tracked_signals = [
@@ -1860,6 +1912,8 @@ class ModernMainWindow(QMainWindow):
         return "\n".join(lines) if lines else "No stage history yet."
 
     def _refresh_stage_labels(self) -> None:
+        if not self.stage_status_labels or not self.stage_open_buttons:
+            return
         for stage_key, stage_label in STAGE_DEFINITIONS:
             stage_state = self._stage_state(stage_key)
             status = str(stage_state.get("status", "")).strip().lower()
@@ -2037,7 +2091,6 @@ class ModernMainWindow(QMainWindow):
             project_label = self.active_project_name or self.active_project_slug
             self.project_name.setText(project_label)
             self.project_meta.setText(f"Folder: {display_workspace_path(self.project_results_dir())}")
-            self.project_badge.setText(f"Project: {project_label}")
             self.workbook_field.setText(display_workspace_path(self.deduced_beam_output()))
             self.extract_field.setText(display_workspace_path(self.deduced_extract_output()))
             self.results_field.setText(display_workspace_path(self.project_results_dir()))
@@ -2045,7 +2098,6 @@ class ModernMainWindow(QMainWindow):
         else:
             self.project_name.setText("No project selected")
             self.project_meta.setText("Create a project to keep inputs, presets, and generated results together.")
-            self.project_badge.setText("Project: none")
             self.workbook_field.clear()
             self.extract_field.clear()
             self.results_field.clear()
@@ -2055,7 +2107,7 @@ class ModernMainWindow(QMainWindow):
         self.count_badge.setText(f"{enabled_ffs}/{total_ffs} far-field enabled" if total_ffs else "0 far-field files")
         if self.active_project_slug:
             suffix = " *" if self.has_unsaved_project_changes() else ""
-            self.project_badge.setText(f"Project: {(self.active_project_name or self.active_project_slug)}{suffix}")
+            self.project_name.setText(f"{(self.active_project_name or self.active_project_slug)}{suffix}")
         self.open_s2p_button.setEnabled(bool(self.active_project_slug and self.selected_s2p()))
         self._update_ffs_action_state()
         self._refresh_project_summary()
@@ -2066,11 +2118,13 @@ class ModernMainWindow(QMainWindow):
         is_running = bool(self.proc.running_cmd or self.proc.queue)
         is_dirty = self.has_unsaved_project_changes()
         self.project_save_button.setEnabled(has_project and is_dirty)
-        self.project_edit_button.setEnabled(has_project)
-        self.project_duplicate_button.setEnabled(has_project)
-        self.project_delete_button.setEnabled(has_project)
-        self.project_export_button.setEnabled(has_project)
-        self.project_import_button.setEnabled(True)
+        self.project_more_button.setEnabled(True)
+        self.project_rename_action.setEnabled(has_project)
+        self.project_duplicate_action.setEnabled(has_project)
+        self.project_delete_action.setEnabled(has_project)
+        self.project_import_action.setEnabled(True)
+        self.project_export_action.setEnabled(has_project)
+        self.project_open_folder_action.setEnabled(has_project)
         for widget in (
             self.btn_full,
             self.btn_beam,
@@ -2085,7 +2139,6 @@ class ModernMainWindow(QMainWindow):
             self.select_s2p_button,
             self.clear_s2p_button,
             self.open_s2p_button,
-            self.project_folder_button,
         ):
             widget.setEnabled(has_project)
         self.btn_cancel.setEnabled(has_project and is_running)
@@ -2099,10 +2152,11 @@ class ModernMainWindow(QMainWindow):
         self.preset_combo.setEnabled(has_project)
         self.preset_new_button.setEnabled(has_project)
         self.preset_save_button.setEnabled(has_project)
-        self.preset_rename_button.setEnabled(has_project and has_preset)
-        self.preset_delete_button.setEnabled(has_project and has_preset)
-        self.preset_import_button.setEnabled(has_project)
-        self.preset_export_button.setEnabled(has_project and bool(self.project_presets))
+        self.preset_more_button.setEnabled(has_project)
+        self.preset_rename_action.setEnabled(has_project and has_preset)
+        self.preset_delete_action.setEnabled(has_project and has_preset)
+        self.preset_import_action.setEnabled(has_project)
+        self.preset_export_action.setEnabled(has_project and bool(self.project_presets))
         preset_label = self.project_active_preset or ("Manual" if has_project else "none")
         self.preset_badge.setText(f"Preset: {preset_label}")
         if not has_project:
@@ -2602,9 +2656,7 @@ class ModernMainWindow(QMainWindow):
         self.clear_ffs_button.setEnabled(has_project and count > 0)
         self.ffs_up_button.setEnabled(has_project and selected)
         self.ffs_down_button.setEnabled(has_project and selected)
-        self.ffs_sort_button.setEnabled(has_project and count > 1)
         self.ffs_toggle_button.setEnabled(has_project and selected)
-        self.ffs_missing_button.setEnabled(has_project and count > 0)
 
     def _add_ffs_files(self, files: list[object], save: bool = True):
         existing = {self._item_path(self.ffs_list.item(i)) for i in range(self.ffs_list.count())}
@@ -2674,13 +2726,6 @@ class ModernMainWindow(QMainWindow):
                 items[index], items[index + 1] = items[index + 1], items[index]
         self._replace_ffs_items(items, selected_paths=list(selected))
 
-    def sort_ffs(self) -> None:
-        items = sorted(
-            self.collect_ffs_items(),
-            key=lambda entry: display_workspace_path(str(entry["path"])).lower(),
-        )
-        self._replace_ffs_items(items, selected_paths=self._selected_ffs_paths())
-
     def toggle_selected_ffs_enabled(self) -> None:
         selected = set(self._selected_ffs_paths())
         if not selected:
@@ -2691,10 +2736,6 @@ class ModernMainWindow(QMainWindow):
             if str(entry["path"]) in selected:
                 entry["enabled"] = enable_selected
         self._replace_ffs_items(items, selected_paths=list(selected))
-
-    def remove_missing_ffs(self) -> None:
-        items = [entry for entry in self.collect_ffs_items() if Path(str(entry["path"])).exists()]
-        self._replace_ffs_items(items)
 
     def browse_s2p(self):
         if not self.active_project_slug:
@@ -3080,6 +3121,8 @@ class ModernMainWindow(QMainWindow):
             self.store.set("window_height", int(self.height()))
             if hasattr(self, "console_window"):
                 self.console_window._save_geometry()
+            if hasattr(self, "help_window"):
+                self.help_window._save_geometry()
         except Exception:
             pass
 
@@ -3089,6 +3132,7 @@ class ModernMainWindow(QMainWindow):
             return
         self._closing_app = True
         self.store.set("console_visible", bool(hasattr(self, "console_window") and self.console_window.isVisible()))
+        self.store.set("help_visible", bool(hasattr(self, "help_window") and self.help_window.isVisible()))
         self._save_geometry()
         super().closeEvent(e)
 

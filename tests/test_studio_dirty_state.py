@@ -54,14 +54,14 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.assertTrue(self.window.has_unsaved_project_changes())
         self.assertTrue(self.window.project_save_button.isEnabled())
-        self.assertTrue(self.window.project_badge.text().endswith("*"))
+        self.assertTrue(self.window.project_name.text().endswith("*"))
 
         self.window.save_project_changes()
         self.app.processEvents()
 
         self.assertFalse(self.window.has_unsaved_project_changes())
         self.assertFalse(self.window.project_save_button.isEnabled())
-        self.assertFalse(self.window.project_badge.text().endswith("*"))
+        self.assertFalse(self.window.project_name.text().endswith("*"))
 
     def test_preset_changes_require_project_save(self) -> None:
         with mock.patch("antenna_toolkit_studio.QInputDialog.getText", return_value=("Preset A", True)):
