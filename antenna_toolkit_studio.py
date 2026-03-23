@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from antenna_toolkit_qt import (
-    THIS_DIR, SCRIPT_BEAM, SCRIPT_EXTRACT, SCRIPT_PLOT, SCRIPT_VSWR,
+    THIS_DIR, SCRIPT_BEAM, SCRIPT_EXTRACT, SCRIPT_DATASHEET, SCRIPT_PLOT, SCRIPT_VSWR,
     suggest_preset_name, normalize_preset_payload,
     DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, Persist, Proc,
     which_python, open_in_file_manager, resolve_workspace_path,
@@ -44,10 +44,12 @@ GREY_COLOR_OPTIONS = [
 STAGE_DEFINITIONS = [
     ("beam", "Workbook"),
     ("extract", "Extract"),
+    ("datasheet", "Datasheet"),
     ("plot", "Plots"),
     ("vswr", "VSWR"),
 ]
 STAGE_LABELS = dict(STAGE_DEFINITIONS)
+DATASHEET_TEMPLATE = THIS_DIR / "Datasheet.pdf"
 THEME_OPTIONS = [
     ("light", "Canvas"),
     ("dark", "Midnight"),
@@ -906,6 +908,8 @@ class ModernMainWindow(QMainWindow):
         self.btn_beam.clicked.connect(self.run_beam)
         self.btn_extract = QPushButton("Extract Data")
         self.btn_extract.clicked.connect(self.run_extract)
+        self.btn_datasheet = QPushButton("Generate Datasheet PDF")
+        self.btn_datasheet.clicked.connect(self.run_datasheet)
         self.btn_plot = QPushButton("Plots Only")
         self.btn_plot.clicked.connect(self.run_plot)
         self.btn_vswr = QPushButton("VSWR Only")
@@ -916,6 +920,7 @@ class ModernMainWindow(QMainWindow):
         self.btn_full.setToolTip("Run workbook generation, chart generation, and VSWR generation in sequence.")
         self.btn_beam.setToolTip("Generate only the Excel workbook from the selected far-field files.")
         self.btn_extract.setToolTip("Generate a separate Excel workbook with extracted gain, beamwidth, VSWR, impedance, and front-to-back metrics.")
+        self.btn_datasheet.setToolTip("Generate a datasheet PDF by replacing values in Datasheet.pdf with data from the extracted workbook.")
         self.btn_plot.setToolTip("Generate only the plots that are based on the derived workbook.")
         self.btn_vswr.setToolTip("Generate only the VSWR plot from the current Touchstone file.")
         self.btn_cancel.setToolTip("Stop the current run and clear any queued stages.")
@@ -924,6 +929,7 @@ class ModernMainWindow(QMainWindow):
             self.btn_full,
             self.btn_beam,
             self.btn_extract,
+            self.btn_datasheet,
             self.btn_plot,
             self.btn_vswr,
             self.btn_cancel,
@@ -943,10 +949,12 @@ class ModernMainWindow(QMainWindow):
         self.artifact_summary_label.setWordWrap(True)
         self.workbook_field = QLineEdit(); self.workbook_field.setReadOnly(True)
         self.extract_field = QLineEdit(); self.extract_field.setReadOnly(True)
+        self.datasheet_field = QLineEdit(); self.datasheet_field.setReadOnly(True)
         self.results_field = QLineEdit(); self.results_field.setReadOnly(True)
         self.vswr_field = QLineEdit(); self.vswr_field.setReadOnly(True)
         self.workbook_field.setToolTip("Workbook stored inside the selected project directory.")
         self.extract_field.setToolTip("Extracted-data workbook stored inside the selected project directory.")
+        self.datasheet_field.setToolTip("Generated datasheet PDF stored inside the selected project directory.")
         self.results_field.setToolTip("Project directory containing metadata and generated outputs.")
         self.vswr_field.setToolTip("VSWR plot stored inside the selected project directory.")
         self.busy = QProgressBar()
@@ -961,6 +969,7 @@ class ModernMainWindow(QMainWindow):
         pipeline_outputs.addRow("Project folder", self._path_row(self.results_field))
         pipeline_outputs.addRow("Workbook", self._path_row(self.workbook_field))
         pipeline_outputs.addRow("Extract workbook", self._path_row(self.extract_field))
+        pipeline_outputs.addRow("Datasheet PDF", self._path_row(self.datasheet_field))
         pipeline_outputs.addRow("VSWR output", self._path_row(self.vswr_field))
         quick_actions.body.addLayout(pipeline_outputs)
         quick_actions.body.addWidget(self.busy)
@@ -1725,6 +1734,7 @@ class ModernMainWindow(QMainWindow):
         setting_keys = {
             "beam": ["smooth", "theta"],
             "extract": ["smooth", "theta", "shared_fmin", "shared_fmax"],
+            "datasheet": ["smooth", "theta", "shared_fmin", "shared_fmax"],
             "plot": [
                 "smooth2", "shared_xstep", "shared_fmin", "shared_fmax", "shared_xlog",
                 "gain_ymin", "gain_ymax", "gain_y_step",
@@ -1745,7 +1755,7 @@ class ModernMainWindow(QMainWindow):
             "schema_version": CURRENT_PROJECT_SCHEMA_VERSION,
             "settings": self._stage_settings_snapshot(stage_key),
         }
-        if stage_key in {"beam", "extract", "plot"}:
+        if stage_key in {"beam", "extract", "plot", "datasheet"}:
             snapshot["ffs_items"] = [
                 {
                     "path": serialize_workspace_path(THIS_DIR, str(item["path"])),
@@ -1754,10 +1764,13 @@ class ModernMainWindow(QMainWindow):
                 }
                 for item in self.collect_ffs_items()
             ]
-        if stage_key in {"extract", "vswr"}:
+        if stage_key in {"extract", "vswr", "datasheet"}:
             snapshot["touchstone"] = self._path_fingerprint(self.selected_s2p())
-        if stage_key in {"extract", "plot"}:
+        if stage_key in {"extract", "plot", "datasheet"}:
             snapshot["beam_workbook"] = self._path_fingerprint(self.deduced_beam_output())
+        if stage_key == "datasheet":
+            snapshot["extract_workbook"] = self._path_fingerprint(self.deduced_extract_output())
+            snapshot["template_pdf"] = self._path_fingerprint(DATASHEET_TEMPLATE)
         return snapshot
 
     def _stage_output_files(self, stage_key: str) -> list[Path]:
@@ -1765,6 +1778,8 @@ class ModernMainWindow(QMainWindow):
             return [self.deduced_beam_output()]
         if stage_key == "extract":
             return [self.deduced_extract_output()]
+        if stage_key == "datasheet":
+            return [self.deduced_datasheet_output()]
         if stage_key == "vswr":
             return [self.deduced_vswr_output()]
         if stage_key == "plot":
@@ -1829,6 +1844,8 @@ class ModernMainWindow(QMainWindow):
             return enabled_ffs
         if stage_key == "extract":
             return enabled_ffs or has_touchstone
+        if stage_key == "datasheet":
+            return enabled_ffs and has_touchstone
         if stage_key == "plot":
             return enabled_ffs
         if stage_key == "vswr":
@@ -1882,6 +1899,8 @@ class ModernMainWindow(QMainWindow):
             messages.append(f"Selected Touchstone file is missing: {display_workspace_path(s2p)}")
         elif not s2p:
             messages.append("VSWR stage is unavailable until a Touchstone file is selected.")
+        if not DATASHEET_TEMPLATE.exists():
+            messages.append(f"Datasheet template is missing: {display_workspace_path(DATASHEET_TEMPLATE)}")
         fmin = float(self.shared_fmin.value())
         fmax = float(self.shared_fmax.value())
         if fmin > 0 and fmax <= fmin:
@@ -2082,6 +2101,10 @@ class ModernMainWindow(QMainWindow):
         project = self.current_project()
         return project.extract_path(THIS_DIR) if project else (self.project_results_dir() / "project_extracted_data.xlsx")
 
+    def deduced_datasheet_output(self) -> Path:
+        project = self.current_project()
+        return project.datasheet_path(THIS_DIR) if project else (self.project_results_dir() / "project_datasheet.pdf")
+
     def deduced_vswr_output(self) -> Path:
         project = self.current_project()
         return project.vswr_path(THIS_DIR) if project else (self.project_results_dir() / "project_vswr.svg")
@@ -2093,6 +2116,7 @@ class ModernMainWindow(QMainWindow):
             self.project_meta.setText(f"Folder: {display_workspace_path(self.project_results_dir())}")
             self.workbook_field.setText(display_workspace_path(self.deduced_beam_output()))
             self.extract_field.setText(display_workspace_path(self.deduced_extract_output()))
+            self.datasheet_field.setText(display_workspace_path(self.deduced_datasheet_output()))
             self.results_field.setText(display_workspace_path(self.project_results_dir()))
             self.vswr_field.setText(display_workspace_path(self.deduced_vswr_output()))
         else:
@@ -2100,6 +2124,7 @@ class ModernMainWindow(QMainWindow):
             self.project_meta.setText("Create a project to keep inputs, presets, and generated results together.")
             self.workbook_field.clear()
             self.extract_field.clear()
+            self.datasheet_field.clear()
             self.results_field.clear()
             self.vswr_field.clear()
         total_ffs = len(self.collect_ffs_items()) if self.active_project_slug else 0
@@ -2129,6 +2154,7 @@ class ModernMainWindow(QMainWindow):
             self.btn_full,
             self.btn_beam,
             self.btn_extract,
+            self.btn_datasheet,
             self.btn_plot,
             self.btn_vswr,
             self.ffs_list,
@@ -2794,6 +2820,7 @@ class ModernMainWindow(QMainWindow):
         mapping = {
             Path(SCRIPT_BEAM).name.lower(): "beam",
             Path(SCRIPT_EXTRACT).name.lower(): "extract",
+            Path(SCRIPT_DATASHEET).name.lower(): "datasheet",
             Path(SCRIPT_PLOT).name.lower(): "plot",
             Path(SCRIPT_VSWR).name.lower(): "vswr",
         }
@@ -2950,6 +2977,43 @@ class ModernMainWindow(QMainWindow):
             return
         self._save_project_if_dirty()
         self._enqueue_stage("extract", args)
+
+    def run_datasheet(self):
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
+        if not DATASHEET_TEMPLATE.exists():
+            self.status("Datasheet.pdf is missing from the project root")
+            return
+        if self._missing_enabled_ffs():
+            self.status("Remove or fix missing far-field files before generating the datasheet")
+            return
+        s2p = self.selected_s2p()
+        if not s2p:
+            self.status("Select a Touchstone file before generating the datasheet")
+            return
+        if not Path(s2p).exists():
+            self.status("Selected Touchstone file is missing")
+            return
+        extract_output = self.deduced_extract_output()
+        if not extract_output.exists():
+            self.status("Generate the extract workbook first")
+            return
+        if self._stage_is_stale("extract"):
+            self.status("Extract output is stale. Run Extract Data again before generating the datasheet")
+            return
+        args = [
+            which_python(),
+            "-u",
+            SCRIPT_DATASHEET,
+            str(self.deduced_datasheet_output()),
+            "--template",
+            str(DATASHEET_TEMPLATE),
+            "--extract-workbook",
+            str(extract_output),
+        ]
+        self._save_project_if_dirty()
+        self._enqueue_stage("datasheet", args)
 
     def run_plot(self):
         if not self.active_project_slug:
