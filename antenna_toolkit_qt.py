@@ -601,6 +601,12 @@ class PlotSection(QGroupBox):
         self.grid.textChanged.connect(lambda v: self.win.store.set("grid_color", v))
         self.line1 = ColorSelector(self.win.store, "plot_line_1", DEFAULT_LINE_COLORS[0][1])
         self.line2 = ColorSelector(self.win.store, "plot_line_2", DEFAULT_LINE_COLORS[1][1])
+        self.gain_legends = QLineEdit(self.win.store.get("gain_legend_labels", ""))
+        self.gain_legends.textChanged.connect(lambda v: self.win.store.set("gain_legend_labels", v))
+        self.beamwidth_legends = QLineEdit(self.win.store.get("beamwidth_legend_labels", ""))
+        self.beamwidth_legends.textChanged.connect(lambda v: self.win.store.set("beamwidth_legend_labels", v))
+        self.beam_eff_legends = QLineEdit(self.win.store.get("beam_eff_legend_labels", ""))
+        self.beam_eff_legends.textChanged.connect(lambda v: self.win.store.set("beam_eff_legend_labels", v))
         self.rings = QLineEdit(self.win.store.get("rings", "0,-7.5,-15,-22.5,-30"))
         self.rings.textChanged.connect(lambda v: self.win.store.set("rings", v))
         self.ang = QSpinBox(); self.ang.setRange(5,90); self.ang.setSingleStep(5); self.ang.setValue(int(self.win.store.get("angle",30)))
@@ -612,6 +618,9 @@ class PlotSection(QGroupBox):
         form.addRow("Grid color:", self.grid)
         form.addRow("Line color 1:", self.line1)
         form.addRow("Line color 2:", self.line2)
+        form.addRow("Gain legends:", self.gain_legends)
+        form.addRow("Beamwidth legends:", self.beamwidth_legends)
+        form.addRow("Beam eff legends:", self.beam_eff_legends)
         form.addRow("Rings (dB):", self.rings)
         form.addRow("Angle step (°):", self.ang)
         form.addRow("Clip below (dB):", self.clip)
@@ -649,6 +658,12 @@ class PlotSection(QGroupBox):
                 "--clip-db", str(self.clip.value()),
                 "--smooth-window", str(self.smooth.value()),
                 "--x-step", str(self.win.shared_axis.xstep.value())]
+        if self.gain_legends.text().strip():
+            args += ["--gain-legend-labels", self.gain_legends.text().strip()]
+        if self.beamwidth_legends.text().strip():
+            args += ["--beamwidth-legend-labels", self.beamwidth_legends.text().strip()]
+        if self.beam_eff_legends.text().strip():
+            args += ["--beam-eff-legend-labels", self.beam_eff_legends.text().strip()]
         if self.win.y_ranges.gain_ymin.value() != 0:
             args += ["--gain-ymin", f"{self.win.y_ranges.gain_ymin.value()}"]
         if self.win.y_ranges.gain_ymax.value() != 0:
@@ -702,11 +717,14 @@ class VswrSection(QGroupBox):
         self.grid.textChanged.connect(lambda v: self.win.store.set("vswr_grid", v))
         self.line1 = ColorSelector(self.win.store, "vswr_line_1", DEFAULT_LINE_COLORS[0][1])
         self.line2 = ColorSelector(self.win.store, "vswr_line_2", DEFAULT_LINE_COLORS[1][1])
+        self.legends = QLineEdit(self.win.store.get("vswr_legend_labels", ""))
+        self.legends.textChanged.connect(lambda v: self.win.store.set("vswr_legend_labels", v))
         self.smooth = QSpinBox(); self.smooth.setRange(1,99); self.smooth.setValue(int(self.win.store.get("vswr_smooth", 5)))
         self.smooth.valueChanged.connect(lambda v: self.win.store.set("vswr_smooth", int(v)))
         form.addRow("Grid color:", self.grid)
         form.addRow("Line color 1:", self.line1)
         form.addRow("Line color 2:", self.line2)
+        form.addRow("VSWR legends:", self.legends)
         form.addRow("Smooth window:", self.smooth)
 
         run = QPushButton("Run VSWR ▶"); run.clicked.connect(self.run)
@@ -757,6 +775,8 @@ class VswrSection(QGroupBox):
                 "--ymin", str(self.win.y_ranges.vswr_ymin.value()), "--ymax", str(self.win.y_ranges.vswr_ymax.value()),
                 "--y-step", str(self.win.y_ranges.vswr_ystep.value()),
                 "--smooth-window", str(self.smooth.value())]
+        if self.legends.text().strip():
+            args += ["--legend-labels", self.legends.text().strip()]
         if self.win.shared_axis.use_log_scale():
             args.append("--x-log")
         if self.win.shared_axis.fmin.value() > 0 and self.win.shared_axis.fmax.value() > 0 and self.win.shared_axis.fmax.value() > self.win.shared_axis.fmin.value():

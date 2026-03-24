@@ -24,6 +24,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, FixedFormatter, FixedLocator, NullFormatter, NullLocator
+from legend_utils import apply_legend_labels, parse_legend_labels
 
 # ------------------ global color scheme (kept from gain plot) ------------------
 DEFAULT_SOLID_COLORS = ["#2bb6f6", "#f5a623"]
@@ -327,6 +328,7 @@ def main():
     p.add_argument("--smooth-window", type=int, default=5, help="Centered moving-average window (points). Use 1 to disable.")
     p.add_argument("--grid-color", default="#6f7a81", help="Grid/axis color (hex).")
     p.add_argument("--line-colors", default=None, help="Comma-separated colors for the port traces.")
+    p.add_argument("--legend-labels", default=None, help="Comma-separated legend overrides for VSWR traces, in plotted series order.")
     args = p.parse_args()
 
     set_line_colors(parse_color_list(args.line_colors))
@@ -339,6 +341,7 @@ def main():
     if nports >= 2:
         traces.append(np.array([pair_to_complex(r[6], r[7], fmt) for r in data], dtype=complex))
         names.append("Port 2 (S22)")
+    names = apply_legend_labels(names, parse_legend_labels(args.legend_labels))
 
     # Determine default filename
     in_path = Path(args.input)

@@ -39,6 +39,14 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib import transforms as mtransforms
 from matplotlib.ticker import FuncFormatter, FixedFormatter, FixedLocator, NullFormatter, NullLocator
+from legend_utils import (
+    apply_legend_labels,
+    beamwidth_legend_label,
+    gain_legend_label,
+    parse_legend_labels,
+    polarization_sort_key,
+    polar_legend_label,
+)
 
 # ------------------ global color scheme ------------------
 DEFAULT_SOLID_COLORS = ["#2bb6f6", "#f5a623"]  # kept from gain plot
@@ -151,6 +159,13 @@ def parse_freq_ghz_from_text(txt: str):
     if unit.startswith('mhz'):
         return val / 1000.0
     return None
+
+
+def format_frequency_label(txt: str) -> str:
+    value_ghz = parse_freq_ghz_from_text(txt)
+    if value_ghz is None:
+        return str(txt)
+    return f"{format_frequency_tick(value_ghz)} GHz"
 
 
 def apply_freq_window(x_freq: np.ndarray, series_groups: list[list[np.ndarray]], fmin: float | None, fmax: float | None):
@@ -384,9 +399,27 @@ def main():
     parser.add_argument("--gain-y-step", type=float, default=None, help="Optional y-axis tick step for the gain plot.")
     parser.add_argument("--beamwidth-y-step", type=float, default=None, help="Optional y-axis tick step for the beamwidth plot.")
     parser.add_argument("--beam-eff-y-step", type=float, default=None, help="Optional y-axis tick step for the beam efficiency plot.")
+    parser.add_argument(
+        "--gain-legend-labels",
+        default=None,
+        help="Comma-separated legend overrides for gain traces, in plotted series order.",
+    )
+    parser.add_argument(
+        "--beamwidth-legend-labels",
+        default=None,
+        help="Comma-separated legend overrides for beamwidth traces, in plotted series order.",
+    )
+    parser.add_argument(
+        "--beam-eff-legend-labels",
+        default=None,
+        help="Comma-separated legend overrides for beam efficiency traces, in plotted series order.",
+    )
     args = parser.parse_args()
 
     set_line_colors(parse_color_list(args.line_colors))
+    gain_legend_labels = parse_legend_labels(args.gain_legend_labels)
+    beamwidth_legend_labels = parse_legend_labels(args.beamwidth_legend_labels)
+    beam_eff_legend_labels = parse_legend_labels(args.beam_eff_legend_labels)
 
     xls = pd.ExcelFile(args.input_xlsx)
     sheet_names = xls.sheet_names
@@ -414,42 +447,46 @@ def main():
             grouped[base]['phi90'] = xls.parse(s)
 
     # collect summary sheets for cartesian plots
-    summary_sheets = [s for s in sheet_names if s not in polar_sheets]
+    summary_sheets = sorted((s for s in sheet_names if s not in polar_sheets), key=polarization_sort_key)
 
     gain_series, gain_names, gain_freqs = [], [], []
     bw_series, bw_names, bw_styles, bw_freqs = [], [], [], []
     be_series, be_names, be_freqs = [], [], []
+    summary_frames: list[tuple[str, pd.DataFrame]] = []
 
     for sheet in summary_sheets:
         df = xls.parse(sheet)
+        summary_frames.append((sheet, df))
         if not set(["freq_GHz", "phi_cut_deg"]).issubset(df.columns):
             continue
         sel0 = df[df["phi_cut_deg"] == 0]
         if "max_gain_dBi" in df.columns and not sel0.empty:
             gain_freqs.append(sel0["freq_GHz"].to_numpy(dtype=float))
             gain_series.append(sel0["max_gain_dBi"].to_numpy(dtype=float))
-            gain_names.append(sheet)
-
-        if "beamwidth_6dB_2sided_deg" in df.columns:
-            for phi, label_suffix, style in [(0, "Azimuth", "-"), (90, "Elevation", "--")]:
-                sel = df[df["phi_cut_deg"] == phi]
-                if sel.empty:
-                    continue
-                bw_freqs.append(sel["freq_GHz"].to_numpy(dtype=float))
-                bw_series.append(sel["beamwidth_6dB_2sided_deg"].to_numpy(dtype=float))
-                bw_names.append(f"Beamwidth {sheet} {label_suffix}")
-                bw_styles.append(style)
+            gain_names.append(gain_legend_label(sheet))
 
         if "eta_beam_percent" in df.columns and not sel0.empty:
             be_freqs.append(sel0["freq_GHz"].to_numpy(dtype=float))
             be_series.append(sel0["eta_beam_percent"].to_numpy(dtype=float))
             be_names.append(f"{sheet}")
 
+    for phi, label_suffix, style in [(0, "Azimuth", "-"), (90, "Elevation", "--")]:
+        for sheet, df in summary_frames:
+            if not set(["freq_GHz", "phi_cut_deg", "beamwidth_6dB_2sided_deg"]).issubset(df.columns):
+                continue
+            sel = df[df["phi_cut_deg"] == phi]
+            if sel.empty:
+                continue
+            bw_freqs.append(sel["freq_GHz"].to_numpy(dtype=float))
+            bw_series.append(sel["beamwidth_6dB_2sided_deg"].to_numpy(dtype=float))
+            bw_names.append(beamwidth_legend_label(sheet, label_suffix))
+            bw_styles.append(style)
+
     # Gain plot
     if gain_series:
         series_g_raw = gain_series[:2]
         freq_g_raw = gain_freqs[:2]
-        names_g = gain_names[:2]
+        names_g = apply_legend_labels(gain_names[:2], gain_legend_labels)
         freq_g = common_frequency_axis(freq_g_raw)
         if freq_g is None or len(freq_g) == 0:
             print("Skipped gain plot: no common frequency axis across gain series.")
@@ -490,6 +527,7 @@ def main():
                 print("Skipped beamwidth plot: selected frequency window left no samples.")
             else:
                 out_bw = str(out_dir / f"{bookstem}_beamwidth.svg")
+                bw_plot_names = apply_legend_labels(bw_names, beamwidth_legend_labels)
                 bw_colors, solid_count, dashed_count = [], 0, 0
                 for st in bw_styles:
                     if st == '-':
@@ -497,7 +535,7 @@ def main():
                     else:
                         bw_colors.append(color_for_index('--', dashed_count)); dashed_count += 1
                 y_min, y_max = resolved_axis_limits(0.0, 100.0, args.beamwidth_ymin, args.beamwidth_ymax)
-                plot_xy(freq_bw, bw_series_aligned, bw_names, out_bw, y_label="Beamwidth / deg",
+                plot_xy(freq_bw, bw_series_aligned, bw_plot_names, out_bw, y_label="Beamwidth / deg",
                         styles=bw_styles, colors=bw_colors, grid_color=args.grid_color,
                         y_min=y_min, y_max=y_max,
                         y_step=resolved_tick_step(10.0, args.beamwidth_y_step),
@@ -519,8 +557,9 @@ def main():
                 out_be = str(out_dir / f"{bookstem}_beam_efficiency.svg")
                 be_styles = ["-"] * len(be_series_aligned)
                 be_colors = [color_for_index("-", i) for i in range(len(be_series_aligned))]
+                be_plot_names = apply_legend_labels(be_names, beam_eff_legend_labels)
                 y_min, y_max = resolved_axis_limits(0.0, 100.0, args.beam_eff_ymin, args.beam_eff_ymax)
-                plot_xy(freq_be, be_series_aligned, be_names, out_be, y_label="Beam Efficiency / %",
+                plot_xy(freq_be, be_series_aligned, be_plot_names, out_be, y_label="Beam Efficiency / %",
                         styles=be_styles, colors=be_colors,
                         grid_color=args.grid_color, y_min=y_min, y_max=y_max,
                         y_step=resolved_tick_step(10.0, args.beam_eff_y_step),
@@ -571,8 +610,10 @@ def main():
     # build datasets for a given phi across bases, limit to 2 curves, and with chosen linestyle
     def build_phi_datasets(freq_col: str, phi_key: str, linestyle: str):
         datasets = []
+        plane = "Azimuth" if phi_key == "phi0" else "Elevation"
+        frequency_label = format_frequency_label(freq_col)
         count = 0
-        for base in sorted(grouped.keys()):
+        for base in sorted(grouped.keys(), key=polarization_sort_key):
             df = grouped[base].get(phi_key)
             if df is None or freq_col not in df.columns:
                 continue
@@ -585,7 +626,7 @@ def main():
             datasets.append({
                 "angles": angles,
                 "series": series,
-                "label": f"{base}",
+                "label": polar_legend_label(base, plane, frequency_label),
                 "linestyle": linestyle,
             })
             count += 1
@@ -594,10 +635,11 @@ def main():
         return datasets
 
     for freq_col in polar_cols_iter():
+        frequency_label = format_frequency_label(freq_col)
         # Combined (Az solid, El dashed)
         datasets_combined = []
-        for base in sorted(grouped.keys()):
-            for phi_key, label_suffix, linestyle in [("phi0", "Azimuth", "-"), ("phi90", "Elevation", "--")]:
+        for phi_key, label_suffix, linestyle in [("phi0", "Azimuth", "-"), ("phi90", "Elevation", "--")]:
+            for base in sorted(grouped.keys(), key=polarization_sort_key):
                 df = grouped[base].get(phi_key)
                 if df is None or freq_col not in df.columns:
                     continue
@@ -610,7 +652,7 @@ def main():
                 datasets_combined.append({
                     "angles": angles,
                     "series": series,
-                    "label": f"{base} {label_suffix}",
+                    "label": polar_legend_label(base, label_suffix, frequency_label),
                     "linestyle": linestyle,
                 })
         if datasets_combined:

@@ -1370,6 +1370,29 @@ class ModernMainWindow(QMainWindow):
         add_form_row(plot_color_form, "Line color 2", self.plot_line2, "Secondary line color used by both the workbook plots and the VSWR plot.")
         plot_color_card.body.addLayout(plot_color_form)
 
+        legend_card = Card("Legend labels", "Style")
+        legend_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        legend_card.setMinimumWidth(320)
+        self.gain_legend_labels = QLineEdit(self.store.get("gain_legend_labels", ""))
+        self.beamwidth_legend_labels = QLineEdit(self.store.get("beamwidth_legend_labels", ""))
+        self.beam_eff_legend_labels = QLineEdit(self.store.get("beam_eff_legend_labels", ""))
+        self.vswr_legend_labels = QLineEdit(self.store.get("vswr_legend_labels", ""))
+        self.gain_legend_labels.textChanged.connect(lambda v: self.store.set("gain_legend_labels", v))
+        self.beamwidth_legend_labels.textChanged.connect(lambda v: self.store.set("beamwidth_legend_labels", v))
+        self.beam_eff_legend_labels.textChanged.connect(lambda v: self.store.set("beam_eff_legend_labels", v))
+        self.vswr_legend_labels.textChanged.connect(lambda v: self.store.set("vswr_legend_labels", v))
+        legend_form = QFormLayout()
+        legend_form.setContentsMargins(0, 0, 0, 0)
+        legend_form.setHorizontalSpacing(10)
+        legend_form.setVerticalSpacing(8)
+        legend_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        legend_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(legend_form, "Gain legends", self.gain_legend_labels, "Optional comma-separated legend labels for the gain plot, in trace order.")
+        add_form_row(legend_form, "Beamwidth legends", self.beamwidth_legend_labels, "Optional comma-separated legend labels for the beamwidth plot, in trace order.")
+        add_form_row(legend_form, "Beam eff legends", self.beam_eff_legend_labels, "Optional comma-separated legend labels for the beam-efficiency plot, in trace order.")
+        add_form_row(legend_form, "VSWR legends", self.vswr_legend_labels, "Optional comma-separated legend labels for the VSWR plot, in trace order.")
+        legend_card.body.addLayout(legend_form)
+
         processing_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 2, 1]})
         self.processing_panel = processing_panel
         processing_panel.set_cards([
@@ -1385,7 +1408,7 @@ class ModernMainWindow(QMainWindow):
 
         colors_panel = ResponsiveCardPanel(max_columns=2, min_card_width=320)
         self.colors_panel = colors_panel
-        colors_panel.set_cards([plot_color_card, polar_card])
+        colors_panel.set_cards([plot_color_card, legend_card, polar_card])
         colors_lay.addWidget(colors_panel)
         colors_lay.addStretch(1)
 
@@ -1470,6 +1493,10 @@ class ModernMainWindow(QMainWindow):
         self.plot_grid.set_color(DEFAULT_GRID_COLOR, persist=False)
         self.plot_line1.set_color(DEFAULT_LINE_COLORS[0][1], persist=False)
         self.plot_line2.set_color(DEFAULT_LINE_COLORS[1][1], persist=False)
+        self.gain_legend_labels.clear()
+        self.beamwidth_legend_labels.clear()
+        self.beam_eff_legend_labels.clear()
+        self.vswr_legend_labels.clear()
         self.rings.setText("0,-7.5,-15,-22.5,-30")
         self.angle_step.setValue(30)
         self.clip_db.setValue(-30.0)
@@ -1507,6 +1534,10 @@ class ModernMainWindow(QMainWindow):
             "grid_color": DEFAULT_GRID_COLOR,
             "plot_line_1": DEFAULT_LINE_COLORS[0][1],
             "plot_line_2": DEFAULT_LINE_COLORS[1][1],
+            "gain_legend_labels": "",
+            "beamwidth_legend_labels": "",
+            "beam_eff_legend_labels": "",
+            "vswr_legend_labels": "",
             "rings": "0,-7.5,-15,-22.5,-30",
             "angle": 30,
             "clip": -30.0,
@@ -1956,6 +1987,10 @@ class ModernMainWindow(QMainWindow):
             self.plot_grid.colorChanged,
             self.plot_line1.colorChanged,
             self.plot_line2.colorChanged,
+            self.gain_legend_labels.textChanged,
+            self.beamwidth_legend_labels.textChanged,
+            self.beam_eff_legend_labels.textChanged,
+            self.vswr_legend_labels.textChanged,
             self.rings.textChanged,
             self.angle_step.valueChanged,
             self.clip_db.valueChanged,
@@ -2006,12 +2041,14 @@ class ModernMainWindow(QMainWindow):
                 "gain_ymin", "gain_ymax", "gain_y_step",
                 "beamwidth_ymin", "beamwidth_ymax", "beamwidth_y_step",
                 "beam_eff_ymin", "beam_eff_ymax", "beam_eff_y_step",
-                "grid_color", "plot_line_1", "plot_line_2", "rings", "angle", "clip",
+                "grid_color", "plot_line_1", "plot_line_2",
+                "gain_legend_labels", "beamwidth_legend_labels", "beam_eff_legend_labels",
+                "rings", "angle", "clip",
             ],
             "vswr": [
                 "shared_xstep", "shared_fmin", "shared_fmax", "shared_xlog",
                 "vswr_ymin", "vswr_ymax", "vswr_ystep", "vswr_smooth",
-                "grid_color", "plot_line_1", "plot_line_2",
+                "grid_color", "plot_line_1", "plot_line_2", "vswr_legend_labels",
             ],
         }
         return {key: values[key] for key in setting_keys.get(stage_key, []) if key in values}
@@ -2736,6 +2773,10 @@ class ModernMainWindow(QMainWindow):
             "grid_color": self.plot_grid.color(),
             "plot_line_1": self.plot_line1.color(),
             "plot_line_2": self.plot_line2.color(),
+            "gain_legend_labels": self.gain_legend_labels.text().strip(),
+            "beamwidth_legend_labels": self.beamwidth_legend_labels.text().strip(),
+            "beam_eff_legend_labels": self.beam_eff_legend_labels.text().strip(),
+            "vswr_legend_labels": self.vswr_legend_labels.text().strip(),
             "rings": self.rings.text().strip(),
             "angle": int(self.angle_step.value()),
             "clip": float(self.clip_db.value()),
@@ -2767,6 +2808,10 @@ class ModernMainWindow(QMainWindow):
         if "grid_color" in values: self.plot_grid.set_color(str(values["grid_color"]))
         if "plot_line_1" in values: self.plot_line1.set_color(str(values["plot_line_1"]))
         if "plot_line_2" in values: self.plot_line2.set_color(str(values["plot_line_2"]))
+        if "gain_legend_labels" in values: self.gain_legend_labels.setText(str(values["gain_legend_labels"]))
+        if "beamwidth_legend_labels" in values: self.beamwidth_legend_labels.setText(str(values["beamwidth_legend_labels"]))
+        if "beam_eff_legend_labels" in values: self.beam_eff_legend_labels.setText(str(values["beam_eff_legend_labels"]))
+        if "vswr_legend_labels" in values: self.vswr_legend_labels.setText(str(values["vswr_legend_labels"]))
         if "rings" in values: self.rings.setText(str(values["rings"]))
         if "angle" in values: self.angle_step.setValue(int(values["angle"]))
         if "clip" in values: self.clip_db.setValue(float(values["clip"]))
@@ -3301,6 +3346,12 @@ class ModernMainWindow(QMainWindow):
                 "--clip-db", str(self.clip_db.value()),
                 "--smooth-window", str(self.plot_smooth.value()),
                 "--x-step", str(self.shared_xstep.value())]
+        if self.gain_legend_labels.text().strip():
+            args += ["--gain-legend-labels", self.gain_legend_labels.text().strip()]
+        if self.beamwidth_legend_labels.text().strip():
+            args += ["--beamwidth-legend-labels", self.beamwidth_legend_labels.text().strip()]
+        if self.beam_eff_legend_labels.text().strip():
+            args += ["--beam-eff-legend-labels", self.beam_eff_legend_labels.text().strip()]
         if self.gain_ymin.value() != 0:
             args += ["--gain-ymin", f"{self.gain_ymin.value()}"]
         if self.gain_ymax.value() != 0:
@@ -3349,6 +3400,8 @@ class ModernMainWindow(QMainWindow):
                 "--ymax", str(self.vswr_ymax.value()),
                 "--y-step", str(self.vswr_ystep.value()),
                 "--smooth-window", str(self.vswr_smooth.value())]
+        if self.vswr_legend_labels.text().strip():
+            args += ["--legend-labels", self.vswr_legend_labels.text().strip()]
         if self.shared_xlog.isChecked():
             args.append("--x-log")
         if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
@@ -3393,6 +3446,12 @@ class ModernMainWindow(QMainWindow):
                 "--clip-db", str(self.clip_db.value()),
                 "--smooth-window", str(self.plot_smooth.value()),
                 "--x-step", str(self.shared_xstep.value())]
+        if self.gain_legend_labels.text().strip():
+            args_plot += ["--gain-legend-labels", self.gain_legend_labels.text().strip()]
+        if self.beamwidth_legend_labels.text().strip():
+            args_plot += ["--beamwidth-legend-labels", self.beamwidth_legend_labels.text().strip()]
+        if self.beam_eff_legend_labels.text().strip():
+            args_plot += ["--beam-eff-legend-labels", self.beam_eff_legend_labels.text().strip()]
         if self.gain_ymin.value() != 0:
             args_plot += ["--gain-ymin", f"{self.gain_ymin.value()}"]
         if self.gain_ymax.value() != 0:
@@ -3428,6 +3487,8 @@ class ModernMainWindow(QMainWindow):
                     "--ymax", str(self.vswr_ymax.value()),
                     "--y-step", str(self.vswr_ystep.value()),
                     "--smooth-window", str(self.vswr_smooth.value())]
+            if self.vswr_legend_labels.text().strip():
+                args_vswr += ["--legend-labels", self.vswr_legend_labels.text().strip()]
             if self.shared_xlog.isChecked():
                 args_vswr.append("--x-log")
             if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():

@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import argparse
-import html
 import math
+import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import fitz
@@ -12,6 +13,21 @@ import pandas as pd
 
 fitz.TOOLS.mupdf_display_errors(False)
 fitz.TOOLS.mupdf_display_warnings(False)
+
+THIS_DIR = Path(__file__).resolve().parent
+MYRIAD_FONT_DIR = THIS_DIR / "Fonts" / "Myriad Pro"
+MYRIAD_FONT_FILES = {
+    "MyriadPro-Regular": MYRIAD_FONT_DIR / "MYRIADPRO-REGULAR.OTF",
+    "MyriadPro-Bold": MYRIAD_FONT_DIR / "MYRIADPRO-BOLD.OTF",
+    "MyriadPro-Semibold": MYRIAD_FONT_DIR / "MYRIADPRO-SEMIBOLD.OTF",
+    "MyriadPro-Light": MYRIAD_FONT_DIR / "MyriadPro-Light.otf",
+    "MyriadPro-Cond": MYRIAD_FONT_DIR / "MYRIADPRO-COND.OTF",
+    "MyriadPro-BoldCond": MYRIAD_FONT_DIR / "MYRIADPRO-BOLDCOND.OTF",
+    "MyriadPro-BoldCondIt": MYRIAD_FONT_DIR / "MYRIADPRO-BOLDCONDIT.OTF",
+    "MyriadPro-BoldIt": MYRIAD_FONT_DIR / "MYRIADPRO-BOLDIT.OTF",
+    "MyriadPro-CondIt": MYRIAD_FONT_DIR / "MYRIADPRO-CONDIT.OTF",
+    "MyriadPro-SemiboldIt": MYRIAD_FONT_DIR / "MYRIADPRO-SEMIBOLDIT.OTF",
+}
 
 FIELD_LABELS = [
     "Frequency Range",
@@ -40,9 +56,17 @@ class TextSpan:
 class ReplacementSlot:
     label: str
     erase_rect: fitz.Rect
-    text_rect: fitz.Rect
+    origin: tuple[float, float]
+    max_width: float
+    font_name: str
     font_size: float
     color: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class ChartSlot:
+    rect: fitz.Rect
+    image_name: str
 
 
 def _load_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
@@ -66,8 +90,21 @@ def _round_half_up(value: float) -> int:
     return int(math.floor(float(value) + 0.5))
 
 
+def _round_half_up_to_decimals(value: float, decimals: int) -> float:
+    factor = 10 ** decimals
+    scaled = float(value) * factor
+    if scaled >= 0:
+        return math.floor(scaled + 0.5) / factor
+    return math.ceil(scaled - 0.5) / factor
+
+
 def _format_int_with_suffix(value: float, suffix: str) -> str:
     return f"{_round_half_up(value)} {suffix}".strip()
+
+
+def _format_decimal_with_suffix(value: float, suffix: str, decimals: int) -> str:
+    rounded = _round_half_up_to_decimals(value, decimals)
+    return f"{rounded:.{decimals}f} {suffix}".strip()
 
 
 def _format_frequency_range(fmin_ghz: float, fmax_ghz: float) -> str:
@@ -84,9 +121,8 @@ def _format_beamwidth_text(horizontal: pd.Series, vertical: pd.Series, three_db_
 
 
 def _format_vswr_limit(max_vswr: float) -> str:
-    limit = math.ceil(float(max_vswr) * 100.0) / 100.0
-    value = f"{limit:.2f}".rstrip("0").rstrip(".")
-    return f"<{value}"
+    value = _round_half_up_to_decimals(max_vswr, 1)
+    return f"<{value:.1f}"
 
 
 def _normalize_polarization(value: object) -> str:
@@ -102,8 +138,36 @@ def _normalize_polarization(value: object) -> str:
     return text
 
 
+def _infer_polarization_from_source_file(path_text: object) -> str:
+    stem = Path(str(path_text or "")).stem
+    tokens = [token.lower() for token in re.split(r"[_\-\s]+", stem) if token]
+    aliases = {
+        "horizontal": "Horizontal",
+        "vertical": "Vertical",
+        "rhcp": "RHCP",
+        "lhcp": "LHCP",
+        "hcp": "HCP",
+        "vpol": "Vertical",
+        "hpol": "Horizontal",
+    }
+    for token in reversed(tokens):
+        if token in aliases:
+            return aliases[token]
+        if token == "h":
+            return "Horizontal"
+        if token == "v":
+            return "Vertical"
+    return stem
+
+
+def _polarization_keys_from_source_files(ffs_summary: pd.DataFrame) -> pd.Series:
+    if "source_file" not in ffs_summary.columns:
+        raise ValueError("ffs_summary is missing required column: source_file")
+    return ffs_summary["source_file"].map(_infer_polarization_from_source_file).map(_normalize_polarization)
+
+
 def _polarization_text(ffs_summary: pd.DataFrame) -> str:
-    values = {_normalize_polarization(value) for value in ffs_summary.get("polarization", []) if str(value).strip()}
+    values = {value for value in _polarization_keys_from_source_files(ffs_summary) if str(value).strip()}
     if {"horizontal", "vertical"}.issubset(values):
         return "Dual Linear H + V"
     if {"rhcp", "lhcp"}.issubset(values):
@@ -129,7 +193,7 @@ def build_replacements_from_workbook(extract_workbook: Path) -> dict[str, str]:
         raise ValueError("The extracted workbook has no Touchstone summary rows.")
 
     required_ffs = {
-        "polarization",
+        "source_file",
         "freq_min_GHz",
         "freq_max_GHz",
         "max_gain_dBi_in_range",
@@ -148,7 +212,7 @@ def build_replacements_from_workbook(extract_workbook: Path) -> dict[str, str]:
     if missing_touchstone:
         raise ValueError(f"touchstone_summary is missing required columns: {', '.join(missing_touchstone)}")
 
-    polarizations = ffs_summary.assign(_polarization_key=ffs_summary["polarization"].map(_normalize_polarization))
+    polarizations = ffs_summary.assign(_polarization_key=_polarization_keys_from_source_files(ffs_summary))
     horizontal = polarizations[polarizations["_polarization_key"] == "horizontal"]
     vertical = polarizations[polarizations["_polarization_key"] == "vertical"]
     if horizontal.empty or vertical.empty:
@@ -192,7 +256,7 @@ def build_replacements_from_workbook(extract_workbook: Path) -> dict[str, str]:
 
     return {
         "Frequency Range": _format_frequency_range(freq_min, freq_max),
-        "Gain": _format_int_with_suffix(gain, "dBi"),
+        "Gain": _format_decimal_with_suffix(gain, "dBi", 1),
         "Azimuth Beam Width -3 dB/-6dB": _format_beamwidth_text(horizontal_row, vertical_row, "avg_azimuth_bw_3dB_deg", "avg_azimuth_bw_6dB_deg"),
         "Elevation Beam Width -3 dB/-6dB": _format_beamwidth_text(horizontal_row, vertical_row, "avg_elevation_bw_3dB_deg", "avg_elevation_bw_6dB_deg"),
         "Beam Efficiency": f"{_round_half_up(beam_eff)} %*",
@@ -222,6 +286,20 @@ def _extract_page_spans(page: fitz.Page) -> list[TextSpan]:
                     )
                 )
     return spans
+
+
+def _font_path_for_display_font(display_font: str) -> Path | None:
+    path = MYRIAD_FONT_FILES.get(display_font)
+    if path and path.exists():
+        return path
+    return None
+
+
+@lru_cache(maxsize=None)
+def _measurement_font(font_name: str, font_path_text: str | None) -> fitz.Font:
+    if font_path_text:
+        return fitz.Font(fontfile=font_path_text)
+    return fitz.Font(fontname=font_name)
 
 
 def _int_color_to_rgb(color: int) -> tuple[float, float, float]:
@@ -292,19 +370,102 @@ def _find_replacement_slot(page: fitz.Page, label: str) -> ReplacementSlot:
         right_edge,
         min(page.rect.y1, value_span.bbox.y1),
     )
-    text_rect = fitz.Rect(
-        value_span.bbox.x0,
-        max(0.0, value_span.bbox.y0 - 1.0),
-        right_edge,
-        min(page.rect.y1, value_span.bbox.y1 + 1.5),
-    )
     return ReplacementSlot(
         label=label,
         erase_rect=erase_rect,
-        text_rect=text_rect,
+        origin=value_span.origin,
+        max_width=max(1.0, right_edge - value_span.origin[0]),
+        font_name=value_span.font,
         font_size=float(value_span.size),
         color=_int_color_to_rgb(value_span.color),
     )
+
+
+def _fit_font_size(text: str, slot: ReplacementSlot, font_path: Path | None) -> float:
+    font = _measurement_font(slot.font_name, str(font_path) if font_path else None)
+    target_size = slot.font_size
+    text_width = font.text_length(text, fontsize=target_size)
+    if text_width <= slot.max_width:
+        return target_size
+    if text_width <= 0:
+        return target_size
+    scaled_size = target_size * (slot.max_width / text_width)
+    return max(target_size * 0.75, scaled_size)
+
+
+def _stem_without_suffix(stem: str, suffix: str) -> str:
+    return stem[: -len(suffix)] if stem.endswith(suffix) else stem
+
+
+def _find_plot_asset(output: Path, extract_workbook: Path, suffix: str) -> Path:
+    candidate_dirs: list[Path] = []
+    for path in [output.parent.resolve(), extract_workbook.parent.resolve()]:
+        if path not in candidate_dirs:
+            candidate_dirs.append(path)
+
+    candidate_prefixes: list[str] = []
+    for stem in [
+        _stem_without_suffix(extract_workbook.stem, "_extracted_data"),
+        _stem_without_suffix(output.stem, "_datasheet"),
+        extract_workbook.stem,
+        output.stem,
+    ]:
+        if stem and stem not in candidate_prefixes:
+            candidate_prefixes.append(stem)
+
+    checked: list[Path] = []
+    for directory in candidate_dirs:
+        for prefix in candidate_prefixes:
+            candidate = directory / f"{prefix}{suffix}"
+            checked.append(candidate)
+            if candidate.exists():
+                return candidate
+    checked_list = ", ".join(str(path) for path in checked)
+    raise ValueError(f"Missing required plot asset '{suffix}'. Checked: {checked_list}")
+
+
+def _collect_chart_slots(page: fitz.Page) -> list[ChartSlot]:
+    slots: list[ChartSlot] = []
+    for info in page.get_images(full=True):
+        xref = int(info[0])
+        image_name = str(info[7] or "")
+        rects = page.get_image_rects(xref)
+        for rect in rects:
+            slots.append(ChartSlot(rect=fitz.Rect(rect), image_name=image_name))
+    slots.sort(key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
+    return slots
+
+
+def _render_svg_to_pixmap(svg_path: Path, target_rect: fitz.Rect) -> fitz.Pixmap:
+    with fitz.open(svg_path) as svg_doc:
+        svg_page = svg_doc[0]
+        scale = max(
+            1.0,
+            (target_rect.width * 2.0) / max(svg_page.rect.width, 1.0),
+            (target_rect.height * 2.0) / max(svg_page.rect.height, 1.0),
+        )
+        return svg_page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+
+
+def _replace_chart_images(doc: fitz.Document, output: Path, extract_workbook: Path) -> None:
+    if doc.page_count < 2:
+        return
+
+    page = doc[1]
+    slots = _collect_chart_slots(page)
+    if len(slots) < 2:
+        raise ValueError("Datasheet template page 2 does not contain the expected chart image slots.")
+
+    replacements = [
+        (slots[0].rect, _find_plot_asset(output, extract_workbook, "_gain.svg")),
+        (slots[1].rect, _find_plot_asset(output, extract_workbook, "_beamwidth.svg")),
+    ]
+    for rect, _ in replacements:
+        page.add_redact_annot(rect, fill=(1.0, 1.0, 1.0))
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+    for rect, svg_path in replacements:
+        pixmap = _render_svg_to_pixmap(svg_path, rect)
+        page.insert_image(rect, pixmap=pixmap, keep_proportion=True, overlay=True)
 
 
 def build_datasheet_pdf(output: Path, template: Path, extract_workbook: Path) -> dict[str, str]:
@@ -316,26 +477,36 @@ def build_datasheet_pdf(output: Path, template: Path, extract_workbook: Path) ->
     with fitz.open(template) as doc:
         page = doc[0]
         slots = {label: _find_replacement_slot(page, label) for label in FIELD_LABELS}
+        registered_fonts: set[str] = set()
         for slot in slots.values():
             page.add_redact_annot(slot.erase_rect, fill=(1.0, 1.0, 1.0))
         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
         for label in FIELD_LABELS:
             slot = slots[label]
             text = replacements[label]
-            css = (
-                f"* {{ margin: 0; padding: 0; "
-                f"font-family: Arial, Calibri, \"Segoe UI\", sans-serif; "
-                f"font-size: {slot.font_size:.3f}pt; color: {_rgb_to_hex(slot.color)}; }}"
+            font_path = _font_path_for_display_font(slot.font_name)
+            pdf_font_name = slot.font_name
+            fontfile = None
+            if font_path is not None:
+                fontfile = str(font_path)
+                if pdf_font_name not in registered_fonts:
+                    page.insert_font(fontname=pdf_font_name, fontfile=fontfile)
+                    registered_fonts.add(pdf_font_name)
+            else:
+                pdf_font_name = _resolve_font_name(page, slot.font_name)
+            fontsize = _fit_font_size(text, slot, font_path)
+            result = page.insert_text(
+                slot.origin,
+                text,
+                fontsize=fontsize,
+                fontname=pdf_font_name,
+                fontfile=fontfile,
+                color=slot.color,
             )
-            result = page.insert_htmlbox(
-                slot.text_rect,
-                html.escape(text).replace("\n", "<br>"),
-                css=css,
-                scale_low=0.8,
-            )
-            if not result:
+            if result <= 0:
                 raise ValueError(f"Replacement text for '{label}' could not be inserted.")
 
+        _replace_chart_images(doc, output, extract_workbook)
         doc.save(output, garbage=3, deflate=True)
 
     return replacements

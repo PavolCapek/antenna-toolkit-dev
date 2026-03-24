@@ -146,13 +146,13 @@ python beamwidth_xlsx.py "Projects\SH60WB\SH60WB.xlsx" "Input data\SH60WB_Horizo
 Generate plots from workbook:
 
 ```powershell
-python plot.py "Projects\SH60WB\SH60WB.xlsx" --out-dir "Projects\SH60WB" --fmin 4.8 --fmax 6.2 --x-step 0.2
+python plot.py "Projects\SH60WB\SH60WB.xlsx" --out-dir "Projects\SH60WB" --fmin 4.8 --fmax 6.2 --x-step 0.2 --gain-legend-labels "Horizontal,Vertical" --beamwidth-legend-labels "Horizontal Azimuth,Horizontal Elevation,Vertical Azimuth,Vertical Elevation"
 ```
 
 Generate VSWR plot:
 
 ```powershell
-python plot_vswr.py "Input data\SH60WB.s2p" --output "Projects\SH60WB\SH60WB_vswr.svg" --fmin 4.8 --fmax 6.2 --x-step 0.2
+python plot_vswr.py "Input data\SH60WB.s2p" --output "Projects\SH60WB\SH60WB_vswr.svg" --fmin 4.8 --fmax 6.2 --x-step 0.2 --legend-labels "Port A,Port B"
 ```
 
 Generate datasheet PDF:
