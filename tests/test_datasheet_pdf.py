@@ -36,12 +36,18 @@ class DatasheetPdfTests(unittest.TestCase):
         self.output_pdf = self.root / "output.pdf"
         self.gain_svg = self.root / "extract_gain.svg"
         self.beamwidth_svg = self.root / "extract_beamwidth.svg"
+        self.polar_azimuth_dir = self.root / "polar_single" / "azimuth"
+        self.polar_elevation_dir = self.root / "polar_single" / "elevation"
+        self.azimuth_svg = self.polar_azimuth_dir / "extract_polar_azimuth_5.500_GHz.svg"
+        self.elevation_svg = self.polar_elevation_dir / "extract_polar_elevation_5.500_GHz.svg"
         self.page2_gain_rect = fitz.Rect(24.0, 120.0, 324.0, 240.0)
         self.page2_beamwidth_rect = fitz.Rect(24.0, 280.0, 324.0, 400.0)
         self.page2_azimuth_rect = fitz.Rect(24.0, 460.0, 164.0, 600.0)
         self.page2_elevation_rect = fitz.Rect(204.0, 460.0, 344.0, 600.0)
         self._write_svg(self.gain_svg, "#00ff00", width=300, height=120)
         self._write_svg(self.beamwidth_svg, "#ffff00", width=300, height=120)
+        self._write_svg(self.azimuth_svg, "#00ffff", width=140, height=140)
+        self._write_svg(self.elevation_svg, "#ff00ff", width=140, height=140)
         self._write_template_pdf()
         self._write_extract_workbook()
 
@@ -72,9 +78,20 @@ class DatasheetPdfTests(unittest.TestCase):
             charts_page.insert_image(self.page2_beamwidth_rect, pixmap=blue_pix, keep_proportion=True)
             charts_page.insert_image(self.page2_azimuth_rect, pixmap=cyan_pix, keep_proportion=True)
             charts_page.insert_image(self.page2_elevation_rect, pixmap=magenta_pix, keep_proportion=True)
+            charts_page.insert_text((360.0, 180.0), "Gain H (IEEE)", fontsize=7, fontname="helv")
+            charts_page.insert_text((360.0, 196.0), "Gain V (IEEE)", fontsize=7, fontname="helv")
+            charts_page.insert_text((360.0, 338.0), "Beamwidth Azimuth H -6 dB", fontsize=7, fontname="helv")
+            charts_page.insert_text((360.0, 354.0), "Beamwidth Azimuth V -6 dB", fontsize=7, fontname="helv")
+            charts_page.insert_text((360.0, 370.0), "Beamwidth Elevation H -6 dB", fontsize=7, fontname="helv")
+            charts_page.insert_text((360.0, 386.0), "Beamwidth Elevation V -6 dB", fontsize=7, fontname="helv")
+            charts_page.insert_text((28.0, 616.0), "H - Port Pattern Azimuth 5.5 GHz", fontsize=7, fontname="helv")
+            charts_page.insert_text((28.0, 632.0), "V - Port Pattern Azimuth 5.5 GHz", fontsize=7, fontname="helv")
+            charts_page.insert_text((208.0, 616.0), "H - Port Pattern Elevation 5.5 GHz", fontsize=7, fontname="helv")
+            charts_page.insert_text((208.0, 632.0), "V - Port Pattern Elevation 5.5 GHz", fontsize=7, fontname="helv")
             doc.save(self.template_pdf)
 
     def _write_svg(self, path: Path, fill: str, width: int, height: int) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             (
                 f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
@@ -215,6 +232,9 @@ class DatasheetPdfTests(unittest.TestCase):
             gain_rgb = self._pixel_rgb(page, self.page2_gain_rect.tl + fitz.Point(self.page2_gain_rect.width / 2.0, self.page2_gain_rect.height / 2.0))
             beamwidth_rgb = self._pixel_rgb(page, self.page2_beamwidth_rect.tl + fitz.Point(self.page2_beamwidth_rect.width / 2.0, self.page2_beamwidth_rect.height / 2.0))
             azimuth_rgb = self._pixel_rgb(page, self.page2_azimuth_rect.tl + fitz.Point(self.page2_azimuth_rect.width / 2.0, self.page2_azimuth_rect.height / 2.0))
+            elevation_rgb = self._pixel_rgb(page, self.page2_elevation_rect.tl + fitz.Point(self.page2_elevation_rect.width / 2.0, self.page2_elevation_rect.height / 2.0))
+            page2_text = page.get_text()
+            page2_images = page.get_images(full=True)
 
         self.assertGreater(gain_rgb[1], 200)
         self.assertLess(gain_rgb[0], 80)
@@ -222,6 +242,12 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertGreater(beamwidth_rgb[1], 200)
         self.assertGreater(azimuth_rgb[1], 200)
         self.assertGreater(azimuth_rgb[2], 200)
+        self.assertGreater(elevation_rgb[0], 200)
+        self.assertGreater(elevation_rgb[2], 200)
+        self.assertNotIn("Gain H (IEEE)", page2_text)
+        self.assertNotIn("Beamwidth Azimuth H -6 dB", page2_text)
+        self.assertNotIn("Port Pattern Azimuth 5.5 GHz", page2_text)
+        self.assertEqual(page2_images, [])
 
     def test_build_replacements_from_workbook_derives_polarization_from_source_file(self) -> None:
         ffs_summary = pd.DataFrame(

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -67,6 +68,13 @@ class ReplacementSlot:
 class ChartSlot:
     rect: fitz.Rect
     image_name: str
+
+
+@dataclass(frozen=True)
+class ChartReplacement:
+    kind: str
+    rect: fitz.Rect
+    asset_path: Path
 
 
 def _load_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
@@ -424,6 +432,81 @@ def _find_plot_asset(output: Path, extract_workbook: Path, suffix: str) -> Path:
     raise ValueError(f"Missing required plot asset '{suffix}'. Checked: {checked_list}")
 
 
+def _extract_frequency_ghz(text: str) -> float | None:
+    match = re.search(r"(\d+(?:[\.,]\d+)?)\s*ghz", str(text), re.IGNORECASE)
+    if not match:
+        return None
+    return float(match.group(1).replace(",", "."))
+
+
+def _parse_frequency_from_polar_asset(path: Path, plane: str) -> float | None:
+    pattern = rf"_polar_{re.escape(plane)}_(\d+(?:\.\d+)?)_GHz\.svg$"
+    match = re.search(pattern, path.name, re.IGNORECASE)
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def _candidate_dirs(output: Path, extract_workbook: Path) -> list[Path]:
+    candidate_dirs: list[Path] = []
+    for path in [output.parent.resolve(), extract_workbook.parent.resolve()]:
+        if path not in candidate_dirs:
+            candidate_dirs.append(path)
+    return candidate_dirs
+
+
+def _candidate_prefixes(output: Path, extract_workbook: Path) -> list[str]:
+    candidate_prefixes: list[str] = []
+    for stem in [
+        _stem_without_suffix(extract_workbook.stem, "_extracted_data"),
+        _stem_without_suffix(output.stem, "_datasheet"),
+        extract_workbook.stem,
+        output.stem,
+    ]:
+        if stem and stem not in candidate_prefixes:
+            candidate_prefixes.append(stem)
+    return candidate_prefixes
+
+
+def _find_template_polar_frequency(page: fitz.Page) -> float | None:
+    values = [
+        _extract_frequency_ghz(span.text)
+        for span in _extract_page_spans(page)
+        if "Port Pattern" in span.text
+    ]
+    values = [value for value in values if value is not None]
+    if not values:
+        return None
+    rounded = [round(value, 6) for value in values]
+    return float(Counter(rounded).most_common(1)[0][0])
+
+
+def _find_polar_plot_assets(page: fitz.Page, output: Path, extract_workbook: Path) -> tuple[Path, Path]:
+    plane_assets: dict[str, dict[float, Path]] = {"azimuth": {}, "elevation": {}}
+    checked: list[Path] = []
+    for directory in _candidate_dirs(output, extract_workbook):
+        for prefix in _candidate_prefixes(output, extract_workbook):
+            for plane in plane_assets:
+                base_dir = directory / "polar_single" / plane
+                pattern = f"{prefix}_polar_{plane}_*_GHz.svg"
+                for candidate in sorted(base_dir.glob(pattern)):
+                    checked.append(candidate)
+                    frequency = _parse_frequency_from_polar_asset(candidate, plane)
+                    if frequency is not None:
+                        plane_assets[plane].setdefault(frequency, candidate)
+
+    common_frequencies = sorted(set(plane_assets["azimuth"]).intersection(plane_assets["elevation"]))
+    if not common_frequencies:
+        checked_list = ", ".join(str(path) for path in checked) if checked else "none"
+        raise ValueError(f"Missing required polar plot assets. Checked: {checked_list}")
+
+    template_frequency = _find_template_polar_frequency(page)
+    if template_frequency is None:
+        template_frequency = sum(common_frequencies) / len(common_frequencies)
+    selected_frequency = min(common_frequencies, key=lambda value: (abs(value - template_frequency), value))
+    return plane_assets["azimuth"][selected_frequency], plane_assets["elevation"][selected_frequency]
+
+
 def _collect_chart_slots(page: fitz.Page) -> list[ChartSlot]:
     slots: list[ChartSlot] = []
     for info in page.get_images(full=True):
@@ -436,15 +519,90 @@ def _collect_chart_slots(page: fitz.Page) -> list[ChartSlot]:
     return slots
 
 
-def _render_svg_to_pixmap(svg_path: Path, target_rect: fitz.Rect) -> fitz.Pixmap:
-    with fitz.open(svg_path) as svg_doc:
-        svg_page = svg_doc[0]
-        scale = max(
-            1.0,
-            (target_rect.width * 2.0) / max(svg_page.rect.width, 1.0),
-            (target_rect.height * 2.0) / max(svg_page.rect.height, 1.0),
+def _expand_rect(rect: fitz.Rect, padding: float = 2.0) -> fitz.Rect:
+    return fitz.Rect(rect.x0 - padding, rect.y0 - padding, rect.x1 + padding, rect.y1 + padding)
+
+
+def _union_rects(rects: list[fitz.Rect]) -> fitz.Rect:
+    combined = fitz.Rect(rects[0])
+    for rect in rects[1:]:
+        combined.include_rect(rect)
+    return combined
+
+
+def _legend_group(text: str) -> str | None:
+    stripped = str(text).strip()
+    if re.match(r"^Gain\b", stripped):
+        return "gain"
+    if re.match(r"^Beamwidth\b", stripped):
+        return "beamwidth"
+    if "Port Pattern" in stripped:
+        return "polar"
+    return None
+
+
+def _build_chart_replacements(page: fitz.Page, output: Path, extract_workbook: Path) -> list[ChartReplacement]:
+    slots = _collect_chart_slots(page)
+    if len(slots) < 2:
+        raise ValueError("Datasheet template page 2 does not contain the expected chart image slots.")
+
+    replacements: list[ChartReplacement] = [
+        ChartReplacement("gain", fitz.Rect(slots[0].rect), _find_plot_asset(output, extract_workbook, "_gain.svg")),
+        ChartReplacement("beamwidth", fitz.Rect(slots[1].rect), _find_plot_asset(output, extract_workbook, "_beamwidth.svg")),
+    ]
+    if len(slots) >= 4:
+        azimuth_asset, elevation_asset = _find_polar_plot_assets(page, output, extract_workbook)
+        replacements.extend(
+            [
+                ChartReplacement("azimuth", fitz.Rect(slots[2].rect), azimuth_asset),
+                ChartReplacement("elevation", fitz.Rect(slots[3].rect), elevation_asset),
+            ]
         )
-        return svg_page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+
+    index_by_kind = {replacement.kind: idx for idx, replacement in enumerate(replacements)}
+    spans = _extract_page_spans(page)
+    polar_centers = {
+        "azimuth": _center_y(replacements[index_by_kind["azimuth"]].rect) if "azimuth" in index_by_kind else None,
+        "elevation": _center_y(replacements[index_by_kind["elevation"]].rect) if "elevation" in index_by_kind else None,
+    }
+    polar_x_centers = {
+        "azimuth": (replacements[index_by_kind["azimuth"]].rect.x0 + replacements[index_by_kind["azimuth"]].rect.x1) / 2.0 if "azimuth" in index_by_kind else None,
+        "elevation": (replacements[index_by_kind["elevation"]].rect.x0 + replacements[index_by_kind["elevation"]].rect.x1) / 2.0 if "elevation" in index_by_kind else None,
+    }
+    legend_rects: dict[str, list[fitz.Rect]] = {replacement.kind: [] for replacement in replacements}
+
+    for span in spans:
+        group = _legend_group(span.text)
+        if group == "gain" and "gain" in legend_rects:
+            legend_rects["gain"].append(fitz.Rect(span.bbox))
+        elif group == "beamwidth" and "beamwidth" in legend_rects:
+            legend_rects["beamwidth"].append(fitz.Rect(span.bbox))
+        elif group == "polar" and "azimuth" in legend_rects and "elevation" in legend_rects:
+            center_x = (span.bbox.x0 + span.bbox.x1) / 2.0
+            target_kind = min(
+                ("azimuth", "elevation"),
+                key=lambda kind: abs(center_x - float(polar_x_centers[kind])),
+            )
+            legend_rects[target_kind].append(fitz.Rect(span.bbox))
+
+    resolved: list[ChartReplacement] = []
+    for replacement in replacements:
+        rects = [fitz.Rect(replacement.rect)] + legend_rects.get(replacement.kind, [])
+        resolved.append(
+            ChartReplacement(
+                replacement.kind,
+                _expand_rect(_union_rects(rects)),
+                replacement.asset_path,
+            )
+        )
+    return resolved
+
+
+def _place_svg_as_vector(page: fitz.Page, target_rect: fitz.Rect, svg_path: Path) -> None:
+    with fitz.open(svg_path) as svg_doc:
+        pdf_bytes = svg_doc.convert_to_pdf()
+    with fitz.open("pdf", pdf_bytes) as pdf_doc:
+        page.show_pdf_page(target_rect, pdf_doc, 0, keep_proportion=True, overlay=True)
 
 
 def _replace_chart_images(doc: fitz.Document, output: Path, extract_workbook: Path) -> None:
@@ -452,20 +610,12 @@ def _replace_chart_images(doc: fitz.Document, output: Path, extract_workbook: Pa
         return
 
     page = doc[1]
-    slots = _collect_chart_slots(page)
-    if len(slots) < 2:
-        raise ValueError("Datasheet template page 2 does not contain the expected chart image slots.")
-
-    replacements = [
-        (slots[0].rect, _find_plot_asset(output, extract_workbook, "_gain.svg")),
-        (slots[1].rect, _find_plot_asset(output, extract_workbook, "_beamwidth.svg")),
-    ]
-    for rect, _ in replacements:
-        page.add_redact_annot(rect, fill=(1.0, 1.0, 1.0))
-    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
-    for rect, svg_path in replacements:
-        pixmap = _render_svg_to_pixmap(svg_path, rect)
-        page.insert_image(rect, pixmap=pixmap, keep_proportion=True, overlay=True)
+    replacements = _build_chart_replacements(page, output, extract_workbook)
+    for replacement in replacements:
+        page.add_redact_annot(replacement.rect, fill=(1.0, 1.0, 1.0))
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
+    for replacement in replacements:
+        _place_svg_as_vector(page, replacement.rect, replacement.asset_path)
 
 
 def build_datasheet_pdf(output: Path, template: Path, extract_workbook: Path) -> dict[str, str]:

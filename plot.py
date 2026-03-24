@@ -38,6 +38,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib import transforms as mtransforms
+from matplotlib.offsetbox import AnchoredOffsetbox, DrawingArea, HPacker, TextArea, VPacker
 from matplotlib.ticker import FuncFormatter, FixedFormatter, FixedLocator, NullFormatter, NullLocator
 from legend_utils import (
     apply_legend_labels,
@@ -213,6 +214,74 @@ def align_series_to_axis(source_x: np.ndarray, source_y: np.ndarray, target_x: n
     }
     return np.asarray([lookup[round(float(x), 9)] for x in np.asarray(target_x, dtype=float)], dtype=float)
 
+
+def _legend_entry_box(label: str, color: str, linestyle: str, *, fontsize: float, text_color: str, linewidth: float) -> VPacker:
+    line_width = max(28.0, fontsize * 3.8)
+    line_height = max(10.0, fontsize * 0.9)
+    drawing = DrawingArea(line_width, line_height, 0, 0)
+    line = Line2D(
+        [2.0, line_width - 2.0],
+        [line_height / 2.0, line_height / 2.0],
+        color=color,
+        lw=linewidth,
+        linestyle="-",
+        solid_capstyle="round",
+        transform=drawing.get_transform(),
+    )
+    if linestyle == "--":
+        line.set_dashes([8, 6, 8, 6, 8, 6])
+        line.set_dash_capstyle("round")
+    drawing.add_artist(line)
+    text = TextArea(
+        label,
+        textprops={
+            "color": text_color,
+            "fontsize": fontsize,
+            "ha": "center",
+            "va": "top",
+            "multialignment": "center",
+        },
+    )
+    return VPacker(children=[drawing, text], align="center", pad=0.0, sep=max(1.0, fontsize * 0.2))
+
+
+def add_stacked_line_legend(
+    ax,
+    items: list[tuple[str, str, str]],
+    *,
+    loc: str,
+    bbox_to_anchor: tuple[float, float],
+    bbox_transform,
+    ncol: int = 1,
+    fontsize: float = 10.5,
+    text_color: str = "#8a949c",
+    linewidth: float = 2.2,
+    column_sep: float = 16.0,
+    row_sep: float = 10.0,
+):
+    if not items:
+        return None
+    entry_boxes = [
+        _legend_entry_box(label, color, linestyle, fontsize=fontsize, text_color=text_color, linewidth=linewidth)
+        for label, color, linestyle in items
+    ]
+    rows = [
+        HPacker(children=entry_boxes[index:index + ncol], align="top", pad=0.0, sep=column_sep)
+        for index in range(0, len(entry_boxes), ncol)
+    ]
+    legend_box = VPacker(children=rows, align="center", pad=0.0, sep=row_sep)
+    anchored = AnchoredOffsetbox(
+        loc=loc,
+        child=legend_box,
+        frameon=False,
+        bbox_to_anchor=bbox_to_anchor,
+        bbox_transform=bbox_transform,
+        borderpad=0.0,
+        pad=0.0,
+    )
+    ax.add_artist(anchored)
+    return anchored
+
 # ------------------ plotting: cartesian ------------------
 
 def plot_xy(x, series_list, names, out_path, y_label,
@@ -256,20 +325,17 @@ def plot_xy(x, series_list, names, out_path, y_label,
         ln, = ax.plot(x, ysm, linewidth=2.0, linestyle=st_in, solid_capstyle="round", color=color_in)
         lines.append(ln)
 
-    # Legend with explicit dash preview for dashed lines
-    handles = []
-    for ln in lines:
-        st = ln.get_linestyle()
-        c = ln.get_color()
-        if st == "--":
-            h = Line2D([0], [0], color=c, lw=2.0, linestyle='-', dashes=[8,6,8,6,8,6], dash_capstyle="round")
-        else:
-            h = Line2D([0], [0], color=c, lw=2.0, linestyle='-')
-        handles.append(h)
-    leg = ax.legend(handles, names, loc="center left", bbox_to_anchor=(1.02, 0.5),
-                    frameon=False, handlelength=7, handletextpad=1.0)
-    for text in leg.get_texts():
-        text.set_color("#8a949c")
+    add_stacked_line_legend(
+        ax,
+        [(name, ln.get_color(), ln.get_linestyle()) for name, ln in zip(names, lines)],
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        bbox_transform=ax.transAxes,
+        ncol=1,
+        fontsize=10.5,
+        linewidth=2.0,
+        row_sep=10.0,
+    )
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
@@ -323,7 +389,7 @@ def save_polar(out_path, datasets, title,
                 ha="center", va="top", rotation=0, rotation_mode="anchor",
                 transform=base + offset, bbox=bbox_args)
 
-    handles, labels = [], []
+    legend_items: list[tuple[str, str, str]] = []
     solid_count, dashed_count = 0, 0
 
     for d in datasets:
@@ -339,18 +405,20 @@ def save_polar(out_path, datasets, title,
         color = color_for_index(ls, idx) or "black"
         ax.plot(np.deg2rad(angles), s, linewidth=2.3, solid_capstyle="round",
                 linestyle=ls, color=color)
-        # legend proxy (force long dashes preview)
-        if ls == "--":
-            h = Line2D([0],[0], lw=2.3, color=color, linestyle='-', dashes=[8,6,8,6,8,6], dash_capstyle="round")
-        else:
-            h = Line2D([0],[0], lw=2.3, color=color, linestyle='-')
-        handles.append(h)
-        labels.append(d.get("label", ""))
+        legend_items.append((d.get("label", ""), color, ls))
 
-    leg = ax.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.18),
-                    ncol=2, frameon=False, handlelength=8, handletextpad=1.0, fontsize=11)
-    for text in leg.get_texts():
-        text.set_color("#8a949c")
+    add_stacked_line_legend(
+        ax,
+        legend_items,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.19),
+        bbox_transform=ax.transAxes,
+        ncol=2,
+        fontsize=11.0,
+        linewidth=2.3,
+        column_sep=22.0,
+        row_sep=10.0,
+    )
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout(rect=[0, 0, 1, 0.97])

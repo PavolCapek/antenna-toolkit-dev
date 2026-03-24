@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import List, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, FixedFormatter, FixedLocator, NullFormatter, NullLocator
+from plot import add_stacked_line_legend
 from legend_utils import apply_legend_labels, parse_legend_labels
 
 # ------------------ global color scheme (kept from gain plot) ------------------
@@ -240,21 +240,17 @@ def plot_xy(x, series_list, names, out_path, y_label,
         ln, = ax.plot(x, ysm, linewidth=2.0, linestyle=st_in, solid_capstyle="round", color=color_in)
         lines.append(ln)
 
-    # legend with explicit dash preview (even though VSWR lines are solid, we keep consistency)
-    handles = []
-    for ln in lines:
-        st = ln.get_linestyle()
-        c = ln.get_color()
-        if st == "--":
-            h = Line2D([0],[0], color=c, lw=2.0, linestyle='-', dashes=[8,6,8,6,8,6], dash_capstyle="round")
-        else:
-            h = Line2D([0],[0], color=c, lw=2.0, linestyle='-')
-        handles.append(h)
-
-    leg = ax.legend(handles, names, loc="center left", bbox_to_anchor=(1.02, 0.5),
-                    frameon=False, handlelength=7, handletextpad=1.0)
-    for text in leg.get_texts():
-        text.set_color("#8a949c")
+    add_stacked_line_legend(
+        ax,
+        [(name, ln.get_color(), ln.get_linestyle()) for name, ln in zip(names, lines)],
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        bbox_transform=ax.transAxes,
+        ncol=1,
+        fontsize=10.5,
+        linewidth=2.0,
+        row_sep=10.0,
+    )
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
