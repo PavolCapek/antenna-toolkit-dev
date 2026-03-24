@@ -23,7 +23,12 @@ from typing import List, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, FixedFormatter, FixedLocator, NullFormatter, NullLocator
-from plot import add_stacked_line_legend
+from plot import (
+    STACKED_LEGEND_ENTRY_SEP,
+    STACKED_LEGEND_FONT_SIZE,
+    STACKED_LEGEND_ROW_SEP,
+    add_stacked_line_legend,
+)
 from legend_utils import apply_legend_labels, parse_legend_labels
 
 # ------------------ global color scheme (kept from gain plot) ------------------
@@ -247,10 +252,10 @@ def plot_xy(x, series_list, names, out_path, y_label,
         bbox_to_anchor=(1.02, 0.5),
         bbox_transform=ax.transAxes,
         ncol=1,
-        fontsize=10.5,
+        fontsize=STACKED_LEGEND_FONT_SIZE,
         linewidth=2.0,
-        row_sep=24.0,
-        entry_sep=0.6,
+        row_sep=STACKED_LEGEND_ROW_SEP,
+        entry_sep=STACKED_LEGEND_ENTRY_SEP,
     )
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)

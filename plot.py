@@ -54,6 +54,11 @@ from legend_utils import (
 DEFAULT_SOLID_COLORS = ["#2bb6f6", "#f5a623"]  # kept from gain plot
 SOLID_COLORS = DEFAULT_SOLID_COLORS[:]
 DASHED_COLORS = SOLID_COLORS[:]  # same hues for dashed variants
+STACKED_LEGEND_FONT_SIZE = 10.5
+STACKED_LEGEND_TEXT_COLOR = "#8a949c"
+STACKED_LEGEND_COLUMN_SEP = 16.0
+STACKED_LEGEND_ROW_SEP = 24.0
+STACKED_LEGEND_ENTRY_SEP = 0.6
 
 def color_for_index(style: str, idx: int) -> str:
     base = SOLID_COLORS if style == '-' else DASHED_COLORS
@@ -281,12 +286,12 @@ def add_stacked_line_legend(
     bbox_to_anchor: tuple[float, float],
     bbox_transform,
     ncol: int = 1,
-    fontsize: float = 10.5,
-    text_color: str = "#8a949c",
+    fontsize: float = STACKED_LEGEND_FONT_SIZE,
+    text_color: str = STACKED_LEGEND_TEXT_COLOR,
     linewidth: float = 2.2,
-    column_sep: float = 16.0,
-    row_sep: float = 10.0,
-    entry_sep: float = 1.0,
+    column_sep: float = STACKED_LEGEND_COLUMN_SEP,
+    row_sep: float = STACKED_LEGEND_ROW_SEP,
+    entry_sep: float = STACKED_LEGEND_ENTRY_SEP,
 ):
     if not items:
         return None
@@ -369,10 +374,10 @@ def plot_xy(x, series_list, names, out_path, y_label,
         bbox_to_anchor=(1.02, 0.5),
         bbox_transform=ax.transAxes,
         ncol=1,
-        fontsize=10.5,
+        fontsize=STACKED_LEGEND_FONT_SIZE,
         linewidth=2.0,
-        row_sep=24.0,
-        entry_sep=0.6,
+        row_sep=STACKED_LEGEND_ROW_SEP,
+        entry_sep=STACKED_LEGEND_ENTRY_SEP,
     )
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -452,11 +457,11 @@ def save_polar(out_path, datasets, title,
         bbox_to_anchor=(0.5, -0.19),
         bbox_transform=ax.transAxes,
         ncol=legend_ncol,
-        fontsize=11.0,
+        fontsize=STACKED_LEGEND_FONT_SIZE,
         linewidth=2.3,
-        column_sep=22.0,
-        row_sep=10.0,
-        entry_sep=0.8,
+        column_sep=STACKED_LEGEND_COLUMN_SEP,
+        row_sep=STACKED_LEGEND_ROW_SEP,
+        entry_sep=STACKED_LEGEND_ENTRY_SEP,
     )
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
