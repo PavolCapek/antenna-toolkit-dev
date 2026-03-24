@@ -34,6 +34,7 @@ from project_store import (
 
 APP_TITLE = "Antenna Toolkit Studio"
 STATE_FILE = THIS_DIR / ".nova_qt_studio_state.json"
+COMPACT_SCREEN_HEIGHT = 1200
 GREY_COLOR_OPTIONS = [
     ("Charcoal", "#4b5563"),
     ("Slate", "#6b7280"),
@@ -834,6 +835,8 @@ class ModernMainWindow(QMainWindow):
         self.project_presets: dict[str, dict[str, object]] = {}
         self.project_active_preset = ""
         self.project_run_state: dict[str, object] = {}
+        self._compact_layout = False
+        self._scroll_page_layouts: list[QVBoxLayout] = []
         self.theme = str(self.store.get("theme", "light")).lower()
         if self.theme not in THEME_LABELS:
             self.theme = "light"
@@ -842,21 +845,25 @@ class ModernMainWindow(QMainWindow):
         self.refresh_project_list(select_slug="")
         self._reset_to_default_state()
         self._restore_geometry()
+        self._update_layout_mode(force=True)
         self.store.set("theme", self.theme)
 
     def _build_ui(self):
         root = QWidget()
         root_lay = QVBoxLayout(root)
+        self.root_lay = root_lay
         root_lay.setContentsMargins(18, 18, 18, 18)
         root_lay.setSpacing(16)
 
         title_band = QFrame()
         title_band.setObjectName("titleBand")
         title_lay = QHBoxLayout(title_band)
+        self.title_lay = title_lay
         title_lay.setContentsMargins(22, 20, 22, 20)
         title_lay.setSpacing(16)
 
         brand_lay = QVBoxLayout()
+        self.brand_lay = brand_lay
         brand_lay.setContentsMargins(0, 0, 0, 0)
         brand_lay.setSpacing(6)
         self.hero_title = QLabel("Antenna Toolkit Studio")
@@ -864,11 +871,13 @@ class ModernMainWindow(QMainWindow):
         brand_subtitle = QLabel("Projects now keep inputs, presets, settings, and generated results together in one workspace.")
         brand_subtitle.setObjectName("brandSubtitle")
         brand_subtitle.setWordWrap(True)
+        self.brand_subtitle = brand_subtitle
         brand_lay.addWidget(self.hero_title)
         brand_lay.addWidget(brand_subtitle)
         title_lay.addLayout(brand_lay, 1)
 
         title_tools = QHBoxLayout()
+        self.title_tools = title_tools
         title_tools.setContentsMargins(0, 0, 0, 0)
         title_tools.setSpacing(10)
         self.console_toggle = QPushButton()
@@ -894,12 +903,15 @@ class ModernMainWindow(QMainWindow):
         root_lay.addWidget(title_band)
 
         command_panel = ResponsiveCardPanel(max_columns=2, min_card_width=480)
+        self.command_panel = command_panel
 
         quick_actions = Card("Pipeline", "Run")
+        self.quick_actions_card = quick_actions
         quick_actions.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         run_help = QLabel("Use Full Pipeline for the usual workflow. The other actions are for rerunning only one stage after you change inputs or settings.")
         run_help.setObjectName("helper")
         run_help.setWordWrap(True)
+        self.run_help_label = run_help
         quick_actions.body.addWidget(run_help)
         self.btn_full = QPushButton("Run Full Pipeline")
         self.btn_full.setObjectName("primaryButton")
@@ -941,6 +953,10 @@ class ModernMainWindow(QMainWindow):
         self.run_summary = QLabel("No run summary yet.")
         self.run_summary.setObjectName("helper")
         self.run_summary.setWordWrap(True)
+        self.pipeline_details_toggle = QPushButton("Show Details")
+        self.pipeline_details_toggle.setObjectName("ghostButton")
+        self.pipeline_details_toggle.setCheckable(True)
+        self.pipeline_details_toggle.clicked.connect(self._on_pipeline_details_toggled)
         self.project_stats_label = QLabel("No project stats yet.")
         self.project_stats_label.setObjectName("helper")
         self.project_stats_label.setWordWrap(True)
@@ -963,23 +979,31 @@ class ModernMainWindow(QMainWindow):
         self.busy.setTextVisible(False)
         quick_actions.body.addWidget(self.run_info)
         quick_actions.body.addWidget(self.run_summary)
-        quick_actions.body.addWidget(self.project_stats_label)
-        quick_actions.body.addWidget(self.artifact_summary_label)
+        quick_actions.body.addWidget(self.pipeline_details_toggle)
+        self.pipeline_details = QWidget()
+        self.pipeline_details_layout = QVBoxLayout(self.pipeline_details)
+        self.pipeline_details_layout.setContentsMargins(0, 0, 0, 0)
+        self.pipeline_details_layout.setSpacing(8)
+        self.pipeline_details_layout.addWidget(self.project_stats_label)
+        self.pipeline_details_layout.addWidget(self.artifact_summary_label)
         pipeline_outputs = QFormLayout()
         pipeline_outputs.addRow("Project folder", self._path_row(self.results_field))
         pipeline_outputs.addRow("Workbook", self._path_row(self.workbook_field))
         pipeline_outputs.addRow("Extract workbook", self._path_row(self.extract_field))
         pipeline_outputs.addRow("Datasheet PDF", self._path_row(self.datasheet_field))
         pipeline_outputs.addRow("VSWR output", self._path_row(self.vswr_field))
-        quick_actions.body.addLayout(pipeline_outputs)
+        self.pipeline_details_layout.addLayout(pipeline_outputs)
+        quick_actions.body.addWidget(self.pipeline_details)
         quick_actions.body.addWidget(self.busy)
         self.stage_status_labels: dict[str, QLabel] = {}
         self.stage_open_buttons: dict[str, QPushButton] = {}
         project_card = Card("Project workspace", "Command center")
+        self.project_card = project_card
         project_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         project_help = QLabel("Create or select a project first. Each project keeps its own inputs, selected preset, processing settings, and outputs.")
         project_help.setWordWrap(True)
         project_help.setObjectName("helper")
+        self.project_help_label = project_help
         project_card.body.addWidget(project_help)
         project_row = QVBoxLayout()
         project_row.setContentsMargins(0, 0, 0, 0)
@@ -1009,6 +1033,7 @@ class ModernMainWindow(QMainWindow):
         self.project_more_button.setMenu(self.project_more_menu)
         project_row.addWidget(self.project_combo)
         project_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=130)
+        self.project_actions = project_actions
         project_actions.set_buttons([
             self.project_new_button,
             self.project_save_button,
@@ -1058,6 +1083,7 @@ class ModernMainWindow(QMainWindow):
         workspace_shell.setObjectName("workspaceShell")
         workspace_shell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         shell_lay = QVBoxLayout(workspace_shell)
+        self.shell_lay = shell_lay
         shell_lay.setContentsMargins(20, 20, 20, 20)
         shell_lay.setSpacing(14)
         self.workflow_tabs = QTabWidget()
@@ -1071,10 +1097,12 @@ class ModernMainWindow(QMainWindow):
         colors_scroll, _colors_page, colors_lay = self._make_scroll_page()
 
         preset_card = Card("Saved presets", "Presets")
+        self.preset_card = preset_card
         preset_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         preset_help = QLabel("Save reusable control/range/style presets for product lines. Presets do not change the currently selected input files.")
         preset_help.setWordWrap(True)
         preset_help.setObjectName("helper")
+        self.preset_help_label = preset_help
         preset_card.body.addWidget(preset_help)
         self.preset_combo = QComboBox()
         self.preset_combo.currentTextChanged.connect(self.on_preset_selected)
@@ -1100,6 +1128,7 @@ class ModernMainWindow(QMainWindow):
         self.preset_export_action = self.preset_more_menu.addAction("Export presets", self.export_presets)
         self.preset_more_button.setMenu(self.preset_more_menu)
         preset_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=110)
+        self.preset_actions = preset_actions
         preset_actions.set_buttons([self.preset_new_button, self.preset_save_button, self.preset_more_button])
         preset_card.body.addWidget(preset_actions)
         command_left_layout.addWidget(preset_card)
@@ -1113,10 +1142,12 @@ class ModernMainWindow(QMainWindow):
         self.run_state_label.setObjectName("helper")
         self.run_state_label.setWordWrap(True)
         ffs_card = Card("Far-field files", "Primary input")
+        self.ffs_card = ffs_card
         ffs_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         helper = QLabel("Drop .ffs files here or add them manually. The changes stay local to the active project until you click Save project.")
         helper.setWordWrap(True)
         helper.setObjectName("helper")
+        self.ffs_help_label = helper
         ffs_card.body.addWidget(helper)
         self.ffs_list = DropList(self._add_ffs_files)
         self.ffs_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -1138,6 +1169,7 @@ class ModernMainWindow(QMainWindow):
         self.ffs_down_button.setToolTip("Move the selected far-field files down in the processing order.")
         self.ffs_toggle_button.setToolTip("Temporarily disable or re-enable the selected far-field files without deleting them.")
         ffs_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=135)
+        self.ffs_actions = ffs_actions
         ffs_actions.set_buttons([
             self.add_ffs_button,
             self.remove_ffs_button,
@@ -1157,6 +1189,7 @@ class ModernMainWindow(QMainWindow):
         )
         inputs_help.setWordWrap(True)
         inputs_help.setObjectName("helper")
+        self.inputs_help_label = inputs_help
         inputs_help_card.body.addWidget(inputs_help)
 
         s2p_card = Card("Touchstone file", "VSWR")
@@ -1172,6 +1205,7 @@ class ModernMainWindow(QMainWindow):
         self.clear_s2p_button.setToolTip("Clear the current Touchstone selection and let deduction run again.")
         self.open_s2p_button.setToolTip("Open the selected Touchstone file in File Explorer.")
         s2p_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=145)
+        self.s2p_actions = s2p_actions
         s2p_actions.set_buttons([self.select_s2p_button, self.clear_s2p_button, self.open_s2p_button])
         s2p_card.body.addWidget(s2p_actions)
         inputs_panel = QWidget()
@@ -1337,6 +1371,7 @@ class ModernMainWindow(QMainWindow):
         plot_color_card.body.addLayout(plot_color_form)
 
         processing_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 2, 1]})
+        self.processing_panel = processing_panel
         processing_panel.set_cards([
             workbook_card,
             frequency_card,
@@ -1349,6 +1384,7 @@ class ModernMainWindow(QMainWindow):
         processing_lay.addStretch(1)
 
         colors_panel = ResponsiveCardPanel(max_columns=2, min_card_width=320)
+        self.colors_panel = colors_panel
         colors_panel.set_cards([plot_color_card, polar_card])
         colors_lay.addWidget(colors_panel)
         colors_lay.addStretch(1)
@@ -1375,6 +1411,7 @@ class ModernMainWindow(QMainWindow):
     def _make_scroll_page(self) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
         content = QWidget()
         layout = QVBoxLayout(content)
+        self._scroll_page_layouts.append(layout)
         layout.setContentsMargins(0, 6, 0, 0)
         layout.setSpacing(14)
         scroll = QScrollArea()
@@ -1388,6 +1425,14 @@ class ModernMainWindow(QMainWindow):
         if index < 0:
             return
         self.store.set("studio_nav_index", index)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._update_layout_mode()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_layout_mode()
 
     def _reset_to_default_state(self) -> None:
         self._loading_project = True
@@ -1527,9 +1572,200 @@ class ModernMainWindow(QMainWindow):
         lay.addWidget(btn)
         return row
 
+    def _screen_available_height(self) -> int:
+        screen = self.screen()
+        if screen:
+            return int(screen.availableGeometry().height())
+        app = QApplication.instance()
+        if app and app.primaryScreen():
+            return int(app.primaryScreen().availableGeometry().height())
+        return int(self.height())
+
+    def _should_use_compact_layout(self) -> bool:
+        return self._screen_available_height() <= COMPACT_SCREEN_HEIGHT
+
+    def _layout_metrics(self) -> dict[str, object]:
+        if self._compact_layout:
+            return {
+                "base_font_size": 10,
+                "widget_font_size": 10,
+                "title_band_radius": 24,
+                "workspace_shell_radius": 24,
+                "card_radius": 18,
+                "root_margin": 12,
+                "root_spacing": 12,
+                "title_margins": (18, 14, 18, 14),
+                "title_spacing": 12,
+                "brand_spacing": 3,
+                "title_tools_spacing": 8,
+                "shell_margin": 14,
+                "shell_spacing": 10,
+                "scroll_top_margin": 2,
+                "scroll_spacing": 10,
+                "card_margin": 12,
+                "card_spacing": 6,
+                "card_body_spacing": 6,
+                "panel_gap": 10,
+                "button_gap": 6,
+                "command_panel_min_card_width": 430,
+                "processing_panel_min_card_width": 300,
+                "colors_panel_min_card_width": 300,
+                "hero_min_button_width": 132,
+                "project_min_button_width": 118,
+                "preset_min_button_width": 96,
+                "ffs_min_button_width": 118,
+                "s2p_min_button_width": 122,
+                "ffs_list_min_height": 170,
+                "brand_title_size": 18,
+                "brand_subtitle_size": 9.5,
+                "run_info_size": 9.5,
+                "card_title_size": 12.5,
+                "eyebrow_size": 8.5,
+                "project_name_size": 16.5,
+                "helper_size": 9.5,
+                "badge_font_size": 8.5,
+                "badge_padding": (4, 8),
+                "tab_margin_top": 4,
+                "tab_padding": (7, 12),
+                "tab_min_width": 96,
+                "input_padding": (6, 9),
+                "button_padding": (8, 12),
+                "primary_button_padding": (8, 14),
+                "step_button_padding_v": 5,
+                "step_button_font_size": 10,
+                "pill_padding": (5, 8),
+            }
+        return {
+            "base_font_size": 11,
+            "widget_font_size": 11,
+            "title_band_radius": 28,
+            "workspace_shell_radius": 28,
+            "card_radius": 20,
+            "root_margin": 18,
+            "root_spacing": 16,
+            "title_margins": (22, 20, 22, 20),
+            "title_spacing": 16,
+            "brand_spacing": 6,
+            "title_tools_spacing": 10,
+            "shell_margin": 20,
+            "shell_spacing": 14,
+            "scroll_top_margin": 6,
+            "scroll_spacing": 14,
+            "card_margin": 16,
+            "card_spacing": 8,
+            "card_body_spacing": 8,
+            "panel_gap": 12,
+            "button_gap": 8,
+            "command_panel_min_card_width": 480,
+            "processing_panel_min_card_width": 320,
+            "colors_panel_min_card_width": 320,
+            "hero_min_button_width": 150,
+            "project_min_button_width": 130,
+            "preset_min_button_width": 110,
+            "ffs_min_button_width": 135,
+            "s2p_min_button_width": 145,
+            "ffs_list_min_height": 230,
+            "brand_title_size": 21,
+            "brand_subtitle_size": 10.75,
+            "run_info_size": 10.5,
+            "card_title_size": 13.5,
+            "eyebrow_size": 9,
+            "project_name_size": 19,
+            "helper_size": 10.5,
+            "badge_font_size": 9,
+            "badge_padding": (6, 10),
+            "tab_margin_top": 8,
+            "tab_padding": (10, 16),
+            "tab_min_width": 110,
+            "input_padding": (8, 11),
+            "button_padding": (10, 14),
+            "primary_button_padding": (10, 16),
+            "step_button_padding_v": 6,
+            "step_button_font_size": 11,
+            "pill_padding": (7, 10),
+        }
+
+    def _set_pipeline_details_visible(self, visible: bool) -> None:
+        self.pipeline_details.setVisible(visible)
+        self.pipeline_details_toggle.setChecked(visible)
+        self.pipeline_details_toggle.setText("Hide Details" if visible else "Show Details")
+
+    def _on_pipeline_details_toggled(self, checked: bool) -> None:
+        self._set_pipeline_details_visible(checked)
+
+    def _apply_layout_metrics(self) -> None:
+        metrics = self._layout_metrics()
+        root_margin = int(metrics["root_margin"])
+        self.root_lay.setContentsMargins(root_margin, root_margin, root_margin, root_margin)
+        self.root_lay.setSpacing(int(metrics["root_spacing"]))
+        left, top, right, bottom = metrics["title_margins"]
+        self.title_lay.setContentsMargins(int(left), int(top), int(right), int(bottom))
+        self.title_lay.setSpacing(int(metrics["title_spacing"]))
+        self.brand_lay.setSpacing(int(metrics["brand_spacing"]))
+        self.title_tools.setSpacing(int(metrics["title_tools_spacing"]))
+        shell_margin = int(metrics["shell_margin"])
+        self.shell_lay.setContentsMargins(shell_margin, shell_margin, shell_margin, shell_margin)
+        self.shell_lay.setSpacing(int(metrics["shell_spacing"]))
+        for layout in self._scroll_page_layouts:
+            layout.setContentsMargins(0, int(metrics["scroll_top_margin"]), 0, 0)
+            layout.setSpacing(int(metrics["scroll_spacing"]))
+        for card in self.findChildren(Card):
+            layout = card.layout()
+            if not isinstance(layout, QVBoxLayout):
+                continue
+            card_margin = int(metrics["card_margin"])
+            layout.setContentsMargins(card_margin, card_margin, card_margin, card_margin)
+            layout.setSpacing(int(metrics["card_spacing"]))
+            card.body.setSpacing(int(metrics["card_body_spacing"]))
+        panel_gap = int(metrics["panel_gap"])
+        for panel, min_width in (
+            (self.command_panel, int(metrics["command_panel_min_card_width"])),
+            (self.processing_panel, int(metrics["processing_panel_min_card_width"])),
+            (self.colors_panel, int(metrics["colors_panel_min_card_width"])),
+        ):
+            panel.min_card_width = min_width
+            panel.grid.setHorizontalSpacing(panel_gap)
+            panel.grid.setVerticalSpacing(panel_gap)
+            panel.refresh_layout(force=True)
+        button_gap = int(metrics["button_gap"])
+        for panel, min_width in (
+            (self.hero_actions, int(metrics["hero_min_button_width"])),
+            (self.project_actions, int(metrics["project_min_button_width"])),
+            (self.preset_actions, int(metrics["preset_min_button_width"])),
+            (self.ffs_actions, int(metrics["ffs_min_button_width"])),
+            (self.s2p_actions, int(metrics["s2p_min_button_width"])),
+        ):
+            panel.min_button_width = min_width
+            panel.grid.setHorizontalSpacing(button_gap)
+            panel.grid.setVerticalSpacing(button_gap)
+            panel.refresh_layout(force=True)
+        self.pipeline_details_layout.setSpacing(int(metrics["card_body_spacing"]))
+        self.ffs_list.setMinimumHeight(int(metrics["ffs_list_min_height"]))
+        compact = self._compact_layout
+        self.brand_subtitle.setVisible(not compact)
+        self.run_help_label.setVisible(not compact)
+        self.project_help_label.setVisible(not compact)
+        self.preset_help_label.setVisible(not compact)
+        self.ffs_help_label.setVisible(not compact)
+        self.inputs_help_label.setVisible(not compact)
+        self.pipeline_details_toggle.setVisible(compact)
+        if compact:
+            self._set_pipeline_details_visible(False)
+        else:
+            self._set_pipeline_details_visible(True)
+
+    def _update_layout_mode(self, force: bool = False) -> None:
+        compact = self._should_use_compact_layout()
+        if not force and compact == self._compact_layout:
+            return
+        self._compact_layout = compact
+        self._apply_layout_metrics()
+        self._apply_style()
+
     def _apply_style(self):
         QApplication.setStyle(QStyleFactory.create("Fusion"))
         theme = THEME_STYLES.get(self.theme, THEME_STYLES["light"])
+        metrics = self._layout_metrics()
         pal = QPalette()
         pal.setColor(QPalette.Window, QColor(theme["palette_window"]))
         pal.setColor(QPalette.WindowText, QColor(theme["palette_window_text"]))
@@ -1545,52 +1781,82 @@ class ModernMainWindow(QMainWindow):
         QApplication.setPalette(pal)
         app = QApplication.instance()
         if app:
-            base_font = QFont("Segoe UI", 11)
+            base_font = QFont("Segoe UI", int(metrics["base_font_size"]))
             app.setFont(base_font)
             app.setStyleSheet("""
-                QWidget { font-size: 11pt; }
+                QWidget { font-size: %(widget_font_size)gpt; }
                 QMainWindow { background: %(window_bg)s; }
                 QScrollArea { background: transparent; border: none; }
                 QLabel { color: %(text_color)s; }
                 QMainWindow, QDialog { color: %(text_color)s; }
-                #titleBand { border-radius: 28px; background: %(title_band_bg)s; }
-                #workspaceShell { background: %(shell_bg)s; border: 1px solid %(shell_border)s; border-radius: 28px; }
-                #brandTitle { color: white; font-size: 21pt; font-weight: 700; }
-                #brandSubtitle { color: %(title_subtle)s; font-size: 10.75pt; font-weight: 500; }
-                #runInfo { color: %(text_color)s; font-size: 10.5pt; }
-                #card { background: %(card_bg)s; border: 1px solid %(card_border)s; border-radius: 20px; }
-                #cardTitle { color: %(title_color)s; font-size: 13.5pt; font-weight: 700; }
-                #eyebrow { color: %(eyebrow_color)s; font-size: 9pt; font-weight: 700; }
-                #projectName { color: %(title_color)s; font-size: 19pt; font-weight: 700; }
-                #projectMeta { color: %(helper_color)s; font-size: 10.5pt; }
-                #summaryBadge { background: %(badge_bg)s; color: %(badge_text)s; border: 1px solid %(badge_border)s; border-radius: 12px; padding: 6px 10px; font-size: 9pt; font-weight: 700; }
-                #helper { color: %(helper_color)s; font-size: 10.5pt; }
-                QTabWidget::pane { border: none; background: transparent; margin-top: 8px; }
-                QTabBar::tab { background: %(tab_bg)s; border: 1px solid %(shell_border)s; border-bottom: none; border-top-left-radius: 14px; border-top-right-radius: 14px; padding: 10px 16px; margin-right: 6px; min-width: 110px; color: %(helper_color)s; font-weight: 700; }
+                #titleBand { border-radius: %(title_band_radius)spx; background: %(title_band_bg)s; }
+                #workspaceShell { background: %(shell_bg)s; border: 1px solid %(shell_border)s; border-radius: %(workspace_shell_radius)spx; }
+                #brandTitle { color: white; font-size: %(brand_title_size)gpt; font-weight: 700; }
+                #brandSubtitle { color: %(title_subtle)s; font-size: %(brand_subtitle_size)gpt; font-weight: 500; }
+                #runInfo { color: %(text_color)s; font-size: %(run_info_size)gpt; }
+                #card { background: %(card_bg)s; border: 1px solid %(card_border)s; border-radius: %(card_radius)spx; }
+                #cardTitle { color: %(title_color)s; font-size: %(card_title_size)gpt; font-weight: 700; }
+                #eyebrow { color: %(eyebrow_color)s; font-size: %(eyebrow_size)gpt; font-weight: 700; }
+                #projectName { color: %(title_color)s; font-size: %(project_name_size)gpt; font-weight: 700; }
+                #projectMeta { color: %(helper_color)s; font-size: %(helper_size)gpt; }
+                #summaryBadge { background: %(badge_bg)s; color: %(badge_text)s; border: 1px solid %(badge_border)s; border-radius: 12px; padding: %(badge_padding_v)spx %(badge_padding_h)spx; font-size: %(badge_font_size)gpt; font-weight: 700; }
+                #helper { color: %(helper_color)s; font-size: %(helper_size)gpt; }
+                QTabWidget::pane { border: none; background: transparent; margin-top: %(tab_margin_top)spx; }
+                QTabBar::tab { background: %(tab_bg)s; border: 1px solid %(shell_border)s; border-bottom: none; border-top-left-radius: 14px; border-top-right-radius: 14px; padding: %(tab_padding_v)spx %(tab_padding_h)spx; margin-right: 6px; min-width: %(tab_min_width)spx; color: %(helper_color)s; font-weight: 700; }
                 QTabBar::tab:hover { background: %(tab_hover)s; color: %(title_color)s; }
                 QTabBar::tab:selected { background: %(tab_selected)s; color: %(title_color)s; }
-                QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget, QPlainTextEdit { background: %(input_bg)s; border: 1px solid %(input_border)s; border-radius: 14px; padding: 8px 11px; color: %(title_color)s; }
+                QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget, QPlainTextEdit { background: %(input_bg)s; border: 1px solid %(input_border)s; border-radius: 14px; padding: %(input_padding_v)spx %(input_padding_h)spx; color: %(title_color)s; }
                 QComboBox::drop-down { border: none; width: 28px; }
                 QComboBox QAbstractItemView { background: %(card_bg)s; border: 1px solid %(card_border)s; color: %(title_color)s; selection-background-color: %(list_selected)s; selection-color: %(title_color)s; }
                 QListWidget::item { padding: 7px 10px; border-radius: 10px; margin: 1px 0; }
                 QListWidget::item:selected { background: %(list_selected)s; color: %(title_color)s; }
-                QPushButton { background: %(button_bg)s; border: 1px solid %(input_border)s; border-radius: 14px; padding: 10px 14px; color: %(title_color)s; font-weight: 600; }
+                QPushButton { background: %(button_bg)s; border: 1px solid %(input_border)s; border-radius: 14px; padding: %(button_padding_v)spx %(button_padding_h)spx; color: %(title_color)s; font-weight: 600; }
                 QPushButton:hover { border-color: #7fb2cf; background: %(button_hover)s; }
                 QPushButton:disabled { color: %(helper_color)s; background: %(input_bg)s; border-color: %(card_border)s; }
-                QPushButton#primaryButton { background: %(primary_bg)s; color: white; border: none; padding: 10px 16px; }
+                QPushButton#primaryButton { background: %(primary_bg)s; color: white; border: none; padding: %(primary_button_padding_v)spx %(primary_button_padding_h)spx; }
                 QPushButton#primaryButton:hover { background: %(primary_hover)s; }
                 QPushButton#ghostButton { background: %(ghost_bg)s; }
                 QPushButton#ghostButton:hover { background: %(ghost_hover)s; }
                 QComboBox#themeSelector { min-width: 168px; font-weight: 600; }
-                QPushButton#stepButton { background: %(step_bg)s; border: 1px solid %(step_border)s; border-radius: 12px; padding: 6px 0; font-size: 11pt; font-weight: 700; min-width: 30px; }
+                QPushButton#stepButton { background: %(step_bg)s; border: 1px solid %(step_border)s; border-radius: 12px; padding: %(step_button_padding_v)spx 0; font-size: %(step_button_font_size)gpt; font-weight: 700; min-width: 30px; }
                 QPushButton#stepButton:hover { background: %(step_hover)s; border-color: #7fb2cf; }
-                QCheckBox#pillCheck { spacing: 8px; padding: 7px 10px; border: 1px solid %(input_border)s; border-radius: 12px; background: %(ghost_bg)s; color: %(title_color)s; font-weight: 600; }
+                QCheckBox#pillCheck { spacing: 8px; padding: %(pill_padding_v)spx %(pill_padding_h)spx; border: 1px solid %(input_border)s; border-radius: 12px; background: %(ghost_bg)s; color: %(title_color)s; font-weight: 600; }
                 QCheckBox#pillCheck:hover { border-color: #7fb2cf; background: %(ghost_hover)s; }
                 QCheckBox#pillCheck::indicator { width: 16px; height: 16px; border-radius: 8px; border: 1px solid %(step_border)s; background: transparent; }
                 QCheckBox#pillCheck::indicator:checked { background: %(primary_bg)s; border-color: %(primary_bg)s; }
                 QProgressBar { background: %(progress_bg)s; border: 1px solid %(card_border)s; border-radius: 10px; color: %(title_color)s; min-height: 18px; }
                 QProgressBar::chunk { background: %(primary_bg)s; border-radius: 8px; }
-            """ % theme)
+            """ % {
+                **theme,
+                "widget_font_size": metrics["widget_font_size"],
+                "title_band_radius": metrics["title_band_radius"],
+                "workspace_shell_radius": metrics["workspace_shell_radius"],
+                "brand_title_size": metrics["brand_title_size"],
+                "brand_subtitle_size": metrics["brand_subtitle_size"],
+                "run_info_size": metrics["run_info_size"],
+                "card_radius": metrics["card_radius"],
+                "card_title_size": metrics["card_title_size"],
+                "eyebrow_size": metrics["eyebrow_size"],
+                "project_name_size": metrics["project_name_size"],
+                "helper_size": metrics["helper_size"],
+                "badge_font_size": metrics["badge_font_size"],
+                "badge_padding_v": metrics["badge_padding"][0],
+                "badge_padding_h": metrics["badge_padding"][1],
+                "tab_margin_top": metrics["tab_margin_top"],
+                "tab_padding_v": metrics["tab_padding"][0],
+                "tab_padding_h": metrics["tab_padding"][1],
+                "tab_min_width": metrics["tab_min_width"],
+                "input_padding_v": metrics["input_padding"][0],
+                "input_padding_h": metrics["input_padding"][1],
+                "button_padding_v": metrics["button_padding"][0],
+                "button_padding_h": metrics["button_padding"][1],
+                "primary_button_padding_v": metrics["primary_button_padding"][0],
+                "primary_button_padding_h": metrics["primary_button_padding"][1],
+                "step_button_padding_v": metrics["step_button_padding_v"],
+                "step_button_font_size": metrics["step_button_font_size"],
+                "pill_padding_v": metrics["pill_padding"][0],
+                "pill_padding_h": metrics["pill_padding"][1],
+            })
 
     def _sync_theme_selector(self):
         if not hasattr(self, "theme_selector"):
