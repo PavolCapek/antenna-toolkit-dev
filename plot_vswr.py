@@ -249,7 +249,8 @@ def plot_xy(x, series_list, names, out_path, y_label,
         ncol=1,
         fontsize=10.5,
         linewidth=2.0,
-        row_sep=18.0,
+        row_sep=24.0,
+        entry_sep=0.6,
     )
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)

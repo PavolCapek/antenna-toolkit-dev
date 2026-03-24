@@ -215,13 +215,23 @@ def align_series_to_axis(source_x: np.ndarray, source_y: np.ndarray, target_x: n
     return np.asarray([lookup[round(float(x), 9)] for x in np.asarray(target_x, dtype=float)], dtype=float)
 
 
-def _legend_entry_box(label: str, color: str, linestyle: str, *, fontsize: float, text_color: str, linewidth: float) -> VPacker:
+def _legend_entry_box(
+    label: str,
+    color: str,
+    linestyle: str,
+    *,
+    fontsize: float,
+    text_color: str,
+    linewidth: float,
+    entry_sep: float,
+) -> VPacker:
     line_width = max(28.0, fontsize * 3.8)
-    line_height = max(10.0, fontsize * 0.9)
+    line_height = max(7.0, fontsize * 0.62)
     drawing = DrawingArea(line_width, line_height, 0, 0)
+    line_y = max(linewidth / 2.0 + 0.6, line_height * 0.24)
     line = Line2D(
         [2.0, line_width - 2.0],
-        [line_height / 2.0, line_height / 2.0],
+        [line_y, line_y],
         color=color,
         lw=linewidth,
         linestyle="-",
@@ -242,7 +252,7 @@ def _legend_entry_box(label: str, color: str, linestyle: str, *, fontsize: float
             "multialignment": "center",
         },
     )
-    return VPacker(children=[drawing, text], align="center", pad=0.0, sep=max(1.0, fontsize * 0.2))
+    return VPacker(children=[drawing, text], align="center", pad=0.0, sep=entry_sep)
 
 
 def add_stacked_line_legend(
@@ -258,11 +268,20 @@ def add_stacked_line_legend(
     linewidth: float = 2.2,
     column_sep: float = 16.0,
     row_sep: float = 10.0,
+    entry_sep: float = 1.0,
 ):
     if not items:
         return None
     entry_boxes = [
-        _legend_entry_box(label, color, linestyle, fontsize=fontsize, text_color=text_color, linewidth=linewidth)
+        _legend_entry_box(
+            label,
+            color,
+            linestyle,
+            fontsize=fontsize,
+            text_color=text_color,
+            linewidth=linewidth,
+            entry_sep=entry_sep,
+        )
         for label, color, linestyle in items
     ]
     rows = [
@@ -334,7 +353,8 @@ def plot_xy(x, series_list, names, out_path, y_label,
         ncol=1,
         fontsize=10.5,
         linewidth=2.0,
-        row_sep=18.0,
+        row_sep=24.0,
+        entry_sep=0.6,
     )
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -418,6 +438,7 @@ def save_polar(out_path, datasets, title,
         linewidth=2.3,
         column_sep=22.0,
         row_sep=10.0,
+        entry_sep=0.8,
     )
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
