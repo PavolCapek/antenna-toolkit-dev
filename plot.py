@@ -54,6 +54,7 @@ from legend_utils import (
 DEFAULT_SOLID_COLORS = ["#2bb6f6", "#f5a623"]  # kept from gain plot
 SOLID_COLORS = DEFAULT_SOLID_COLORS[:]
 DASHED_COLORS = SOLID_COLORS[:]  # same hues for dashed variants
+CARTESIAN_DASH_PATTERN = [12, 7]
 
 def color_for_index(style: str, idx: int) -> str:
     base = SOLID_COLORS if style == '-' else DASHED_COLORS
@@ -359,7 +360,11 @@ def plot_xy(x, series_list, names, out_path, y_label,
         ysm = smooth_series(np.asarray(y, dtype=float), window=smooth_window)
         st_in = styles[i] if styles and i < len(styles) else "-"
         color_in = colors[i] if colors and i < len(colors) else None
-        ln, = ax.plot(x, ysm, linewidth=2.0, linestyle=st_in, solid_capstyle="round", color=color_in)
+        line_width = 2.2 if st_in == "--" else 2.0
+        ln, = ax.plot(x, ysm, linewidth=line_width, linestyle=st_in, solid_capstyle="round", color=color_in)
+        if st_in == "--":
+            ln.set_dashes(CARTESIAN_DASH_PATTERN)
+            ln.set_dash_capstyle("round")
         lines.append(ln)
 
     add_stacked_line_legend(
