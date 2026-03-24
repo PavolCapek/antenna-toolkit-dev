@@ -385,7 +385,8 @@ def plot_xy(x, series_list, names, out_path, y_label,
 
 def save_polar(out_path, datasets, title,
                grid_color="#6f7a81", rings=(0,-7.5,-15,-22.5,-30),
-               angle_tick_step=30, clip_db=-30.0, smooth_window: int = 5):
+               angle_tick_step=30, clip_db=-30.0, smooth_window: int = 5,
+               legend_ncol: int = 2):
     """Draw one polar axes, possibly with multiple datasets.
     datasets: list of dicts {angles, series, label, linestyle}
     """
@@ -450,7 +451,7 @@ def save_polar(out_path, datasets, title,
         loc="lower center",
         bbox_to_anchor=(0.5, -0.19),
         bbox_transform=ax.transAxes,
-        ncol=2,
+        ncol=legend_ncol,
         fontsize=11.0,
         linewidth=2.3,
         column_sep=22.0,
@@ -768,7 +769,7 @@ def main():
             save_polar(out_path_c, datasets_combined, title,
                        grid_color=args.grid_color, rings=rings,
                        angle_tick_step=args.angle_step, clip_db=args.clip_db,
-                       smooth_window=args.smooth_window)
+                       smooth_window=args.smooth_window, legend_ncol=2)
             print(out_path_c)
 
         # Single-phi: Azimuth (solid)
@@ -780,7 +781,7 @@ def main():
             save_polar(out_path_az, ds_az, title_az,
                        grid_color=args.grid_color, rings=rings,
                        angle_tick_step=args.angle_step, clip_db=args.clip_db,
-                       smooth_window=args.smooth_window)
+                       smooth_window=args.smooth_window, legend_ncol=1)
             print(out_path_az)
 
         # Single-phi: Elevation (dashed)
@@ -792,7 +793,7 @@ def main():
             save_polar(out_path_el, ds_el, title_el,
                        grid_color=args.grid_color, rings=rings,
                        angle_tick_step=args.angle_step, clip_db=args.clip_db,
-                       smooth_window=args.smooth_window)
+                       smooth_window=args.smooth_window, legend_ncol=1)
             print(out_path_el)
 
 if __name__ == "__main__":
