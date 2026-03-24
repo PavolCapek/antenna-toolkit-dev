@@ -143,7 +143,31 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.theme, "sage")
         self.assertEqual(self.window.store.get("theme"), "sage")
         self.assertEqual(self.window.theme_selector.currentText(), "Sage")
-        self.assertGreaterEqual(QApplication.font().pointSizeF(), 11.0)
+        self.assertGreaterEqual(QApplication.font().pointSizeF(), 10.0)
+
+    def test_compact_layout_collapses_secondary_command_details(self) -> None:
+        with mock.patch.object(self.window, "_screen_available_height", return_value=1200):
+            self.window._update_layout_mode(force=True)
+        self.app.processEvents()
+
+        self.assertTrue(self.window._compact_layout)
+        self.assertTrue(self.window.brand_subtitle.isHidden())
+        self.assertTrue(self.window.run_help_label.isHidden())
+        self.assertFalse(self.window.pipeline_details_toggle.isHidden())
+        self.assertTrue(self.window.pipeline_details.isHidden())
+        self.assertEqual(self.window.ffs_list.minimumHeight(), 170)
+        self.assertGreaterEqual(QApplication.font().pointSizeF(), 10.0)
+
+        with mock.patch.object(self.window, "_screen_available_height", return_value=1440):
+            self.window._update_layout_mode(force=True)
+        self.app.processEvents()
+
+        self.assertFalse(self.window._compact_layout)
+        self.assertFalse(self.window.brand_subtitle.isHidden())
+        self.assertFalse(self.window.run_help_label.isHidden())
+        self.assertTrue(self.window.pipeline_details_toggle.isHidden())
+        self.assertFalse(self.window.pipeline_details.isHidden())
+        self.assertEqual(self.window.ffs_list.minimumHeight(), 230)
 
     def test_create_project_starts_blank_until_user_saves_inputs(self) -> None:
         self.window._add_ffs_files(["Input data/a.ffs"])
