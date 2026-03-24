@@ -42,6 +42,7 @@ from matplotlib.offsetbox import AnchoredOffsetbox, DrawingArea, HPacker, TextAr
 from matplotlib.ticker import FuncFormatter, FixedFormatter, FixedLocator, NullFormatter, NullLocator
 from legend_utils import (
     apply_legend_labels,
+    beam_efficiency_legend_label,
     beamwidth_legend_label,
     gain_legend_label,
     parse_legend_labels,
@@ -229,19 +230,36 @@ def _legend_entry_box(
     line_height = max(7.0, fontsize * 0.62)
     drawing = DrawingArea(line_width, line_height, 0, 0)
     line_y = max(linewidth / 2.0 + 0.6, line_height * 0.24)
-    line = Line2D(
-        [2.0, line_width - 2.0],
-        [line_y, line_y],
-        color=color,
-        lw=linewidth,
-        linestyle="-",
-        solid_capstyle="round",
-        transform=drawing.get_transform(),
-    )
+    x0 = 2.0
+    x1 = line_width - 2.0
     if linestyle == "--":
-        line.set_dashes([8, 6, 8, 6, 8, 6])
-        line.set_dash_capstyle("round")
-    drawing.add_artist(line)
+        total_width = x1 - x0
+        gap = max(6.0, total_width * 0.26)
+        dash_len = max(10.0, (total_width - gap) / 2.0)
+        first_x1 = x0 + dash_len
+        second_x0 = x1 - dash_len
+        for seg_x0, seg_x1 in [(x0, first_x1), (second_x0, x1)]:
+            dash = Line2D(
+                [seg_x0, seg_x1],
+                [line_y, line_y],
+                color=color,
+                lw=linewidth,
+                linestyle="-",
+                solid_capstyle="round",
+                transform=drawing.get_transform(),
+            )
+            drawing.add_artist(dash)
+    else:
+        line = Line2D(
+            [x0, x1],
+            [line_y, line_y],
+            color=color,
+            lw=linewidth,
+            linestyle="-",
+            solid_capstyle="round",
+            transform=drawing.get_transform(),
+        )
+        drawing.add_artist(line)
     text = TextArea(
         label,
         textprops={
@@ -373,7 +391,6 @@ def save_polar(out_path, datasets, title,
     """
     fig = plt.figure(figsize=(9, 10), dpi=120)
     ax = plt.subplot(111, polar=True)
-    fig.suptitle(title, color=grid_color, fontsize=14)
 
     ax.set_facecolor("white")
     ax.set_theta_zero_location("N")
@@ -557,7 +574,7 @@ def main():
         if "eta_beam_percent" in df.columns and not sel0.empty:
             be_freqs.append(sel0["freq_GHz"].to_numpy(dtype=float))
             be_series.append(sel0["eta_beam_percent"].to_numpy(dtype=float))
-            be_names.append(f"{sheet}")
+            be_names.append(beam_efficiency_legend_label(sheet))
 
     for phi, label_suffix, style in [(0, "Azimuth", "-"), (90, "Elevation", "--")]:
         for sheet, df in summary_frames:

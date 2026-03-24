@@ -4,6 +4,7 @@ import unittest
 
 from legend_utils import (
     apply_legend_labels,
+    beam_efficiency_legend_label,
     beamwidth_legend_label,
     detect_polarization,
     gain_legend_label,
@@ -37,6 +38,8 @@ class LegendUtilsTests(unittest.TestCase):
     def test_default_gain_and_beamwidth_labels_match_requested_format(self) -> None:
         self.assertEqual(gain_legend_label("SH30WB_Horizontal"), "Gain H (IEEE)")
         self.assertEqual(gain_legend_label("SH30WB_Vertical"), "Gain V (IEEE)")
+        self.assertEqual(beam_efficiency_legend_label("SH30WB_Horizontal"), "Beam Efficiency H")
+        self.assertEqual(beam_efficiency_legend_label("SH30WB_Vertical"), "Beam Efficiency V")
         self.assertEqual(beamwidth_legend_label("SH30WB_Horizontal", "Azimuth"), "Beamwidth Azimuth H -6 dB")
         self.assertEqual(beamwidth_legend_label("SH30WB_Vertical", "Elevation"), "Beamwidth Elevation V -6 dB")
 

@@ -46,6 +46,11 @@ def beamwidth_legend_label(name: str, plane: str) -> str:
     return f"Beamwidth {plane} {suffix} -6 dB"
 
 
+def beam_efficiency_legend_label(name: str) -> str:
+    polarization = detect_polarization(name)
+    return f"Beam Efficiency {polarization}" if polarization else f"Beam Efficiency {name}"
+
+
 def polar_legend_label(name: str, plane: str, frequency_label: str) -> str:
     polarization = detect_polarization(name)
     prefix = polarization if polarization else str(name)
