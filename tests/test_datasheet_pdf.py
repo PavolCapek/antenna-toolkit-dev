@@ -54,7 +54,12 @@ class DatasheetPdfTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def _write_template_pdf(self, value_fontname: str = "helv", value_fontfile: str | None = None) -> None:
+    def _write_template_pdf(
+        self,
+        value_fontname: str = "helv",
+        value_fontfile: str | None = None,
+        reverse_polar_slot_order: bool = False,
+    ) -> None:
         with fitz.open() as doc:
             page = doc.new_page()
             y = 72.0
@@ -76,8 +81,20 @@ class DatasheetPdfTests(unittest.TestCase):
             magenta_pix = self._svg_pixmap("#ff00ff", 140, 140)
             charts_page.insert_image(self.page2_gain_rect, pixmap=red_pix, keep_proportion=True)
             charts_page.insert_image(self.page2_beamwidth_rect, pixmap=blue_pix, keep_proportion=True)
-            charts_page.insert_image(self.page2_azimuth_rect, pixmap=cyan_pix, keep_proportion=True)
-            charts_page.insert_image(self.page2_elevation_rect, pixmap=magenta_pix, keep_proportion=True)
+            polar_slots = [
+                (self.page2_azimuth_rect, cyan_pix),
+                (fitz.Rect(self.page2_elevation_rect), magenta_pix),
+            ]
+            if reverse_polar_slot_order:
+                adjusted_elevation_rect = fitz.Rect(self.page2_elevation_rect)
+                adjusted_elevation_rect.y0 -= 1.0
+                adjusted_elevation_rect.y1 -= 1.0
+                polar_slots = [
+                    (adjusted_elevation_rect, magenta_pix),
+                    (self.page2_azimuth_rect, cyan_pix),
+                ]
+            for rect, pixmap in polar_slots:
+                charts_page.insert_image(rect, pixmap=pixmap, keep_proportion=True)
             charts_page.insert_text((360.0, 180.0), "Gain H (IEEE)", fontsize=7, fontname="helv")
             charts_page.insert_text((360.0, 196.0), "Gain V (IEEE)", fontsize=7, fontname="helv")
             charts_page.insert_text((360.0, 338.0), "Beamwidth Azimuth H -6 dB", fontsize=7, fontname="helv")
@@ -276,6 +293,25 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertNotIn("Beamwidth Azimuth H -6 dB", page2_text)
         self.assertNotIn("Port Pattern Azimuth 5.5 GHz", page2_text)
         self.assertEqual(page2_images, [])
+
+    def test_build_datasheet_pdf_keeps_azimuth_left_and_elevation_right(self) -> None:
+        self._write_template_pdf(reverse_polar_slot_order=True)
+
+        build_datasheet_pdf(
+            output=self.output_pdf,
+            template=self.template_pdf,
+            extract_workbook=self.extract_workbook,
+        )
+
+        with fitz.open(self.output_pdf) as doc:
+            page = doc[1]
+            azimuth_rgb = self._pixel_rgb(page, self.page2_azimuth_rect.tl + fitz.Point(self.page2_azimuth_rect.width / 2.0, self.page2_azimuth_rect.height / 2.0))
+            elevation_rgb = self._pixel_rgb(page, self.page2_elevation_rect.tl + fitz.Point(self.page2_elevation_rect.width / 2.0, self.page2_elevation_rect.height / 2.0))
+
+        self.assertGreater(azimuth_rgb[1], 200)
+        self.assertGreater(azimuth_rgb[2], 200)
+        self.assertGreater(elevation_rgb[0], 200)
+        self.assertGreater(elevation_rgb[2], 200)
 
     def test_svg_to_pdf_bytes_preserves_dashed_strokes(self) -> None:
         dashed_svg = self.root / "dashed.svg"

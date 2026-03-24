@@ -546,16 +546,18 @@ def _build_chart_replacements(page: fitz.Page, output: Path, extract_workbook: P
     if len(slots) < 2:
         raise ValueError("Datasheet template page 2 does not contain the expected chart image slots.")
 
+    ordered_slots = sorted(slots, key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
     replacements: list[ChartReplacement] = [
-        ChartReplacement("gain", fitz.Rect(slots[0].rect), _find_plot_asset(output, extract_workbook, "_gain.svg")),
-        ChartReplacement("beamwidth", fitz.Rect(slots[1].rect), _find_plot_asset(output, extract_workbook, "_beamwidth.svg")),
+        ChartReplacement("gain", fitz.Rect(ordered_slots[0].rect), _find_plot_asset(output, extract_workbook, "_gain.svg")),
+        ChartReplacement("beamwidth", fitz.Rect(ordered_slots[1].rect), _find_plot_asset(output, extract_workbook, "_beamwidth.svg")),
     ]
-    if len(slots) >= 4:
+    if len(ordered_slots) >= 4:
         azimuth_asset, elevation_asset = _find_polar_plot_assets(page, output, extract_workbook)
+        polar_slots = sorted(ordered_slots[2:4], key=lambda slot: (slot.rect.x0, slot.rect.y0, slot.rect.y1, slot.rect.x1))
         replacements.extend(
             [
-                ChartReplacement("azimuth", fitz.Rect(slots[2].rect), azimuth_asset),
-                ChartReplacement("elevation", fitz.Rect(slots[3].rect), elevation_asset),
+                ChartReplacement("azimuth", fitz.Rect(polar_slots[0].rect), azimuth_asset),
+                ChartReplacement("elevation", fitz.Rect(polar_slots[1].rect), elevation_asset),
             ]
         )
 
