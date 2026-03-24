@@ -7,7 +7,7 @@ from pathlib import Path
 import fitz
 import pandas as pd
 
-from datasheet_pdf import build_datasheet_pdf, build_replacements_from_workbook
+from datasheet_pdf import _svg_to_pdf_bytes, build_datasheet_pdf, build_replacements_from_workbook
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -117,6 +117,34 @@ class DatasheetPdfTests(unittest.TestCase):
         offset = (y * width + x) * pix.n
         samples = pix.samples
         return (samples[offset], samples[offset + 1], samples[offset + 2])
+
+    def _count_colored_runs(
+        self,
+        pix: fitz.Pixmap,
+        *,
+        y: int,
+        rgb_min: tuple[int, int, int],
+        rgb_max: tuple[int, int, int],
+    ) -> int:
+        y = max(0, min(pix.height - 1, y))
+        runs = 0
+        in_run = False
+        for x in range(pix.width):
+            offset = (y * pix.width + x) * pix.n
+            red = pix.samples[offset]
+            green = pix.samples[offset + 1]
+            blue = pix.samples[offset + 2]
+            is_match = (
+                rgb_min[0] <= red <= rgb_max[0]
+                and rgb_min[1] <= green <= rgb_max[1]
+                and rgb_min[2] <= blue <= rgb_max[2]
+            )
+            if is_match and not in_run:
+                runs += 1
+                in_run = True
+            elif not is_match:
+                in_run = False
+        return runs
 
     def _write_extract_workbook(self) -> None:
         ffs_summary = pd.DataFrame(
@@ -248,6 +276,39 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertNotIn("Beamwidth Azimuth H -6 dB", page2_text)
         self.assertNotIn("Port Pattern Azimuth 5.5 GHz", page2_text)
         self.assertEqual(page2_images, [])
+
+    def test_svg_to_pdf_bytes_preserves_dashed_strokes(self) -> None:
+        dashed_svg = self.root / "dashed.svg"
+        dashed_svg.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80" viewBox="0 0 240 80">'
+                '<rect x="0" y="0" width="240" height="80" fill="#ffffff"/>'
+                '<line x1="20" y1="24" x2="220" y2="24" stroke="#2bb3f3" stroke-width="8"/>'
+                '<line x1="20" y1="56" x2="220" y2="56" stroke="#2bb3f3" stroke-width="8" stroke-dasharray="24 18"/>'
+                "</svg>"
+            ),
+            encoding="utf-8",
+        )
+
+        pdf_bytes = _svg_to_pdf_bytes(dashed_svg)
+        with fitz.open("pdf", pdf_bytes) as doc:
+            pix = doc[0].get_pixmap(matrix=fitz.Matrix(4, 4), alpha=False)
+
+        solid_runs = self._count_colored_runs(
+            pix,
+            y=96,
+            rgb_min=(0, 120, 180),
+            rgb_max=(120, 255, 255),
+        )
+        dashed_runs = self._count_colored_runs(
+            pix,
+            y=224,
+            rgb_min=(0, 120, 180),
+            rgb_max=(120, 255, 255),
+        )
+
+        self.assertEqual(solid_runs, 1)
+        self.assertGreaterEqual(dashed_runs, 3)
 
     def test_build_replacements_from_workbook_derives_polarization_from_source_file(self) -> None:
         ffs_summary = pd.DataFrame(

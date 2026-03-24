@@ -598,9 +598,24 @@ def _build_chart_replacements(page: fitz.Page, output: Path, extract_workbook: P
     return resolved
 
 
+def _svg_to_pdf_bytes(svg_path: Path) -> bytes:
+    try:
+        from reportlab.graphics import renderPDF
+        from svglib.svglib import svg2rlg
+    except ImportError as exc:
+        raise RuntimeError(
+            "svglib and reportlab are required to place SVG charts into the datasheet PDF."
+        ) from exc
+
+    drawing = svg2rlg(str(svg_path))
+    if drawing is None:
+        raise ValueError(f"Unable to load SVG asset '{svg_path}'.")
+
+    return renderPDF.drawToString(drawing)
+
+
 def _place_svg_as_vector(page: fitz.Page, target_rect: fitz.Rect, svg_path: Path) -> None:
-    with fitz.open(svg_path) as svg_doc:
-        pdf_bytes = svg_doc.convert_to_pdf()
+    pdf_bytes = _svg_to_pdf_bytes(svg_path)
     with fitz.open("pdf", pdf_bytes) as pdf_doc:
         page.show_pdf_page(target_rect, pdf_doc, 0, keep_proportion=True, overlay=True)
 
