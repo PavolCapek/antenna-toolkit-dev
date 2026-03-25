@@ -59,6 +59,8 @@ THEME_OPTIONS = [
     ("sepia", "Sepia"),
 ]
 THEME_LABELS = {key: label for key, label in THEME_OPTIONS}
+PRESET_STORE_KEY = "ui_presets"
+ACTIVE_PRESET_KEY = "active_preset"
 THEME_STYLES = {
     "light": {
         "palette_window": "#edf2f7",
@@ -832,7 +834,11 @@ class ModernMainWindow(QMainWindow):
         self._reverting_project_selection = False
         self.active_project_slug = ""
         self.active_project_name = ""
-        self.project_presets: dict[str, dict[str, object]] = {}
+        self.global_presets: dict[str, dict[str, object]] = normalize_preset_payload(self.store.get(PRESET_STORE_KEY, {}))
+        self.global_active_preset = str(self.store.get(ACTIVE_PRESET_KEY, "")).strip()
+        if self.global_active_preset and self.global_active_preset not in self.global_presets:
+            self.global_active_preset = ""
+            self.store.set(ACTIVE_PRESET_KEY, "")
         self.project_active_preset = ""
         self.project_run_state: dict[str, object] = {}
         self._compact_layout = False
@@ -909,7 +915,7 @@ class ModernMainWindow(QMainWindow):
         quick_actions = Card("Pipeline", "Run")
         self.quick_actions_card = quick_actions
         quick_actions.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        run_help = QLabel("Use Full Pipeline for the usual workflow. The other actions are for rerunning only one stage after you change inputs or settings.")
+        run_help = QLabel("Use Full Pipeline for the usual workflow. Manual reruns for individual stages are available from the Manual runs menu.")
         run_help.setObjectName("helper")
         run_help.setWordWrap(True)
         self.run_help_label = run_help
@@ -917,35 +923,27 @@ class ModernMainWindow(QMainWindow):
         self.btn_full = QPushButton("Run Full Pipeline")
         self.btn_full.setObjectName("primaryButton")
         self.btn_full.clicked.connect(self.run_full)
-        self.btn_beam = QPushButton("Workbook Only")
-        self.btn_beam.clicked.connect(self.run_beam)
-        self.btn_extract = QPushButton("Extract Data")
-        self.btn_extract.clicked.connect(self.run_extract)
-        self.btn_datasheet = QPushButton("Generate Datasheet PDF")
-        self.btn_datasheet.clicked.connect(self.run_datasheet)
-        self.btn_plot = QPushButton("Plots Only")
-        self.btn_plot.clicked.connect(self.run_plot)
-        self.btn_vswr = QPushButton("VSWR Only")
-        self.btn_vswr.clicked.connect(self.run_vswr)
         self.btn_cancel = QPushButton("Cancel Run")
         self.btn_cancel.setObjectName("ghostButton")
         self.btn_cancel.clicked.connect(self.cancel_run)
-        self.btn_full.setToolTip("Run workbook generation, chart generation, and VSWR generation in sequence.")
-        self.btn_beam.setToolTip("Generate only the Excel workbook from the selected far-field files.")
-        self.btn_extract.setToolTip("Generate a separate Excel workbook with extracted gain, beamwidth, VSWR, impedance, and front-to-back metrics.")
-        self.btn_datasheet.setToolTip("Generate a datasheet PDF by replacing values in Datasheet.pdf with data from the extracted workbook.")
-        self.btn_plot.setToolTip("Generate only the plots that are based on the derived workbook.")
-        self.btn_vswr.setToolTip("Generate only the VSWR plot from the current Touchstone file.")
+        self.run_more_button = QToolButton()
+        self.run_more_button.setText("Manual runs")
+        self.run_more_button.setPopupMode(QToolButton.InstantPopup)
+        self.run_more_button.setToolTip("Run a single stage without running the full pipeline.")
+        self.run_more_menu = QMenu(self.run_more_button)
+        self.run_more_beam_action = self.run_more_menu.addAction("Workbook only", self.run_beam)
+        self.run_more_extract_action = self.run_more_menu.addAction("Extract data", self.run_extract)
+        self.run_more_datasheet_action = self.run_more_menu.addAction("Generate datasheet PDF", self.run_datasheet)
+        self.run_more_plot_action = self.run_more_menu.addAction("Plots only", self.run_plot)
+        self.run_more_vswr_action = self.run_more_menu.addAction("VSWR only", self.run_vswr)
+        self.run_more_button.setMenu(self.run_more_menu)
+        self.btn_full.setToolTip("Run workbook generation, extract generation, plot generation, datasheet generation, and VSWR generation in sequence.")
         self.btn_cancel.setToolTip("Stop the current run and clear any queued stages.")
         self.hero_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=150)
         self.hero_actions.set_buttons([
             self.btn_full,
-            self.btn_beam,
-            self.btn_extract,
-            self.btn_datasheet,
-            self.btn_plot,
-            self.btn_vswr,
             self.btn_cancel,
+            self.run_more_button,
         ])
         quick_actions.body.addWidget(self.hero_actions)
         self.run_info = QLabel("Idle")
@@ -1026,6 +1024,13 @@ class ModernMainWindow(QMainWindow):
         self.project_rename_action = self.project_more_menu.addAction("Rename project", self.edit_project)
         self.project_duplicate_action = self.project_more_menu.addAction("Duplicate project", self.duplicate_project)
         self.project_delete_action = self.project_more_menu.addAction("Delete project", self.delete_project)
+        self.project_more_menu.addSeparator()
+        self.project_run_menu = self.project_more_menu.addMenu("Run stage")
+        self.project_run_beam_action = self.project_run_menu.addAction("Workbook only", self.run_beam)
+        self.project_run_extract_action = self.project_run_menu.addAction("Extract data", self.run_extract)
+        self.project_run_datasheet_action = self.project_run_menu.addAction("Generate datasheet PDF", self.run_datasheet)
+        self.project_run_plot_action = self.project_run_menu.addAction("Plots only", self.run_plot)
+        self.project_run_vswr_action = self.project_run_menu.addAction("VSWR only", self.run_vswr)
         self.project_more_menu.addSeparator()
         self.project_import_action = self.project_more_menu.addAction("Import bundle", self.import_project_bundle)
         self.project_export_action = self.project_more_menu.addAction("Export bundle", self.export_project_bundle)
@@ -1152,7 +1157,7 @@ class ModernMainWindow(QMainWindow):
         ffs_card.body.addWidget(helper)
         self.ffs_list = DropList(self._add_ffs_files)
         self.ffs_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.ffs_list.setMinimumHeight(230)
+        self.ffs_list.setMinimumHeight(170)
         self.ffs_list.setToolTip("Add one or more CST far-field export files (.ffs). Their names drive project-name deduction.")
         self.ffs_list.itemChanged.connect(self.on_ffs_item_changed)
         self.ffs_list.itemSelectionChanged.connect(self._update_ffs_action_state)
@@ -1461,7 +1466,6 @@ class ModernMainWindow(QMainWindow):
         self._loading_project = True
         self.active_project_slug = ""
         self.active_project_name = ""
-        self.project_presets = {}
         self.project_active_preset = ""
         self.project_run_state = {}
         self._saved_project_signature = ""
@@ -1501,7 +1505,7 @@ class ModernMainWindow(QMainWindow):
         self.angle_step.setValue(30)
         self.clip_db.setValue(-30.0)
         self.workflow_tabs.setCurrentIndex(0)
-        self.refresh_preset_list(select_name="")
+        self.refresh_preset_list(select_name=self.global_active_preset)
         self.project_combo.blockSignals(True)
         self.project_combo.setCurrentIndex(0)
         self.project_combo.blockSignals(False)
@@ -1569,7 +1573,7 @@ class ModernMainWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             "Unsaved Changes",
-            f"The current project or its presets have unsaved changes. Save before {action}?",
+            f"The current project has unsaved changes. Save before {action}?",
             QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
             QMessageBox.Save,
         )
@@ -1647,7 +1651,7 @@ class ModernMainWindow(QMainWindow):
                 "preset_min_button_width": 96,
                 "ffs_min_button_width": 118,
                 "s2p_min_button_width": 122,
-                "ffs_list_min_height": 170,
+                "ffs_list_min_height": 140,
                 "brand_title_size": 19,
                 "brand_subtitle_size": 10.25,
                 "run_info_size": 10.25,
@@ -1696,7 +1700,7 @@ class ModernMainWindow(QMainWindow):
             "preset_min_button_width": 110,
             "ffs_min_button_width": 135,
             "s2p_min_button_width": 145,
-            "ffs_list_min_height": 230,
+            "ffs_list_min_height": 170,
             "brand_title_size": 24,
             "brand_subtitle_size": 11.5,
             "run_info_size": 11.5,
@@ -2183,7 +2187,7 @@ class ModernMainWindow(QMainWindow):
         name = self.project_active_preset or self.current_preset_name()
         if not name:
             return False
-        preset = self.project_presets.get(name)
+        preset = self.global_presets.get(name)
         return isinstance(preset, dict) and preset == self.collect_preset_values()
 
     def _validation_messages(self) -> list[str]:
@@ -2395,7 +2399,7 @@ class ModernMainWindow(QMainWindow):
             ],
             touchstone_file=serialize_workspace_path(THIS_DIR, self.selected_s2p()),
             settings=self.collect_preset_values(),
-            presets=self.project_presets,
+            presets={},
             active_preset=self.project_active_preset,
             run_state=clean_run_state(dict(self.project_run_state)),
         )
@@ -2458,16 +2462,23 @@ class ModernMainWindow(QMainWindow):
         self.project_rename_action.setEnabled(has_project)
         self.project_duplicate_action.setEnabled(has_project)
         self.project_delete_action.setEnabled(has_project)
+        self.project_run_menu.setEnabled(has_project)
+        self.project_run_beam_action.setEnabled(has_project)
+        self.project_run_extract_action.setEnabled(has_project)
+        self.project_run_datasheet_action.setEnabled(has_project)
+        self.project_run_plot_action.setEnabled(has_project)
+        self.project_run_vswr_action.setEnabled(has_project)
+        self.run_more_button.setEnabled(has_project)
+        self.run_more_beam_action.setEnabled(has_project)
+        self.run_more_extract_action.setEnabled(has_project)
+        self.run_more_datasheet_action.setEnabled(has_project)
+        self.run_more_plot_action.setEnabled(has_project)
+        self.run_more_vswr_action.setEnabled(has_project)
         self.project_import_action.setEnabled(True)
         self.project_export_action.setEnabled(has_project)
         self.project_open_folder_action.setEnabled(has_project)
         for widget in (
             self.btn_full,
-            self.btn_beam,
-            self.btn_extract,
-            self.btn_datasheet,
-            self.btn_plot,
-            self.btn_vswr,
             self.ffs_list,
             self.s2p_field,
             self.add_ffs_button,
@@ -2486,18 +2497,21 @@ class ModernMainWindow(QMainWindow):
             return
         has_project = bool(self.active_project_slug)
         has_preset = bool(self.current_preset_name())
-        self.preset_combo.setEnabled(has_project)
-        self.preset_new_button.setEnabled(has_project)
-        self.preset_save_button.setEnabled(has_project)
-        self.preset_more_button.setEnabled(has_project)
-        self.preset_rename_action.setEnabled(has_project and has_preset)
-        self.preset_delete_action.setEnabled(has_project and has_preset)
-        self.preset_import_action.setEnabled(has_project)
-        self.preset_export_action.setEnabled(has_project and bool(self.project_presets))
-        preset_label = self.project_active_preset or ("Manual" if has_project else "none")
+        self.preset_combo.setEnabled(True)
+        self.preset_new_button.setEnabled(True)
+        self.preset_save_button.setEnabled(True)
+        self.preset_more_button.setEnabled(True)
+        self.preset_rename_action.setEnabled(has_preset)
+        self.preset_delete_action.setEnabled(has_preset)
+        self.preset_import_action.setEnabled(True)
+        self.preset_export_action.setEnabled(bool(self.global_presets))
+        preset_label = self.project_active_preset or self.global_active_preset or ("Manual" if has_project else "none")
         self.preset_badge.setText(f"Preset: {preset_label}")
         if not has_project:
-            self.preset_state_label.setText("Choose a preset or keep working manually.")
+            if has_preset:
+                self.preset_state_label.setText(f"Preset '{self.current_preset_name()}' is available globally. Select a project to save that choice with it.")
+            else:
+                self.preset_state_label.setText("Choose a preset or keep working manually.")
         elif not has_preset:
             self.preset_state_label.setText("Manual settings only. Save them as a preset if you want to reuse them.")
         elif self._preset_matches_selected():
@@ -2536,7 +2550,6 @@ class ModernMainWindow(QMainWindow):
         if not slug:
             self.active_project_slug = ""
             self.active_project_name = ""
-            self.project_presets = {}
             self.project_active_preset = ""
             self.project_run_state = {}
             self._saved_project_signature = ""
@@ -2548,11 +2561,28 @@ class ModernMainWindow(QMainWindow):
             self.s2p_field.clear()
             self._loading_project = False
             self.store.set("active_project", "")
-            self.refresh_preset_list()
+            self.refresh_preset_list(select_name=self.global_active_preset)
             self.refresh_derived_paths()
             return
         project = self.project_store.load_project(slug)
         self._apply_project(project)
+
+    def _persist_global_presets(self) -> None:
+        self.store.set(PRESET_STORE_KEY, self.global_presets)
+        active_name = self.global_active_preset if self.global_active_preset in self.global_presets else ""
+        self.global_active_preset = active_name
+        self.store.set(ACTIVE_PRESET_KEY, active_name)
+
+    def _merge_project_presets_into_global(self, presets: dict[str, dict[str, object]] | object) -> bool:
+        imported = normalize_preset_payload(presets)
+        changed = False
+        for name, values in imported.items():
+            if self.global_presets.get(name) != values:
+                self.global_presets[name] = values
+                changed = True
+        if changed:
+            self._persist_global_presets()
+        return changed
 
     def _apply_project(self, project: ProjectRecord) -> None:
         self._loading_project = True
@@ -2570,14 +2600,10 @@ class ModernMainWindow(QMainWindow):
             guessed = guess_touchstone_path(project.name, self.selected_ffs())
             touchstone = guessed
         self.s2p_field.setText(display_workspace_path(touchstone))
-        self.project_presets = normalize_preset_payload(project.presets)
-        self.project_active_preset = project.active_preset if project.active_preset in self.project_presets else ""
-        if not self.project_presets:
-            legacy_presets = normalize_preset_payload(self.store.get("ui_presets", {}))
-            legacy_active = str(self.store.get("active_preset", "")).strip()
-            if legacy_presets:
-                self.project_presets = legacy_presets
-                self.project_active_preset = legacy_active if legacy_active in legacy_presets else ""
+        self._merge_project_presets_into_global(project.presets)
+        self.project_active_preset = project.active_preset if project.active_preset in self.global_presets else ""
+        self.global_active_preset = self.project_active_preset or self.global_active_preset
+        self._persist_global_presets()
         self.refresh_preset_list(select_name=self.project_active_preset)
         self.apply_preset_values(project.settings)
         self.store.set("beam_ffs", self.selected_ffs())
@@ -2586,7 +2612,7 @@ class ModernMainWindow(QMainWindow):
         self._capture_saved_project_signature(self.current_project())
         if self._loaded_project_schema_version < CURRENT_PROJECT_SCHEMA_VERSION:
             self.save_active_project()
-        elif not project.presets and self.project_presets:
+        elif project.presets:
             self.save_active_project()
         self.refresh_derived_paths()
 
@@ -2632,7 +2658,7 @@ class ModernMainWindow(QMainWindow):
             touchstone_file="",
             settings=self._default_project_settings(),
             presets={},
-            active_preset="",
+            active_preset=self.current_preset_name(),
             run_state={},
         )
         project.record_activity("created")
@@ -2733,7 +2759,7 @@ class ModernMainWindow(QMainWindow):
         self._mark_project_dirty()
 
     def preset_names(self) -> list[str]:
-        return sorted(str(name) for name in self.project_presets.keys())
+        return sorted(str(name) for name in self.global_presets.keys())
 
     def current_preset_name(self) -> str:
         if not hasattr(self, "preset_combo"):
@@ -2745,7 +2771,7 @@ class ModernMainWindow(QMainWindow):
         if not hasattr(self, "preset_combo"):
             return
         if not select_name:
-            select_name = self.project_active_preset
+            select_name = self.project_active_preset or self.global_active_preset
         self.preset_combo.blockSignals(True)
         self.preset_combo.clear()
         self.preset_combo.addItem("No preset", "")
@@ -2827,49 +2853,46 @@ class ModernMainWindow(QMainWindow):
     def on_preset_selected(self, _text: str) -> None:
         name = self.current_preset_name()
         self.project_active_preset = name
+        self.global_active_preset = name if name in self.global_presets else ""
+        self._persist_global_presets()
         self._update_preset_action_state()
         if not name:
             self._mark_project_dirty()
             return
-        values = self.project_presets.get(name, {})
+        values = self.global_presets.get(name, {})
         if isinstance(values, dict):
             self.apply_preset_values(values)
         self._mark_project_dirty()
 
     def create_preset(self) -> None:
-        if not self.active_project_slug:
-            self.status("Create or select a project first")
-            return
         suggested = suggest_preset_name(self.preset_names(), self.active_project_name or "Preset")
         name, ok = QInputDialog.getText(self, "Create Preset", "Preset name:", text=suggested)
         name = name.strip()
         if not ok or not name:
             return
-        if name in self.project_presets:
+        if name in self.global_presets:
             QMessageBox.information(self, "Preset Exists", f"A preset named '{name}' already exists.")
             return
-        self.project_presets[name] = self.collect_preset_values()
+        self.global_presets[name] = self.collect_preset_values()
         self.project_active_preset = name
+        self.global_active_preset = name
+        self._persist_global_presets()
         self._mark_project_dirty()
         self.refresh_preset_list(select_name=name)
 
     def save_preset(self) -> None:
-        if not self.active_project_slug:
-            self.status("Create or select a project first")
-            return
         name = self.current_preset_name()
         if not name:
             self.create_preset()
             return
-        self.project_presets[name] = self.collect_preset_values()
+        self.global_presets[name] = self.collect_preset_values()
         self.project_active_preset = name
+        self.global_active_preset = name
+        self._persist_global_presets()
         self._mark_project_dirty()
         self.refresh_preset_list(select_name=name)
 
     def rename_preset(self) -> None:
-        if not self.active_project_slug:
-            self.status("Create or select a project first")
-            return
         name = self.current_preset_name()
         if not name:
             QMessageBox.information(self, "No Preset Selected", "Select a preset to rename.")
@@ -2878,34 +2901,36 @@ class ModernMainWindow(QMainWindow):
         new_name = new_name.strip()
         if not ok or not new_name or new_name == name:
             return
-        if new_name in self.project_presets:
+        if new_name in self.global_presets:
             QMessageBox.information(self, "Preset Exists", f"A preset named '{new_name}' already exists.")
             return
-        self.project_presets[new_name] = self.project_presets.pop(name)
-        self.project_active_preset = new_name
+        self.global_presets[new_name] = self.global_presets.pop(name)
+        if self.project_active_preset == name:
+            self.project_active_preset = new_name
+        if self.global_active_preset == name:
+            self.global_active_preset = new_name
+        self._persist_global_presets()
         self._mark_project_dirty()
         self.refresh_preset_list(select_name=new_name)
 
     def delete_preset(self) -> None:
-        if not self.active_project_slug:
-            self.status("Create or select a project first")
-            return
         name = self.current_preset_name()
         if not name:
             QMessageBox.information(self, "No Preset Selected", "Select a preset to delete.")
             return
         if QMessageBox.question(self, "Delete Preset", f"Delete preset '{name}'?") != QMessageBox.Yes:
             return
-        self.project_presets.pop(name, None)
-        self.project_active_preset = ""
+        self.global_presets.pop(name, None)
+        if self.project_active_preset == name:
+            self.project_active_preset = ""
+        if self.global_active_preset == name:
+            self.global_active_preset = ""
+        self._persist_global_presets()
         self._mark_project_dirty()
         self.refresh_preset_list(select_name="")
 
     def import_presets(self) -> None:
-        if not self.active_project_slug:
-            self.status("Create or select a project first")
-            return
-        path, _ = QFileDialog.getOpenFileName(self, "Import Presets", str(self.project_results_dir()), "JSON (*.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "Import Presets", str(self.project_results_dir() if self.active_project_slug else self.project_store.projects_dir), "JSON (*.json)")
         if not path:
             return
         try:
@@ -2917,27 +2942,26 @@ class ModernMainWindow(QMainWindow):
         if not imported:
             QMessageBox.information(self, "No Presets Imported", "The selected file did not contain any valid presets.")
             return
-        self.project_presets.update(imported)
+        self.global_presets.update(imported)
+        self._persist_global_presets()
         self._mark_project_dirty()
         self.refresh_preset_list(select_name=self.current_preset_name())
         QMessageBox.information(self, "Presets Imported", f"Imported {len(imported)} preset(s).")
 
     def export_presets(self) -> None:
-        if not self.active_project_slug:
-            self.status("Create or select a project first")
-            return
-        if not self.project_presets:
+        if not self.global_presets:
             QMessageBox.information(self, "No Presets", "There are no presets to export.")
             return
-        suggested = str((self.project_results_dir() / "antenna_toolkit_presets.json").resolve())
+        base_dir = self.project_results_dir() if self.active_project_slug else self.project_store.projects_dir
+        suggested = str((base_dir / "antenna_toolkit_presets.json").resolve())
         path, _ = QFileDialog.getSaveFileName(self, "Export Presets", suggested, "JSON (*.json)")
         if not path:
             return
         out_path = Path(path)
         if out_path.suffix.lower() != ".json":
             out_path = out_path.with_suffix(".json")
-        out_path.write_text(json.dumps({"presets": self.project_presets}, indent=2), encoding="utf-8")
-        QMessageBox.information(self, "Presets Exported", f"Exported {len(self.project_presets)} preset(s) to:\n{out_path}")
+        out_path.write_text(json.dumps({"presets": self.global_presets}, indent=2), encoding="utf-8")
+        QMessageBox.information(self, "Presets Exported", f"Exported {len(self.global_presets)} preset(s) to:\n{out_path}")
 
     def _item_path(self, item: QListWidgetItem) -> str:
         return item.data(Qt.UserRole) or str(resolve_workspace_path(item.text()))
@@ -3433,6 +3457,16 @@ class ModernMainWindow(QMainWindow):
         if not ffs:
             self.status("Add at least one .ffs file")
             return
+        if not DATASHEET_TEMPLATE.exists():
+            self.status("Datasheet.pdf is missing from the project root")
+            return
+        s2p = self.selected_s2p()
+        if not s2p:
+            self.status("Select a Touchstone file before running the full pipeline")
+            return
+        if not Path(s2p).exists():
+            self.status("Selected Touchstone file is missing")
+            return
 
         args_beam = [which_python(), "-u", SCRIPT_BEAM, out] + ffs + [
             "--smooth", str(self.beam_smooth.value()),
@@ -3444,6 +3478,19 @@ class ModernMainWindow(QMainWindow):
         args_extract = self.build_extract_args()
         if args_extract:
             self._enqueue_stage("extract", args_extract)
+            self._enqueue_stage(
+                "datasheet",
+                [
+                    which_python(),
+                    "-u",
+                    SCRIPT_DATASHEET,
+                    str(self.deduced_datasheet_output()),
+                    "--template",
+                    str(DATASHEET_TEMPLATE),
+                    "--extract-workbook",
+                    str(self.deduced_extract_output()),
+                ],
+            )
 
         args_plot = [which_python(), "-u", SCRIPT_PLOT, out,
                 "--out-dir", str(self.project_results_dir()),
@@ -3484,24 +3531,22 @@ class ModernMainWindow(QMainWindow):
             args_plot += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
         self._enqueue_stage("plot", args_plot)
 
-        s2p = self.selected_s2p()
-        if s2p and Path(s2p).exists():
-            args_vswr = [which_python(), "-u", SCRIPT_VSWR, s2p,
-                    "--output", str(self.deduced_vswr_output()),
-                    "--grid-color", self.plot_grid.color(),
-                    "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
-                    "--x-step", str(self.shared_xstep.value()),
-                    "--ymin", str(self.vswr_ymin.value()),
-                    "--ymax", str(self.vswr_ymax.value()),
-                    "--y-step", str(self.vswr_ystep.value()),
-                    "--smooth-window", str(self.vswr_smooth.value())]
-            if self.vswr_legend_labels.text().strip():
-                args_vswr += ["--legend-labels", self.vswr_legend_labels.text().strip()]
-            if self.shared_xlog.isChecked():
-                args_vswr.append("--x-log")
-            if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
-                args_vswr += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
-            self._enqueue_stage("vswr", args_vswr)
+        args_vswr = [which_python(), "-u", SCRIPT_VSWR, s2p,
+                "--output", str(self.deduced_vswr_output()),
+                "--grid-color", self.plot_grid.color(),
+                "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
+                "--x-step", str(self.shared_xstep.value()),
+                "--ymin", str(self.vswr_ymin.value()),
+                "--ymax", str(self.vswr_ymax.value()),
+                "--y-step", str(self.vswr_ystep.value()),
+                "--smooth-window", str(self.vswr_smooth.value())]
+        if self.vswr_legend_labels.text().strip():
+            args_vswr += ["--legend-labels", self.vswr_legend_labels.text().strip()]
+        if self.shared_xlog.isChecked():
+            args_vswr.append("--x-log")
+        if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
+            args_vswr += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
+        self._enqueue_stage("vswr", args_vswr)
 
     def _restore_geometry(self):
         width = self.store.get("window_width", None)
