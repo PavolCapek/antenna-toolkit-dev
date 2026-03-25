@@ -66,6 +66,11 @@ STACKED_LEGEND_COLUMN_SEP = 16.0
 STACKED_LEGEND_ROW_SEP = 24.0
 STACKED_LEGEND_ENTRY_SEP = 0.6
 LEGEND_FILE_SUFFIX = "_legend"
+LEGEND_EXPORT_PAD_X_PX = 3.0
+LEGEND_EXPORT_PAD_TOP_PX = 3.0
+LEGEND_EXPORT_PAD_BOTTOM_PX = 12.0
+CARTESIAN_FIGURE_WIDTH_IN = 12.0
+CARTESIAN_FIGURE_HEIGHT_IN = 5.04
 
 def color_for_index(style: str, idx: int) -> str:
     base = SOLID_COLORS if style == '-' else DASHED_COLORS
@@ -290,6 +295,36 @@ def _legend_entry_box(
     return VPacker(children=[drawing, text], align="center", pad=0.0, sep=entry_sep)
 
 
+def _stacked_line_legend_box(
+    items: list[tuple[str, str, str]],
+    *,
+    ncol: int = 1,
+    fontsize: float = STACKED_LEGEND_FONT_SIZE,
+    text_color: str = STACKED_LEGEND_TEXT_COLOR,
+    linewidth: float = 2.2,
+    column_sep: float = STACKED_LEGEND_COLUMN_SEP,
+    row_sep: float = STACKED_LEGEND_ROW_SEP,
+    entry_sep: float = STACKED_LEGEND_ENTRY_SEP,
+):
+    entry_boxes = [
+        _legend_entry_box(
+            label,
+            color,
+            linestyle,
+            fontsize=fontsize,
+            text_color=text_color,
+            linewidth=linewidth,
+            entry_sep=entry_sep,
+        )
+        for label, color, linestyle in items
+    ]
+    rows = [
+        HPacker(children=entry_boxes[index:index + ncol], align="top", pad=0.0, sep=column_sep)
+        for index in range(0, len(entry_boxes), ncol)
+    ]
+    return VPacker(children=rows, align="center", pad=0.0, sep=row_sep)
+
+
 def add_stacked_line_legend(
     ax,
     items: list[tuple[str, str, str]],
@@ -307,23 +342,16 @@ def add_stacked_line_legend(
 ):
     if not items:
         return None
-    entry_boxes = [
-        _legend_entry_box(
-            label,
-            color,
-            linestyle,
-            fontsize=fontsize,
-            text_color=text_color,
-            linewidth=linewidth,
-            entry_sep=entry_sep,
-        )
-        for label, color, linestyle in items
-    ]
-    rows = [
-        HPacker(children=entry_boxes[index:index + ncol], align="top", pad=0.0, sep=column_sep)
-        for index in range(0, len(entry_boxes), ncol)
-    ]
-    legend_box = VPacker(children=rows, align="center", pad=0.0, sep=row_sep)
+    legend_box = _stacked_line_legend_box(
+        items,
+        ncol=ncol,
+        fontsize=fontsize,
+        text_color=text_color,
+        linewidth=linewidth,
+        column_sep=column_sep,
+        row_sep=row_sep,
+        entry_sep=entry_sep,
+    )
     anchored = AnchoredOffsetbox(
         loc=loc,
         child=legend_box,
@@ -353,15 +381,12 @@ def export_stacked_line_legend(
         return None
 
     legend_path = legend_output_path(out_path)
-    fig = plt.figure(figsize=(12, 4.2), dpi=120)
-    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
-    ax.set_axis_off()
-    add_stacked_line_legend(
-        ax,
+    dpi = 120
+    probe_fig = plt.figure(figsize=(2.0, 2.0), dpi=dpi)
+    probe_ax = probe_fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    probe_ax.set_axis_off()
+    probe_box = _stacked_line_legend_box(
         items,
-        loc="center",
-        bbox_to_anchor=(0.5, 0.5),
-        bbox_transform=ax.transAxes,
         ncol=ncol,
         fontsize=fontsize,
         text_color=text_color,
@@ -370,8 +395,52 @@ def export_stacked_line_legend(
         row_sep=row_sep,
         entry_sep=entry_sep,
     )
+    probe_artist = AnchoredOffsetbox(
+        loc="upper left",
+        child=probe_box,
+        frameon=False,
+        bbox_to_anchor=(0.0, 1.0),
+        bbox_transform=probe_ax.transAxes,
+        borderpad=0.0,
+        pad=0.0,
+    )
+    probe_ax.add_artist(probe_artist)
+    probe_fig.canvas.draw()
+    probe_renderer = probe_fig.canvas.get_renderer()
+    probe_bbox = probe_box.get_window_extent(renderer=probe_renderer)
+    plt.close(probe_fig)
+
+    total_width_px = probe_bbox.width + (2.0 * LEGEND_EXPORT_PAD_X_PX)
+    total_height_px = probe_bbox.height + LEGEND_EXPORT_PAD_TOP_PX + LEGEND_EXPORT_PAD_BOTTOM_PX
+
+    fig = plt.figure(figsize=(total_width_px / dpi, total_height_px / dpi), dpi=dpi)
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    ax.set_axis_off()
+    legend_box = _stacked_line_legend_box(
+        items,
+        ncol=ncol,
+        fontsize=fontsize,
+        text_color=text_color,
+        linewidth=linewidth,
+        column_sep=column_sep,
+        row_sep=row_sep,
+        entry_sep=entry_sep,
+    )
+    legend_artist = AnchoredOffsetbox(
+        loc="upper left",
+        child=legend_box,
+        frameon=False,
+        bbox_to_anchor=(
+            LEGEND_EXPORT_PAD_X_PX / total_width_px,
+            1.0 - (LEGEND_EXPORT_PAD_TOP_PX / total_height_px),
+        ),
+        bbox_transform=ax.transAxes,
+        borderpad=0.0,
+        pad=0.0,
+    )
+    ax.add_artist(legend_artist)
     legend_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(legend_path, format="svg", bbox_inches="tight", pad_inches=0.03)
+    fig.savefig(legend_path, format="svg", pad_inches=0.0)
     plt.close(fig)
     return legend_path
 
@@ -381,7 +450,7 @@ def plot_xy(x, series_list, names, out_path, y_label,
             grid_color="#6f7a81", styles=None, colors=None,
             y_min=None, y_max=None, y_step=None,
             smooth_window: int = 5, x_step: float = None, x_ticks=None, x_log: bool = False):
-    fig, ax = plt.subplots(figsize=(12, 4.2), dpi=120)
+    fig, ax = plt.subplots(figsize=(CARTESIAN_FIGURE_WIDTH_IN, CARTESIAN_FIGURE_HEIGHT_IN), dpi=120)
     ax.set_facecolor("white")
     ax.grid(True, which="both", axis="both", color=grid_color, linewidth=0.9)
     ax.set_axisbelow(True)

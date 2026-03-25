@@ -529,11 +529,127 @@ def _expand_rect(rect: fitz.Rect, padding: float = 2.0) -> fitz.Rect:
     return fitz.Rect(rect.x0 - padding, rect.y0 - padding, rect.x1 + padding, rect.y1 + padding)
 
 
+def _expand_template_legend_rect(rect: fitz.Rect) -> fitz.Rect:
+    return fitz.Rect(
+        rect.x0 - 42.0,
+        rect.y0 - 18.0,
+        rect.x1 + 8.0,
+        rect.y1 + 8.0,
+    )
+
+
 def _union_rects(rects: list[fitz.Rect]) -> fitz.Rect:
     combined = fitz.Rect(rects[0])
     for rect in rects[1:]:
         combined.include_rect(rect)
     return combined
+
+
+def _overlap_length(start_a: float, end_a: float, start_b: float, end_b: float) -> float:
+    return max(0.0, min(end_a, end_b) - max(start_a, start_b))
+
+
+def _separate_plot_and_legend_rects(
+    plot_rect: fitz.Rect,
+    legend_rect: fitz.Rect,
+    *,
+    gap: float = 6.0,
+    min_plot_width: float = 72.0,
+    min_plot_height: float = 72.0,
+    preferred_orientation: str = "",
+) -> tuple[fitz.Rect, fitz.Rect]:
+    plot = fitz.Rect(plot_rect)
+    legend = fitz.Rect(legend_rect)
+    horizontal_overlap = _overlap_length(plot.x0, plot.x1, legend.x0, legend.x1)
+    vertical_overlap = _overlap_length(plot.y0, plot.y1, legend.y0, legend.y1)
+    if horizontal_overlap <= 0.0 or vertical_overlap <= 0.0:
+        return plot, legend
+
+    def _try_horizontal() -> bool:
+        legend_is_right = ((legend.x0 + legend.x1) / 2.0) >= ((plot.x0 + plot.x1) / 2.0)
+        if legend_is_right:
+            proposed_x1 = min(plot.x1, legend.x0 - gap)
+            if proposed_x1 - plot.x0 >= min_plot_width:
+                plot.x1 = proposed_x1
+                return True
+        else:
+            proposed_x0 = max(plot.x0, legend.x1 + gap)
+            if plot.x1 - proposed_x0 >= min_plot_width:
+                plot.x0 = proposed_x0
+                return True
+        return False
+
+    def _try_vertical() -> bool:
+        legend_is_below = ((legend.y0 + legend.y1) / 2.0) >= ((plot.y0 + plot.y1) / 2.0)
+        if legend_is_below:
+            proposed_y1 = min(plot.y1, legend.y0 - gap)
+            if proposed_y1 - plot.y0 >= min_plot_height:
+                plot.y1 = proposed_y1
+                return True
+        else:
+            proposed_y0 = max(plot.y0, legend.y1 + gap)
+            if plot.y1 - proposed_y0 >= min_plot_height:
+                plot.y0 = proposed_y0
+                return True
+        return False
+
+    if preferred_orientation == "horizontal":
+        if _try_horizontal() or _try_vertical():
+            return plot, legend
+        return plot, legend
+    if preferred_orientation == "vertical":
+        if _try_vertical() or _try_horizontal():
+            return plot, legend
+        return plot, legend
+
+    center_dx = abs(((legend.x0 + legend.x1) / 2.0) - ((plot.x0 + plot.x1) / 2.0))
+    center_dy = abs(((legend.y0 + legend.y1) / 2.0) - ((plot.y0 + plot.y1) / 2.0))
+    if center_dx >= center_dy:
+        if _try_horizontal() or _try_vertical():
+            return plot, legend
+    else:
+        if _try_vertical() or _try_horizontal():
+            return plot, legend
+    return plot, legend
+
+
+def _center_rect_horizontally(rect: fitz.Rect, center_x: float) -> fitz.Rect:
+    width = rect.width
+    return fitz.Rect(center_x - (width / 2.0), rect.y0, center_x + (width / 2.0), rect.y1)
+
+
+def _layout_split_chart_rects(kind: str, plot_rect: fitz.Rect, legend_rect: fitz.Rect) -> tuple[fitz.Rect, fitz.Rect]:
+    plot = _expand_rect(fitz.Rect(plot_rect))
+    legend = _expand_template_legend_rect(fitz.Rect(legend_rect))
+    if kind in {"gain", "beamwidth"}:
+        return _separate_plot_and_legend_rects(plot, legend, preferred_orientation="horizontal")
+    if kind in {"azimuth", "elevation"}:
+        plot, legend = _separate_plot_and_legend_rects(plot, legend, preferred_orientation="vertical")
+        return plot, _center_rect_horizontally(legend, (plot.x0 + plot.x1) / 2.0)
+    return _separate_plot_and_legend_rects(plot, legend)
+
+
+def _normalize_plot_widths(replacements: list[ChartReplacement], kinds: set[str]) -> list[ChartReplacement]:
+    target_replacements = [replacement for replacement in replacements if replacement.kind in kinds]
+    if len(target_replacements) < 2:
+        return replacements
+
+    common_width = min(replacement.rect.width for replacement in target_replacements)
+    normalized: list[ChartReplacement] = []
+    for replacement in replacements:
+        if replacement.kind not in kinds or abs(replacement.rect.width - common_width) <= 0.01:
+            normalized.append(replacement)
+            continue
+        normalized.append(
+            ChartReplacement(
+                replacement.kind,
+                fitz.Rect(replacement.rect.x0, replacement.rect.y0, replacement.rect.x0 + common_width, replacement.rect.y1),
+                replacement.asset_path,
+                legend_rect=replacement.legend_rect,
+                legend_asset_path=replacement.legend_asset_path,
+            )
+        )
+    return normalized
 
 
 def _legend_group(text: str) -> str | None:
@@ -598,12 +714,17 @@ def _build_chart_replacements(page: fitz.Page, output: Path, extract_workbook: P
         grouped_legend_rects = legend_rects.get(replacement.kind, [])
         legend_asset_path = _legend_asset_path(replacement.asset_path)
         if grouped_legend_rects and legend_asset_path.exists():
+            plot_rect, legend_rect = _layout_split_chart_rects(
+                replacement.kind,
+                fitz.Rect(replacement.rect),
+                _union_rects(grouped_legend_rects),
+            )
             resolved.append(
                 ChartReplacement(
                     replacement.kind,
-                    _expand_rect(fitz.Rect(replacement.rect)),
+                    plot_rect,
                     replacement.asset_path,
-                    legend_rect=_expand_rect(_union_rects(grouped_legend_rects)),
+                    legend_rect=legend_rect,
                     legend_asset_path=legend_asset_path,
                 )
             )
@@ -617,7 +738,7 @@ def _build_chart_replacements(page: fitz.Page, output: Path, extract_workbook: P
                 replacement.asset_path,
             )
         )
-    return resolved
+    return _normalize_plot_widths(resolved, {"gain", "beamwidth"})
 
 
 def _svg_to_pdf_bytes(svg_path: Path) -> bytes:
@@ -634,6 +755,61 @@ def _svg_to_pdf_bytes(svg_path: Path) -> bytes:
         raise ValueError(f"Unable to load SVG asset '{svg_path}'.")
 
     return renderPDF.drawToString(drawing)
+
+
+@lru_cache(maxsize=None)
+def _svg_drawing_size(svg_path_str: str) -> tuple[float, float]:
+    try:
+        from svglib.svglib import svg2rlg
+    except ImportError as exc:
+        raise RuntimeError(
+            "svglib is required to inspect SVG chart dimensions."
+        ) from exc
+
+    drawing = svg2rlg(svg_path_str)
+    if drawing is None:
+        raise ValueError(f"Unable to load SVG asset '{svg_path_str}'.")
+    return float(drawing.width), float(drawing.height)
+
+
+def _center_rect_with_size(container_rect: fitz.Rect, width: float, height: float) -> fitz.Rect:
+    center_x = (container_rect.x0 + container_rect.x1) / 2.0
+    center_y = (container_rect.y0 + container_rect.y1) / 2.0
+    half_width = width / 2.0
+    half_height = height / 2.0
+    return fitz.Rect(center_x - half_width, center_y - half_height, center_x + half_width, center_y + half_height)
+
+
+def _shared_side_legend_scale(replacements: list[ChartReplacement]) -> float | None:
+    scales: list[float] = []
+    for replacement in replacements:
+        if replacement.kind not in {"gain", "beamwidth"}:
+            continue
+        if replacement.legend_rect is None or replacement.legend_asset_path is None:
+            continue
+        native_width, native_height = _svg_drawing_size(str(replacement.legend_asset_path.resolve()))
+        if native_width <= 0.0 or native_height <= 0.0:
+            continue
+        scales.append(
+            min(
+                replacement.legend_rect.width / native_width,
+                replacement.legend_rect.height / native_height,
+            )
+        )
+    return min(scales) if scales else None
+
+
+def _legend_target_rect(replacement: ChartReplacement, shared_side_scale: float | None) -> fitz.Rect:
+    if replacement.legend_rect is None or replacement.legend_asset_path is None:
+        raise ValueError("Legend placement requires both a legend rect and a legend asset path.")
+    container_rect = fitz.Rect(replacement.legend_rect)
+    native_width, native_height = _svg_drawing_size(str(replacement.legend_asset_path.resolve()))
+    if native_width <= 0.0 or native_height <= 0.0:
+        return container_rect
+    if replacement.kind in {"gain", "beamwidth"} and shared_side_scale is not None and shared_side_scale > 0.0:
+        return _center_rect_with_size(container_rect, native_width * shared_side_scale, native_height * shared_side_scale)
+    scale = min(container_rect.width / native_width, container_rect.height / native_height)
+    return _center_rect_with_size(container_rect, native_width * scale, native_height * scale)
 
 
 def _place_svg_as_vector(page: fitz.Page, target_rect: fitz.Rect, svg_path: Path) -> None:
@@ -653,10 +829,11 @@ def _replace_chart_images(doc: fitz.Document, output: Path, extract_workbook: Pa
         if replacement.legend_rect is not None:
             page.add_redact_annot(replacement.legend_rect, fill=(1.0, 1.0, 1.0))
     page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
+    shared_side_scale = _shared_side_legend_scale(replacements)
     for replacement in replacements:
         _place_svg_as_vector(page, replacement.rect, replacement.asset_path)
         if replacement.legend_rect is not None and replacement.legend_asset_path is not None:
-            _place_svg_as_vector(page, replacement.legend_rect, replacement.legend_asset_path)
+            _place_svg_as_vector(page, _legend_target_rect(replacement, shared_side_scale), replacement.legend_asset_path)
 
 
 def build_datasheet_pdf(output: Path, template: Path, extract_workbook: Path) -> dict[str, str]:

@@ -24,6 +24,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, FixedFormatter, FixedLocator, NullFormatter, NullLocator
 from plot import (
+    CARTESIAN_FIGURE_HEIGHT_IN,
+    CARTESIAN_FIGURE_WIDTH_IN,
     STACKED_LEGEND_ENTRY_SEP,
     STACKED_LEGEND_FONT_SIZE,
     STACKED_LEGEND_ROW_SEP,
@@ -207,7 +209,7 @@ def plot_xy(x, series_list, names, out_path, y_label,
             y_min=None, y_max=None, y_step=None,
             smooth_window: int = 5, x_step: float = None, x_ticks=None,
             x_log: bool = False, x_min: float | None = None, x_max: float | None = None):
-    fig, ax = plt.subplots(figsize=(12, 4.2), dpi=120)
+    fig, ax = plt.subplots(figsize=(CARTESIAN_FIGURE_WIDTH_IN, CARTESIAN_FIGURE_HEIGHT_IN), dpi=120)
     ax.set_facecolor("white")
     ax.grid(True, which="both", axis="both", color=grid_color, linewidth=0.9)
     ax.set_axisbelow(True)

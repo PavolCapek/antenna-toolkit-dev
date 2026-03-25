@@ -7,7 +7,18 @@ from pathlib import Path
 import fitz
 import pandas as pd
 
-from datasheet_pdf import _svg_to_pdf_bytes, build_datasheet_pdf, build_replacements_from_workbook
+from datasheet_pdf import (
+    ChartReplacement,
+    _build_chart_replacements,
+    _legend_target_rect,
+    _layout_split_chart_rects,
+    _normalize_plot_widths,
+    _separate_plot_and_legend_rects,
+    _shared_side_legend_scale,
+    _svg_to_pdf_bytes,
+    build_datasheet_pdf,
+    build_replacements_from_workbook,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -35,19 +46,27 @@ class DatasheetPdfTests(unittest.TestCase):
         self.extract_workbook = self.root / "extract.xlsx"
         self.output_pdf = self.root / "output.pdf"
         self.gain_svg = self.root / "extract_gain.svg"
+        self.gain_legend_svg = self.root / "extract_gain_legend.svg"
         self.beamwidth_svg = self.root / "extract_beamwidth.svg"
+        self.beamwidth_legend_svg = self.root / "extract_beamwidth_legend.svg"
         self.polar_azimuth_dir = self.root / "polar_single" / "azimuth"
         self.polar_elevation_dir = self.root / "polar_single" / "elevation"
         self.azimuth_svg = self.polar_azimuth_dir / "extract_polar_azimuth_5.500_GHz.svg"
+        self.azimuth_legend_svg = self.polar_azimuth_dir / "extract_polar_azimuth_5.500_GHz_legend.svg"
         self.elevation_svg = self.polar_elevation_dir / "extract_polar_elevation_5.500_GHz.svg"
+        self.elevation_legend_svg = self.polar_elevation_dir / "extract_polar_elevation_5.500_GHz_legend.svg"
         self.page2_gain_rect = fitz.Rect(24.0, 120.0, 324.0, 240.0)
         self.page2_beamwidth_rect = fitz.Rect(24.0, 280.0, 324.0, 400.0)
         self.page2_azimuth_rect = fitz.Rect(24.0, 460.0, 164.0, 600.0)
         self.page2_elevation_rect = fitz.Rect(204.0, 460.0, 344.0, 600.0)
         self._write_svg(self.gain_svg, "#00ff00", width=300, height=120)
+        self._write_svg(self.gain_legend_svg, "#ffffff", width=140, height=70)
         self._write_svg(self.beamwidth_svg, "#ffff00", width=300, height=120)
+        self._write_svg(self.beamwidth_legend_svg, "#ffffff", width=180, height=110)
         self._write_svg(self.azimuth_svg, "#00ffff", width=140, height=140)
+        self._write_svg(self.azimuth_legend_svg, "#ffffff", width=150, height=70)
         self._write_svg(self.elevation_svg, "#ff00ff", width=140, height=140)
+        self._write_svg(self.elevation_legend_svg, "#ffffff", width=150, height=70)
         self._write_template_pdf()
         self._write_extract_workbook()
 
@@ -59,6 +78,7 @@ class DatasheetPdfTests(unittest.TestCase):
         value_fontname: str = "helv",
         value_fontfile: str | None = None,
         reverse_polar_slot_order: bool = False,
+        add_legend_handles: bool = False,
     ) -> None:
         with fitz.open() as doc:
             page = doc.new_page()
@@ -105,6 +125,10 @@ class DatasheetPdfTests(unittest.TestCase):
             charts_page.insert_text((28.0, 632.0), "V - Port Pattern Azimuth 5.5 GHz", fontsize=7, fontname="helv")
             charts_page.insert_text((208.0, 616.0), "H - Port Pattern Elevation 5.5 GHz", fontsize=7, fontname="helv")
             charts_page.insert_text((208.0, 632.0), "V - Port Pattern Elevation 5.5 GHz", fontsize=7, fontname="helv")
+            if add_legend_handles:
+                charts_page.draw_line((337.0, 172.0), (353.0, 172.0), color=(0.17, 0.71, 0.96), width=2.0)
+                charts_page.draw_line((337.0, 330.0), (353.0, 330.0), color=(0.17, 0.71, 0.96), width=2.0)
+                charts_page.draw_line((95.0, 608.0), (111.0, 608.0), color=(0.17, 0.71, 0.96), width=2.0)
             doc.save(self.template_pdf)
 
     def _write_svg(self, path: Path, fill: str, width: int, height: int) -> None:
@@ -312,6 +336,141 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertGreater(azimuth_rgb[2], 200)
         self.assertGreater(elevation_rgb[0], 200)
         self.assertGreater(elevation_rgb[2], 200)
+
+    def test_build_datasheet_pdf_removes_template_legend_handles(self) -> None:
+        self._write_template_pdf(add_legend_handles=True)
+
+        build_datasheet_pdf(
+            output=self.output_pdf,
+            template=self.template_pdf,
+            extract_workbook=self.extract_workbook,
+        )
+
+        with fitz.open(self.output_pdf) as doc:
+            page = doc[1]
+            gain_handle_rgb = self._pixel_rgb(page, fitz.Point(345.0, 172.0))
+            beamwidth_handle_rgb = self._pixel_rgb(page, fitz.Point(345.0, 330.0))
+            polar_handle_rgb = self._pixel_rgb(page, fitz.Point(103.0, 608.0))
+
+        for rgb in (gain_handle_rgb, beamwidth_handle_rgb, polar_handle_rgb):
+            self.assertGreater(min(rgb), 220)
+
+    def test_separate_plot_and_legend_rects_shrinks_plot_when_legend_is_on_the_right(self) -> None:
+        plot_rect = fitz.Rect(24.0, 120.0, 380.0, 240.0)
+        legend_rect = fitz.Rect(300.0, 150.0, 420.0, 220.0)
+
+        adjusted_plot, adjusted_legend = _separate_plot_and_legend_rects(plot_rect, legend_rect)
+
+        self.assertLessEqual(adjusted_plot.x1, adjusted_legend.x0 - 5.9)
+        self.assertEqual(adjusted_plot.y0, plot_rect.y0)
+        self.assertEqual(adjusted_plot.y1, plot_rect.y1)
+
+    def test_separate_plot_and_legend_rects_shrinks_plot_when_legend_is_below(self) -> None:
+        plot_rect = fitz.Rect(24.0, 120.0, 240.0, 320.0)
+        legend_rect = fitz.Rect(60.0, 270.0, 220.0, 360.0)
+
+        adjusted_plot, adjusted_legend = _separate_plot_and_legend_rects(plot_rect, legend_rect)
+
+        self.assertLessEqual(adjusted_plot.y1, adjusted_legend.y0 - 5.9)
+        self.assertEqual(adjusted_plot.x0, plot_rect.x0)
+        self.assertEqual(adjusted_plot.x1, plot_rect.x1)
+
+    def test_layout_split_chart_rects_prefers_horizontal_for_gain_and_beamwidth(self) -> None:
+        gain_plot, gain_legend = _layout_split_chart_rects(
+            "gain",
+            fitz.Rect(24.0, 120.0, 324.0, 240.0),
+            fitz.Rect(360.0, 180.0, 420.0, 212.0),
+        )
+        beam_plot, beam_legend = _layout_split_chart_rects(
+            "beamwidth",
+            fitz.Rect(24.0, 280.0, 324.0, 400.0),
+            fitz.Rect(360.0, 338.0, 438.0, 390.0),
+        )
+
+        self.assertLessEqual(gain_plot.x1, gain_legend.x0 - 5.9)
+        self.assertLessEqual(beam_plot.x1, beam_legend.x0 - 5.9)
+        self.assertAlmostEqual(gain_plot.width, beam_plot.width, delta=0.5)
+
+    def test_layout_split_chart_rects_centers_polar_legend_below_plot(self) -> None:
+        plot_rect, legend_rect = _layout_split_chart_rects(
+            "azimuth",
+            fitz.Rect(24.0, 460.0, 164.0, 600.0),
+            fitz.Rect(28.0, 616.0, 162.0, 640.0),
+        )
+
+        self.assertLessEqual(plot_rect.y1, legend_rect.y0 - 5.9)
+        self.assertAlmostEqual((plot_rect.x0 + plot_rect.x1) / 2.0, (legend_rect.x0 + legend_rect.x1) / 2.0, delta=0.5)
+
+    def test_build_chart_replacements_keep_gain_and_beamwidth_same_width_and_center_polar_legends(self) -> None:
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_chart_replacements(doc[1], self.output_pdf, self.extract_workbook)
+
+        by_kind = {replacement.kind: replacement for replacement in replacements}
+
+        self.assertAlmostEqual(by_kind["gain"].rect.width, by_kind["beamwidth"].rect.width, delta=0.5)
+        assert by_kind["gain"].legend_rect is not None
+        assert by_kind["beamwidth"].legend_rect is not None
+        assert by_kind["azimuth"].legend_rect is not None
+        assert by_kind["elevation"].legend_rect is not None
+        self.assertLessEqual(by_kind["gain"].rect.x1, by_kind["gain"].legend_rect.x0 - 5.9)
+        self.assertLessEqual(by_kind["beamwidth"].rect.x1, by_kind["beamwidth"].legend_rect.x0 - 5.9)
+        self.assertAlmostEqual(
+            (by_kind["azimuth"].rect.x0 + by_kind["azimuth"].rect.x1) / 2.0,
+            (by_kind["azimuth"].legend_rect.x0 + by_kind["azimuth"].legend_rect.x1) / 2.0,
+            delta=0.5,
+        )
+        self.assertAlmostEqual(
+            (by_kind["elevation"].rect.x0 + by_kind["elevation"].rect.x1) / 2.0,
+            (by_kind["elevation"].legend_rect.x0 + by_kind["elevation"].legend_rect.x1) / 2.0,
+            delta=0.5,
+        )
+
+    def test_normalize_plot_widths_equalizes_gain_and_beamwidth(self) -> None:
+        replacements = [
+            ChartReplacement(
+                "gain",
+                fitz.Rect(10.0, 20.0, 210.0, 120.0),
+                self.gain_svg,
+                legend_rect=fitz.Rect(220.0, 30.0, 300.0, 90.0),
+                legend_asset_path=self.gain_legend_svg,
+            ),
+            ChartReplacement(
+                "beamwidth",
+                fitz.Rect(12.0, 140.0, 172.0, 240.0),
+                self.beamwidth_svg,
+                legend_rect=fitz.Rect(182.0, 150.0, 292.0, 230.0),
+                legend_asset_path=self.beamwidth_legend_svg,
+            ),
+        ]
+
+        normalized = _normalize_plot_widths(replacements, {"gain", "beamwidth"})
+        by_kind = {replacement.kind: replacement for replacement in normalized}
+
+        self.assertAlmostEqual(by_kind["gain"].rect.width, by_kind["beamwidth"].rect.width, delta=0.01)
+        self.assertEqual(by_kind["gain"].rect.x0, 10.0)
+        self.assertEqual(by_kind["beamwidth"].rect.x0, 12.0)
+        self.assertLessEqual(by_kind["gain"].rect.x1, replacements[0].legend_rect.x0)
+        self.assertLessEqual(by_kind["beamwidth"].rect.x1, replacements[1].legend_rect.x0)
+
+    def test_gain_and_beamwidth_side_legends_share_the_same_scale(self) -> None:
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_chart_replacements(doc[1], self.output_pdf, self.extract_workbook)
+
+        by_kind = {replacement.kind: replacement for replacement in replacements}
+        shared_scale = _shared_side_legend_scale(replacements)
+
+        self.assertIsNotNone(shared_scale)
+        gain_target = _legend_target_rect(by_kind["gain"], shared_scale)
+        beamwidth_target = _legend_target_rect(by_kind["beamwidth"], shared_scale)
+
+        gain_scale = min(gain_target.width / 140.0, gain_target.height / 70.0)
+        beamwidth_scale = min(beamwidth_target.width / 180.0, beamwidth_target.height / 110.0)
+
+        self.assertAlmostEqual(gain_scale, beamwidth_scale, delta=0.01)
+        self.assertLessEqual(gain_target.width, by_kind["gain"].legend_rect.width)
+        self.assertLessEqual(gain_target.height, by_kind["gain"].legend_rect.height)
+        self.assertLessEqual(beamwidth_target.width, by_kind["beamwidth"].legend_rect.width)
+        self.assertLessEqual(beamwidth_target.height, by_kind["beamwidth"].legend_rect.height)
 
     def test_svg_to_pdf_bytes_preserves_dashed_strokes(self) -> None:
         dashed_svg = self.root / "dashed.svg"
