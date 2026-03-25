@@ -3,3 +3,6 @@ numpy
 pandas
 matplotlib
 openpyxl
+PyMuPDF
+reportlab
+svglib

@@ -23,11 +23,17 @@ Features:
 
 Outputs:
 - <book>_gain.svg
+- <book>_gain_legend.svg
 - <book>_beamwidth.svg
+- <book>_beamwidth_legend.svg
 - <book>_beam_efficiency.svg
+- <book>_beam_efficiency_legend.svg
 - polar_combined/<book>_polar_<f>_combined.svg
+- polar_combined/<book>_polar_<f>_combined_legend.svg
 - polar_single/azimuth/<book>_polar_azimuth_<f>.svg   (solid)
+- polar_single/azimuth/<book>_polar_azimuth_<f>_legend.svg   (solid)
 - polar_single/elevation/<book>_polar_elevation_<f>.svg (dashed)
+- polar_single/elevation/<book>_polar_elevation_<f>_legend.svg (dashed)
 """
 import argparse
 from pathlib import Path
@@ -38,12 +44,33 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib import transforms as mtransforms
+from matplotlib.offsetbox import AnchoredOffsetbox, DrawingArea, HPacker, TextArea, VPacker
 from matplotlib.ticker import FuncFormatter, FixedFormatter, FixedLocator, NullFormatter, NullLocator
+from legend_utils import (
+    apply_legend_labels,
+    beam_efficiency_legend_label,
+    beamwidth_legend_label,
+    gain_legend_label,
+    parse_legend_labels,
+    polarization_sort_key,
+    polar_legend_label,
+)
 
 # ------------------ global color scheme ------------------
 DEFAULT_SOLID_COLORS = ["#2bb6f6", "#f5a623"]  # kept from gain plot
 SOLID_COLORS = DEFAULT_SOLID_COLORS[:]
 DASHED_COLORS = SOLID_COLORS[:]  # same hues for dashed variants
+STACKED_LEGEND_FONT_SIZE = 10.5
+STACKED_LEGEND_TEXT_COLOR = "#8a949c"
+STACKED_LEGEND_COLUMN_SEP = 16.0
+STACKED_LEGEND_ROW_SEP = 24.0
+STACKED_LEGEND_ENTRY_SEP = 0.6
+LEGEND_FILE_SUFFIX = "_legend"
+LEGEND_EXPORT_PAD_X_PX = 3.0
+LEGEND_EXPORT_PAD_TOP_PX = 3.0
+LEGEND_EXPORT_PAD_BOTTOM_PX = 12.0
+CARTESIAN_FIGURE_WIDTH_IN = 12.0
+CARTESIAN_FIGURE_HEIGHT_IN = 5.04
 
 def color_for_index(style: str, idx: int) -> str:
     base = SOLID_COLORS if style == '-' else DASHED_COLORS
@@ -62,6 +89,11 @@ def sanitize(s: str) -> str:
     s = re.sub(r"\s+", "_", s.strip())
     s = re.sub(r"[^A-Za-z0-9_.-]", "", s)
     return s if s else "sheet"
+
+
+def legend_output_path(out_path: str | Path) -> Path:
+    path = Path(out_path)
+    return path.with_name(f"{path.stem}{LEGEND_FILE_SUFFIX}{path.suffix}")
 
 
 def format_frequency_tick(value: float, _pos=None) -> str:
@@ -153,6 +185,13 @@ def parse_freq_ghz_from_text(txt: str):
     return None
 
 
+def format_frequency_label(txt: str) -> str:
+    value_ghz = parse_freq_ghz_from_text(txt)
+    if value_ghz is None:
+        return str(txt)
+    return f"{format_frequency_tick(value_ghz)} GHz"
+
+
 def apply_freq_window(x_freq: np.ndarray, series_groups: list[list[np.ndarray]], fmin: float | None, fmax: float | None):
     """If BOTH fmin and fmax are provided and within range, mask x and aligned series.
     Return (x_new, masked_groups, did_crop: bool).
@@ -198,13 +237,220 @@ def align_series_to_axis(source_x: np.ndarray, source_y: np.ndarray, target_x: n
     }
     return np.asarray([lookup[round(float(x), 9)] for x in np.asarray(target_x, dtype=float)], dtype=float)
 
+
+def _legend_entry_box(
+    label: str,
+    color: str,
+    linestyle: str,
+    *,
+    fontsize: float,
+    text_color: str,
+    linewidth: float,
+    entry_sep: float,
+) -> VPacker:
+    line_width = max(28.0, fontsize * 3.8)
+    line_height = max(7.0, fontsize * 0.62)
+    drawing = DrawingArea(line_width, line_height, 0, 0)
+    line_y = max(linewidth / 2.0 + 0.6, line_height * 0.24)
+    x0 = 2.0
+    x1 = line_width - 2.0
+    if linestyle == "--":
+        total_width = x1 - x0
+        gap = max(6.0, total_width * 0.26)
+        dash_len = max(10.0, (total_width - gap) / 2.0)
+        first_x1 = x0 + dash_len
+        second_x0 = x1 - dash_len
+        for seg_x0, seg_x1 in [(x0, first_x1), (second_x0, x1)]:
+            dash = Line2D(
+                [seg_x0, seg_x1],
+                [line_y, line_y],
+                color=color,
+                lw=linewidth,
+                linestyle="-",
+                solid_capstyle="round",
+                transform=drawing.get_transform(),
+            )
+            drawing.add_artist(dash)
+    else:
+        line = Line2D(
+            [x0, x1],
+            [line_y, line_y],
+            color=color,
+            lw=linewidth,
+            linestyle="-",
+            solid_capstyle="round",
+            transform=drawing.get_transform(),
+        )
+        drawing.add_artist(line)
+    text = TextArea(
+        label,
+        textprops={
+            "color": text_color,
+            "fontsize": fontsize,
+            "ha": "center",
+            "va": "top",
+            "multialignment": "center",
+        },
+    )
+    return VPacker(children=[drawing, text], align="center", pad=0.0, sep=entry_sep)
+
+
+def _stacked_line_legend_box(
+    items: list[tuple[str, str, str]],
+    *,
+    ncol: int = 1,
+    fontsize: float = STACKED_LEGEND_FONT_SIZE,
+    text_color: str = STACKED_LEGEND_TEXT_COLOR,
+    linewidth: float = 2.2,
+    column_sep: float = STACKED_LEGEND_COLUMN_SEP,
+    row_sep: float = STACKED_LEGEND_ROW_SEP,
+    entry_sep: float = STACKED_LEGEND_ENTRY_SEP,
+):
+    entry_boxes = [
+        _legend_entry_box(
+            label,
+            color,
+            linestyle,
+            fontsize=fontsize,
+            text_color=text_color,
+            linewidth=linewidth,
+            entry_sep=entry_sep,
+        )
+        for label, color, linestyle in items
+    ]
+    rows = [
+        HPacker(children=entry_boxes[index:index + ncol], align="top", pad=0.0, sep=column_sep)
+        for index in range(0, len(entry_boxes), ncol)
+    ]
+    return VPacker(children=rows, align="center", pad=0.0, sep=row_sep)
+
+
+def add_stacked_line_legend(
+    ax,
+    items: list[tuple[str, str, str]],
+    *,
+    loc: str,
+    bbox_to_anchor: tuple[float, float],
+    bbox_transform,
+    ncol: int = 1,
+    fontsize: float = STACKED_LEGEND_FONT_SIZE,
+    text_color: str = STACKED_LEGEND_TEXT_COLOR,
+    linewidth: float = 2.2,
+    column_sep: float = STACKED_LEGEND_COLUMN_SEP,
+    row_sep: float = STACKED_LEGEND_ROW_SEP,
+    entry_sep: float = STACKED_LEGEND_ENTRY_SEP,
+):
+    if not items:
+        return None
+    legend_box = _stacked_line_legend_box(
+        items,
+        ncol=ncol,
+        fontsize=fontsize,
+        text_color=text_color,
+        linewidth=linewidth,
+        column_sep=column_sep,
+        row_sep=row_sep,
+        entry_sep=entry_sep,
+    )
+    anchored = AnchoredOffsetbox(
+        loc=loc,
+        child=legend_box,
+        frameon=False,
+        bbox_to_anchor=bbox_to_anchor,
+        bbox_transform=bbox_transform,
+        borderpad=0.0,
+        pad=0.0,
+    )
+    ax.add_artist(anchored)
+    return anchored
+
+
+def export_stacked_line_legend(
+    items: list[tuple[str, str, str]],
+    out_path: str | Path,
+    *,
+    ncol: int = 1,
+    fontsize: float = STACKED_LEGEND_FONT_SIZE,
+    text_color: str = STACKED_LEGEND_TEXT_COLOR,
+    linewidth: float = 2.2,
+    column_sep: float = STACKED_LEGEND_COLUMN_SEP,
+    row_sep: float = STACKED_LEGEND_ROW_SEP,
+    entry_sep: float = STACKED_LEGEND_ENTRY_SEP,
+) -> Path | None:
+    if not items:
+        return None
+
+    legend_path = legend_output_path(out_path)
+    dpi = 120
+    probe_fig = plt.figure(figsize=(2.0, 2.0), dpi=dpi)
+    probe_ax = probe_fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    probe_ax.set_axis_off()
+    probe_box = _stacked_line_legend_box(
+        items,
+        ncol=ncol,
+        fontsize=fontsize,
+        text_color=text_color,
+        linewidth=linewidth,
+        column_sep=column_sep,
+        row_sep=row_sep,
+        entry_sep=entry_sep,
+    )
+    probe_artist = AnchoredOffsetbox(
+        loc="upper left",
+        child=probe_box,
+        frameon=False,
+        bbox_to_anchor=(0.0, 1.0),
+        bbox_transform=probe_ax.transAxes,
+        borderpad=0.0,
+        pad=0.0,
+    )
+    probe_ax.add_artist(probe_artist)
+    probe_fig.canvas.draw()
+    probe_renderer = probe_fig.canvas.get_renderer()
+    probe_bbox = probe_box.get_window_extent(renderer=probe_renderer)
+    plt.close(probe_fig)
+
+    total_width_px = probe_bbox.width + (2.0 * LEGEND_EXPORT_PAD_X_PX)
+    total_height_px = probe_bbox.height + LEGEND_EXPORT_PAD_TOP_PX + LEGEND_EXPORT_PAD_BOTTOM_PX
+
+    fig = plt.figure(figsize=(total_width_px / dpi, total_height_px / dpi), dpi=dpi)
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    ax.set_axis_off()
+    legend_box = _stacked_line_legend_box(
+        items,
+        ncol=ncol,
+        fontsize=fontsize,
+        text_color=text_color,
+        linewidth=linewidth,
+        column_sep=column_sep,
+        row_sep=row_sep,
+        entry_sep=entry_sep,
+    )
+    legend_artist = AnchoredOffsetbox(
+        loc="upper left",
+        child=legend_box,
+        frameon=False,
+        bbox_to_anchor=(
+            LEGEND_EXPORT_PAD_X_PX / total_width_px,
+            1.0 - (LEGEND_EXPORT_PAD_TOP_PX / total_height_px),
+        ),
+        bbox_transform=ax.transAxes,
+        borderpad=0.0,
+        pad=0.0,
+    )
+    ax.add_artist(legend_artist)
+    legend_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(legend_path, format="svg", pad_inches=0.0)
+    plt.close(fig)
+    return legend_path
+
 # ------------------ plotting: cartesian ------------------
 
 def plot_xy(x, series_list, names, out_path, y_label,
             grid_color="#6f7a81", styles=None, colors=None,
             y_min=None, y_max=None, y_step=None,
             smooth_window: int = 5, x_step: float = None, x_ticks=None, x_log: bool = False):
-    fig, ax = plt.subplots(figsize=(12, 4.2), dpi=120)
+    fig, ax = plt.subplots(figsize=(CARTESIAN_FIGURE_WIDTH_IN, CARTESIAN_FIGURE_HEIGHT_IN), dpi=120)
     ax.set_facecolor("white")
     ax.grid(True, which="both", axis="both", color=grid_color, linewidth=0.9)
     ax.set_axisbelow(True)
@@ -241,38 +487,34 @@ def plot_xy(x, series_list, names, out_path, y_label,
         ln, = ax.plot(x, ysm, linewidth=2.0, linestyle=st_in, solid_capstyle="round", color=color_in)
         lines.append(ln)
 
-    # Legend with explicit dash preview for dashed lines
-    handles = []
-    for ln in lines:
-        st = ln.get_linestyle()
-        c = ln.get_color()
-        if st == "--":
-            h = Line2D([0], [0], color=c, lw=2.0, linestyle='-', dashes=[8,6,8,6,8,6], dash_capstyle="round")
-        else:
-            h = Line2D([0], [0], color=c, lw=2.0, linestyle='-')
-        handles.append(h)
-    leg = ax.legend(handles, names, loc="center left", bbox_to_anchor=(1.02, 0.5),
-                    frameon=False, handlelength=7, handletextpad=1.0)
-    for text in leg.get_texts():
-        text.set_color("#8a949c")
+    legend_items = [(name, ln.get_color(), ln.get_linestyle()) for name, ln in zip(names, lines)]
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
-    plt.savefig(out_path, format="svg", bbox_inches="tight")
-    plt.close()
-    return out_path
+    fig.savefig(out_path, format="svg", bbox_inches="tight")
+    plt.close(fig)
+    legend_path = export_stacked_line_legend(
+        legend_items,
+        out_path,
+        ncol=1,
+        fontsize=STACKED_LEGEND_FONT_SIZE,
+        linewidth=2.0,
+        row_sep=STACKED_LEGEND_ROW_SEP,
+        entry_sep=STACKED_LEGEND_ENTRY_SEP,
+    )
+    return out_path, str(legend_path) if legend_path is not None else None
 
 # ------------------ plotting: polar ------------------
 
 def save_polar(out_path, datasets, title,
                grid_color="#6f7a81", rings=(0,-7.5,-15,-22.5,-30),
-               angle_tick_step=30, clip_db=-30.0, smooth_window: int = 5):
+               angle_tick_step=30, clip_db=-30.0, smooth_window: int = 5,
+               legend_ncol: int = 2):
     """Draw one polar axes, possibly with multiple datasets.
     datasets: list of dicts {angles, series, label, linestyle}
     """
     fig = plt.figure(figsize=(9, 10), dpi=120)
     ax = plt.subplot(111, polar=True)
-    fig.suptitle(title, color=grid_color, fontsize=14)
 
     ax.set_facecolor("white")
     ax.set_theta_zero_location("N")
@@ -308,7 +550,7 @@ def save_polar(out_path, datasets, title,
                 ha="center", va="top", rotation=0, rotation_mode="anchor",
                 transform=base + offset, bbox=bbox_args)
 
-    handles, labels = [], []
+    legend_items: list[tuple[str, str, str]] = []
     solid_count, dashed_count = 0, 0
 
     for d in datasets:
@@ -324,23 +566,23 @@ def save_polar(out_path, datasets, title,
         color = color_for_index(ls, idx) or "black"
         ax.plot(np.deg2rad(angles), s, linewidth=2.3, solid_capstyle="round",
                 linestyle=ls, color=color)
-        # legend proxy (force long dashes preview)
-        if ls == "--":
-            h = Line2D([0],[0], lw=2.3, color=color, linestyle='-', dashes=[8,6,8,6,8,6], dash_capstyle="round")
-        else:
-            h = Line2D([0],[0], lw=2.3, color=color, linestyle='-')
-        handles.append(h)
-        labels.append(d.get("label", ""))
-
-    leg = ax.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.18),
-                    ncol=2, frameon=False, handlelength=8, handletextpad=1.0, fontsize=11)
-    for text in leg.get_texts():
-        text.set_color("#8a949c")
+        legend_items.append((d.get("label", ""), color, ls))
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout(rect=[0, 0, 1, 0.97])
-    plt.savefig(out_path, format="svg", bbox_inches="tight")
+    fig.savefig(out_path, format="svg", bbox_inches="tight")
     plt.close(fig)
+    legend_path = export_stacked_line_legend(
+        legend_items,
+        out_path,
+        ncol=legend_ncol,
+        fontsize=STACKED_LEGEND_FONT_SIZE,
+        linewidth=2.3,
+        column_sep=STACKED_LEGEND_COLUMN_SEP,
+        row_sep=STACKED_LEGEND_ROW_SEP,
+        entry_sep=STACKED_LEGEND_ENTRY_SEP,
+    )
+    return out_path, str(legend_path) if legend_path is not None else None
 
 
 def resolved_axis_limits(default_min: float | None, default_max: float | None,
@@ -384,9 +626,27 @@ def main():
     parser.add_argument("--gain-y-step", type=float, default=None, help="Optional y-axis tick step for the gain plot.")
     parser.add_argument("--beamwidth-y-step", type=float, default=None, help="Optional y-axis tick step for the beamwidth plot.")
     parser.add_argument("--beam-eff-y-step", type=float, default=None, help="Optional y-axis tick step for the beam efficiency plot.")
+    parser.add_argument(
+        "--gain-legend-labels",
+        default=None,
+        help="Comma-separated legend overrides for gain traces, in plotted series order.",
+    )
+    parser.add_argument(
+        "--beamwidth-legend-labels",
+        default=None,
+        help="Comma-separated legend overrides for beamwidth traces, in plotted series order.",
+    )
+    parser.add_argument(
+        "--beam-eff-legend-labels",
+        default=None,
+        help="Comma-separated legend overrides for beam efficiency traces, in plotted series order.",
+    )
     args = parser.parse_args()
 
     set_line_colors(parse_color_list(args.line_colors))
+    gain_legend_labels = parse_legend_labels(args.gain_legend_labels)
+    beamwidth_legend_labels = parse_legend_labels(args.beamwidth_legend_labels)
+    beam_eff_legend_labels = parse_legend_labels(args.beam_eff_legend_labels)
 
     xls = pd.ExcelFile(args.input_xlsx)
     sheet_names = xls.sheet_names
@@ -414,42 +674,46 @@ def main():
             grouped[base]['phi90'] = xls.parse(s)
 
     # collect summary sheets for cartesian plots
-    summary_sheets = [s for s in sheet_names if s not in polar_sheets]
+    summary_sheets = sorted((s for s in sheet_names if s not in polar_sheets), key=polarization_sort_key)
 
     gain_series, gain_names, gain_freqs = [], [], []
     bw_series, bw_names, bw_styles, bw_freqs = [], [], [], []
     be_series, be_names, be_freqs = [], [], []
+    summary_frames: list[tuple[str, pd.DataFrame]] = []
 
     for sheet in summary_sheets:
         df = xls.parse(sheet)
+        summary_frames.append((sheet, df))
         if not set(["freq_GHz", "phi_cut_deg"]).issubset(df.columns):
             continue
         sel0 = df[df["phi_cut_deg"] == 0]
         if "max_gain_dBi" in df.columns and not sel0.empty:
             gain_freqs.append(sel0["freq_GHz"].to_numpy(dtype=float))
             gain_series.append(sel0["max_gain_dBi"].to_numpy(dtype=float))
-            gain_names.append(sheet)
-
-        if "beamwidth_6dB_2sided_deg" in df.columns:
-            for phi, label_suffix, style in [(0, "Azimuth", "-"), (90, "Elevation", "--")]:
-                sel = df[df["phi_cut_deg"] == phi]
-                if sel.empty:
-                    continue
-                bw_freqs.append(sel["freq_GHz"].to_numpy(dtype=float))
-                bw_series.append(sel["beamwidth_6dB_2sided_deg"].to_numpy(dtype=float))
-                bw_names.append(f"Beamwidth {sheet} {label_suffix}")
-                bw_styles.append(style)
+            gain_names.append(gain_legend_label(sheet))
 
         if "eta_beam_percent" in df.columns and not sel0.empty:
             be_freqs.append(sel0["freq_GHz"].to_numpy(dtype=float))
             be_series.append(sel0["eta_beam_percent"].to_numpy(dtype=float))
-            be_names.append(f"{sheet}")
+            be_names.append(beam_efficiency_legend_label(sheet))
+
+    for phi, label_suffix, style in [(0, "Azimuth", "-"), (90, "Elevation", "--")]:
+        for sheet, df in summary_frames:
+            if not set(["freq_GHz", "phi_cut_deg", "beamwidth_6dB_2sided_deg"]).issubset(df.columns):
+                continue
+            sel = df[df["phi_cut_deg"] == phi]
+            if sel.empty:
+                continue
+            bw_freqs.append(sel["freq_GHz"].to_numpy(dtype=float))
+            bw_series.append(sel["beamwidth_6dB_2sided_deg"].to_numpy(dtype=float))
+            bw_names.append(beamwidth_legend_label(sheet, label_suffix))
+            bw_styles.append(style)
 
     # Gain plot
     if gain_series:
         series_g_raw = gain_series[:2]
         freq_g_raw = gain_freqs[:2]
-        names_g = gain_names[:2]
+        names_g = apply_legend_labels(gain_names[:2], gain_legend_labels)
         freq_g = common_frequency_axis(freq_g_raw)
         if freq_g is None or len(freq_g) == 0:
             print("Skipped gain plot: no common frequency axis across gain series.")
@@ -470,12 +734,25 @@ def main():
                 styles_g = ["-"] * len(series_g)
                 colors_g = [color_for_index("-", i) for i in range(len(series_g))]
                 out_gain = str(out_dir / f"{bookstem}_gain.svg")
-                plot_xy(freq_g, series_g, names_g, out_gain, y_label="Gain / dBi",
-                        styles=styles_g, colors=colors_g,
-                        grid_color=args.grid_color, y_min=y_min, y_max=y_max,
-                        y_step=resolved_tick_step(2.0, args.gain_y_step),
-                        smooth_window=args.smooth_window, x_step=args.x_step, x_log=args.x_log)
+                out_gain, out_gain_legend = plot_xy(
+                    freq_g,
+                    series_g,
+                    names_g,
+                    out_gain,
+                    y_label="Gain / dBi",
+                    styles=styles_g,
+                    colors=colors_g,
+                    grid_color=args.grid_color,
+                    y_min=y_min,
+                    y_max=y_max,
+                    y_step=resolved_tick_step(2.0, args.gain_y_step),
+                    smooth_window=args.smooth_window,
+                    x_step=args.x_step,
+                    x_log=args.x_log,
+                )
                 print(out_gain)
+                if out_gain_legend:
+                    print(out_gain_legend)
 
     # Beamwidth
     if bw_series:
@@ -490,6 +767,7 @@ def main():
                 print("Skipped beamwidth plot: selected frequency window left no samples.")
             else:
                 out_bw = str(out_dir / f"{bookstem}_beamwidth.svg")
+                bw_plot_names = apply_legend_labels(bw_names, beamwidth_legend_labels)
                 bw_colors, solid_count, dashed_count = [], 0, 0
                 for st in bw_styles:
                     if st == '-':
@@ -497,12 +775,25 @@ def main():
                     else:
                         bw_colors.append(color_for_index('--', dashed_count)); dashed_count += 1
                 y_min, y_max = resolved_axis_limits(0.0, 100.0, args.beamwidth_ymin, args.beamwidth_ymax)
-                plot_xy(freq_bw, bw_series_aligned, bw_names, out_bw, y_label="Beamwidth / deg",
-                        styles=bw_styles, colors=bw_colors, grid_color=args.grid_color,
-                        y_min=y_min, y_max=y_max,
-                        y_step=resolved_tick_step(10.0, args.beamwidth_y_step),
-                        smooth_window=args.smooth_window, x_step=args.x_step, x_log=args.x_log)
+                out_bw, out_bw_legend = plot_xy(
+                    freq_bw,
+                    bw_series_aligned,
+                    bw_plot_names,
+                    out_bw,
+                    y_label="Beamwidth / deg",
+                    styles=bw_styles,
+                    colors=bw_colors,
+                    grid_color=args.grid_color,
+                    y_min=y_min,
+                    y_max=y_max,
+                    y_step=resolved_tick_step(10.0, args.beamwidth_y_step),
+                    smooth_window=args.smooth_window,
+                    x_step=args.x_step,
+                    x_log=args.x_log,
+                )
                 print(out_bw)
+                if out_bw_legend:
+                    print(out_bw_legend)
 
     # Beam efficiency
     if be_series:
@@ -519,13 +810,27 @@ def main():
                 out_be = str(out_dir / f"{bookstem}_beam_efficiency.svg")
                 be_styles = ["-"] * len(be_series_aligned)
                 be_colors = [color_for_index("-", i) for i in range(len(be_series_aligned))]
+                be_plot_names = apply_legend_labels(be_names, beam_eff_legend_labels)
                 y_min, y_max = resolved_axis_limits(0.0, 100.0, args.beam_eff_ymin, args.beam_eff_ymax)
-                plot_xy(freq_be, be_series_aligned, be_names, out_be, y_label="Beam Efficiency / %",
-                        styles=be_styles, colors=be_colors,
-                        grid_color=args.grid_color, y_min=y_min, y_max=y_max,
-                        y_step=resolved_tick_step(10.0, args.beam_eff_y_step),
-                        smooth_window=args.smooth_window, x_step=args.x_step, x_log=args.x_log)
+                out_be, out_be_legend = plot_xy(
+                    freq_be,
+                    be_series_aligned,
+                    be_plot_names,
+                    out_be,
+                    y_label="Beam Efficiency / %",
+                    styles=be_styles,
+                    colors=be_colors,
+                    grid_color=args.grid_color,
+                    y_min=y_min,
+                    y_max=y_max,
+                    y_step=resolved_tick_step(10.0, args.beam_eff_y_step),
+                    smooth_window=args.smooth_window,
+                    x_step=args.x_step,
+                    x_log=args.x_log,
+                )
                 print(out_be)
+                if out_be_legend:
+                    print(out_be_legend)
 
     # ----------- Polar plots -----------
     def get_angle_and_freqs(df: pd.DataFrame):
@@ -571,8 +876,10 @@ def main():
     # build datasets for a given phi across bases, limit to 2 curves, and with chosen linestyle
     def build_phi_datasets(freq_col: str, phi_key: str, linestyle: str):
         datasets = []
+        plane = "Azimuth" if phi_key == "phi0" else "Elevation"
+        frequency_label = format_frequency_label(freq_col)
         count = 0
-        for base in sorted(grouped.keys()):
+        for base in sorted(grouped.keys(), key=polarization_sort_key):
             df = grouped[base].get(phi_key)
             if df is None or freq_col not in df.columns:
                 continue
@@ -585,7 +892,7 @@ def main():
             datasets.append({
                 "angles": angles,
                 "series": series,
-                "label": f"{base}",
+                "label": polar_legend_label(base, plane, frequency_label),
                 "linestyle": linestyle,
             })
             count += 1
@@ -594,10 +901,11 @@ def main():
         return datasets
 
     for freq_col in polar_cols_iter():
+        frequency_label = format_frequency_label(freq_col)
         # Combined (Az solid, El dashed)
         datasets_combined = []
-        for base in sorted(grouped.keys()):
-            for phi_key, label_suffix, linestyle in [("phi0", "Azimuth", "-"), ("phi90", "Elevation", "--")]:
+        for phi_key, label_suffix, linestyle in [("phi0", "Azimuth", "-"), ("phi90", "Elevation", "--")]:
+            for base in sorted(grouped.keys(), key=polarization_sort_key):
                 df = grouped[base].get(phi_key)
                 if df is None or freq_col not in df.columns:
                     continue
@@ -610,18 +918,27 @@ def main():
                 datasets_combined.append({
                     "angles": angles,
                     "series": series,
-                    "label": f"{base} {label_suffix}",
+                    "label": polar_legend_label(base, label_suffix, frequency_label),
                     "linestyle": linestyle,
                 })
         if datasets_combined:
             title = f"Polar patterns @ {freq_col}"
             out_name_c = f"{bookstem}_polar_{sanitize(freq_col)}_combined.svg"
             out_path_c = str(out_dir / "polar_combined" / out_name_c)
-            save_polar(out_path_c, datasets_combined, title,
-                       grid_color=args.grid_color, rings=rings,
-                       angle_tick_step=args.angle_step, clip_db=args.clip_db,
-                       smooth_window=args.smooth_window)
+            out_path_c, out_path_c_legend = save_polar(
+                out_path_c,
+                datasets_combined,
+                title,
+                grid_color=args.grid_color,
+                rings=rings,
+                angle_tick_step=args.angle_step,
+                clip_db=args.clip_db,
+                smooth_window=args.smooth_window,
+                legend_ncol=2,
+            )
             print(out_path_c)
+            if out_path_c_legend:
+                print(out_path_c_legend)
 
         # Single-phi: Azimuth (solid)
         ds_az = build_phi_datasets(freq_col, "phi0", linestyle='-')
@@ -629,11 +946,20 @@ def main():
             title_az = f"Azimuth (φ=0°) @ {freq_col}"
             out_name_az = f"{bookstem}_polar_azimuth_{sanitize(freq_col)}.svg"
             out_path_az = str(out_dir / "polar_single" / "azimuth" / out_name_az)
-            save_polar(out_path_az, ds_az, title_az,
-                       grid_color=args.grid_color, rings=rings,
-                       angle_tick_step=args.angle_step, clip_db=args.clip_db,
-                       smooth_window=args.smooth_window)
+            out_path_az, out_path_az_legend = save_polar(
+                out_path_az,
+                ds_az,
+                title_az,
+                grid_color=args.grid_color,
+                rings=rings,
+                angle_tick_step=args.angle_step,
+                clip_db=args.clip_db,
+                smooth_window=args.smooth_window,
+                legend_ncol=1,
+            )
             print(out_path_az)
+            if out_path_az_legend:
+                print(out_path_az_legend)
 
         # Single-phi: Elevation (dashed)
         ds_el = build_phi_datasets(freq_col, "phi90", linestyle='--')
@@ -641,11 +967,20 @@ def main():
             title_el = f"Elevation (φ=90°) @ {freq_col}"
             out_name_el = f"{bookstem}_polar_elevation_{sanitize(freq_col)}.svg"
             out_path_el = str(out_dir / "polar_single" / "elevation" / out_name_el)
-            save_polar(out_path_el, ds_el, title_el,
-                       grid_color=args.grid_color, rings=rings,
-                       angle_tick_step=args.angle_step, clip_db=args.clip_db,
-                       smooth_window=args.smooth_window)
+            out_path_el, out_path_el_legend = save_polar(
+                out_path_el,
+                ds_el,
+                title_el,
+                grid_color=args.grid_color,
+                rings=rings,
+                angle_tick_step=args.angle_step,
+                clip_db=args.clip_db,
+                smooth_window=args.smooth_window,
+                legend_ncol=1,
+            )
             print(out_path_el)
+            if out_path_el_legend:
+                print(out_path_el_legend)
 
 if __name__ == "__main__":
     main()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
 
+import antenna_toolkit_studio as studio_module
 from antenna_toolkit_studio import ModernMainWindow, StepperField
 from project_store import ProjectRecord, ProjectStore
 
@@ -26,6 +28,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.window.project_store = ProjectStore(Path(self.temp_dir.name))
         self.window.store.set("ui_presets", {})
         self.window.store.set("active_preset", "")
+        self.window.global_presets = {}
+        self.window.global_active_preset = ""
         self.window.refresh_project_list(select_slug="")
         self.window._reset_to_default_state()
         self.project = ProjectRecord(
@@ -64,19 +68,26 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertFalse(self.window.project_name.text().endswith("*"))
 
     def test_preset_changes_require_project_save(self) -> None:
-        with mock.patch("antenna_toolkit_studio.QInputDialog.getText", return_value=("Preset A", True)):
-            self.window.create_preset()
+        self.window.global_presets["Preset A"] = self.window.collect_preset_values()
+        self.window.global_active_preset = "Preset A"
+        self.window.project_active_preset = "Preset A"
+        self.window._persist_global_presets()
+        self.window.refresh_preset_list(select_name="Preset A")
+        self.window._mark_project_dirty()
         self.app.processEvents()
 
         self.assertTrue(self.window.has_unsaved_project_changes())
+        self.assertIn("Preset A", self.window.store.get("ui_presets", {}))
         loaded_before_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_before_save.presets, {})
+        self.assertEqual(loaded_before_save.active_preset, "")
 
         self.window.save_project_changes()
         self.app.processEvents()
 
         loaded_after_save = self.window.project_store.load_project(self.project.slug)
-        self.assertIn("Preset A", loaded_after_save.presets)
+        self.assertEqual(loaded_after_save.presets, {})
+        self.assertEqual(loaded_after_save.active_preset, "Preset A")
 
         self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
         self.app.processEvents()
@@ -84,14 +95,50 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assertTrue(self.window.has_unsaved_project_changes())
+        self.assertEqual(self.window.store.get("ui_presets", {})["Preset A"]["smooth"], self.window.beam_smooth.value())
         loaded_before_second_save = self.window.project_store.load_project(self.project.slug)
-        self.assertEqual(loaded_before_second_save.presets["Preset A"]["smooth"], self.project.settings["smooth"])
+        self.assertEqual(loaded_before_second_save.presets, {})
+        self.assertEqual(loaded_before_second_save.settings["smooth"], self.project.settings["smooth"])
 
         self.window.save_project_changes()
         self.app.processEvents()
 
         loaded_after_second_save = self.window.project_store.load_project(self.project.slug)
-        self.assertEqual(loaded_after_second_save.presets["Preset A"]["smooth"], self.window.beam_smooth.value())
+        self.assertEqual(loaded_after_second_save.presets, {})
+        self.assertEqual(loaded_after_second_save.active_preset, "Preset A")
+        self.assertEqual(loaded_after_second_save.settings["smooth"], self.window.beam_smooth.value())
+
+    def test_global_presets_remain_available_without_or_across_projects(self) -> None:
+        self.window.global_presets["Preset A"] = self.window.collect_preset_values()
+        self.window.global_active_preset = "Preset A"
+        self.window.project_active_preset = "Preset A"
+        self.window._persist_global_presets()
+        self.window.refresh_preset_list(select_name="Preset A")
+        self.window.save_project_changes()
+        self.app.processEvents()
+
+        self.window.project_combo.setCurrentIndex(0)
+        self.app.processEvents()
+
+        self.assertTrue(self.window.preset_combo.isEnabled())
+        self.assertGreaterEqual(self.window.preset_combo.findData("Preset A"), 0)
+        self.assertEqual(self.window.current_preset_name(), "Preset A")
+
+        second = ProjectRecord(
+            name="Second Project",
+            slug="second_project",
+            settings=self.window._default_project_settings(),
+            presets={},
+            active_preset="",
+            run_state={},
+        )
+        self.window.project_store.save_project(second)
+        self.window.refresh_project_list(select_slug=second.slug)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.active_project_slug, second.slug)
+        self.assertGreaterEqual(self.window.preset_combo.findData("Preset A"), 0)
+        self.assertEqual(self.window.project_store.load_project(second.slug).active_preset, "")
 
     def test_exit_prompt_can_save_or_cancel_dirty_project(self) -> None:
         self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
@@ -131,6 +178,36 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.width(), 1234)
         self.assertEqual(self.window.height(), 777)
 
+    def test_startup_restores_last_active_project(self) -> None:
+        temp_root = tempfile.TemporaryDirectory()
+        root = Path(temp_root.name)
+        state_path = root / ".nova_qt_studio_state.json"
+        project_store = ProjectStore(root)
+        project = ProjectRecord(
+            name="Restored Project",
+            slug="restored_project",
+            settings=self.window._default_project_settings(),
+            presets={},
+            active_preset="",
+            run_state={},
+        )
+        project_store.save_project(project)
+        state_path.write_text(json.dumps({"active_project": project.slug, "theme": "dark"}), encoding="utf-8")
+
+        with (
+            mock.patch.object(studio_module, "THIS_DIR", root),
+            mock.patch.object(studio_module, "STATE_FILE", state_path),
+        ):
+            restored = studio_module.ModernMainWindow()
+            self.app.processEvents()
+            try:
+                self.assertEqual(restored.active_project_slug, project.slug)
+                self.assertEqual(restored.project_combo.currentData(), project.slug)
+            finally:
+                with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Discard):
+                    restored.close()
+        temp_root.cleanup()
+
     def test_theme_selector_supports_additional_themes_and_persists_selection(self) -> None:
         self.assertEqual(self.window.theme_selector.count(), 5)
         theme_index = self.window.theme_selector.findData("sage")
@@ -155,7 +232,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertTrue(self.window.run_help_label.isHidden())
         self.assertFalse(self.window.pipeline_details_toggle.isHidden())
         self.assertTrue(self.window.pipeline_details.isHidden())
-        self.assertEqual(self.window.ffs_list.minimumHeight(), 170)
+        self.assertEqual(self.window.ffs_list.minimumHeight(), 140)
         self.assertGreaterEqual(QApplication.font().pointSizeF(), 10.0)
 
         with mock.patch.object(self.window, "_screen_available_height", return_value=1440):
@@ -167,7 +244,42 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertFalse(self.window.run_help_label.isHidden())
         self.assertTrue(self.window.pipeline_details_toggle.isHidden())
         self.assertFalse(self.window.pipeline_details.isHidden())
-        self.assertEqual(self.window.ffs_list.minimumHeight(), 230)
+        self.assertEqual(self.window.ffs_list.minimumHeight(), 170)
+
+    def test_pipeline_buttons_show_only_full_and_cancel(self) -> None:
+        labels = [button.text() for button in self.window.hero_actions._buttons]
+
+        self.assertEqual(labels, ["Run Full Pipeline", "Cancel Run", "Manual runs"])
+        run_actions = [action.text() for action in self.window.run_more_menu.actions()]
+        self.assertEqual(
+            run_actions,
+            [
+                "Workbook only",
+                "Extract data",
+                "Generate datasheet PDF",
+                "Plots only",
+                "VSWR only",
+            ],
+        )
+
+    def test_run_full_queues_datasheet_stage(self) -> None:
+        ffs_path = Path(self.temp_dir.name) / "sample.ffs"
+        s2p_path = Path(self.temp_dir.name) / "sample.s2p"
+        ffs_path.write_text("ffs", encoding="utf-8")
+        s2p_path.write_text("s2p", encoding="utf-8")
+        self.window._add_ffs_files([str(ffs_path)])
+        self.window._set_touchstone(str(s2p_path))
+        self.app.processEvents()
+
+        queued: list[str] = []
+
+        with (
+            mock.patch.object(self.window, "_save_project_if_dirty"),
+            mock.patch.object(self.window, "_enqueue_stage", side_effect=lambda stage_key, args: queued.append(stage_key)),
+        ):
+            self.window.run_full()
+
+        self.assertEqual(queued, ["beam", "extract", "datasheet", "plot", "vswr"])
 
     def test_create_project_starts_blank_until_user_saves_inputs(self) -> None:
         self.window._add_ffs_files(["Input data/a.ffs"])

@@ -9,6 +9,7 @@ It generates:
 
 - beamwidth and gain workbook `.xlsx`
 - extracted metrics workbook `.xlsx`
+- datasheet `.pdf`
 - Cartesian SVG plots
 - polar SVG plots
 - VSWR SVG plots
@@ -84,10 +85,11 @@ python antenna_toolkit_studio.py
 
 ### 3. Run processing
 
-- Workbook, extract, plot, VSWR, and full-pipeline actions all write into the active project directory
+- Workbook, extract, datasheet PDF, plot, VSWR, and full-pipeline actions all write into the active project directory
 - Derived output paths are:
   - `Projects\<project>\<project>.xlsx`
   - `Projects\<project>\<project>_extracted_data.xlsx`
+  - `Projects\<project>\<project>_datasheet.pdf`
   - `Projects\<project>\<project>_vswr.svg`
 
 ### 4. Delete a project
@@ -112,6 +114,7 @@ Projects\SH60WB\
   project.json
   SH60WB.xlsx
   SH60WB_extracted_data.xlsx
+  SH60WB_datasheet.pdf
   SH60WB_gain.svg
   SH60WB_beamwidth.svg
   SH60WB_beam_efficiency.svg
@@ -143,13 +146,19 @@ python beamwidth_xlsx.py "Projects\SH60WB\SH60WB.xlsx" "Input data\SH60WB_Horizo
 Generate plots from workbook:
 
 ```powershell
-python plot.py "Projects\SH60WB\SH60WB.xlsx" --out-dir "Projects\SH60WB" --fmin 4.8 --fmax 6.2 --x-step 0.2
+python plot.py "Projects\SH60WB\SH60WB.xlsx" --out-dir "Projects\SH60WB" --fmin 4.8 --fmax 6.2 --x-step 0.2 --gain-legend-labels "Horizontal,Vertical" --beamwidth-legend-labels "Horizontal Azimuth,Horizontal Elevation,Vertical Azimuth,Vertical Elevation"
 ```
 
 Generate VSWR plot:
 
 ```powershell
-python plot_vswr.py "Input data\SH60WB.s2p" --output "Projects\SH60WB\SH60WB_vswr.svg" --fmin 4.8 --fmax 6.2 --x-step 0.2
+python plot_vswr.py "Input data\SH60WB.s2p" --output "Projects\SH60WB\SH60WB_vswr.svg" --fmin 4.8 --fmax 6.2 --x-step 0.2 --legend-labels "Port A,Port B"
+```
+
+Generate datasheet PDF:
+
+```powershell
+python datasheet_pdf.py "Projects\SH60WB\SH60WB_datasheet.pdf" --template "Datasheet.pdf" --extract-workbook "Projects\SH60WB\SH60WB_extracted_data.xlsx"
 ```
 
 ## Notes

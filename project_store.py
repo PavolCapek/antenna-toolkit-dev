@@ -151,6 +151,9 @@ class ProjectRecord:
     def extract_path(self, root: Path) -> Path:
         return self.project_dir(root) / f"{self.slug}_extracted_data.xlsx"
 
+    def datasheet_path(self, root: Path) -> Path:
+        return self.project_dir(root) / f"{self.slug}_datasheet.pdf"
+
     def vswr_path(self, root: Path) -> Path:
         return self.project_dir(root) / f"{self.slug}_vswr.svg"
 

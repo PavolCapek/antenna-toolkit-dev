@@ -5,7 +5,7 @@ plot_vswr.py  — VSWR plotting with unified styling
 Matches the styling used in the user's plotting framework (plot.py):
 - Global color scheme (kept from gain plot)
 - Grid/axes color, minimalist spines
-- Legend outside the plot, custom handle length & text color
+- Separate legend SVG with the same styling as the plot legend
 - Optional smoothing and tick controls
 
 Usage:
@@ -22,8 +22,16 @@ from pathlib import Path
 from typing import List, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, FixedFormatter, FixedLocator, NullFormatter, NullLocator
+from plot import (
+    CARTESIAN_FIGURE_HEIGHT_IN,
+    CARTESIAN_FIGURE_WIDTH_IN,
+    STACKED_LEGEND_ENTRY_SEP,
+    STACKED_LEGEND_FONT_SIZE,
+    STACKED_LEGEND_ROW_SEP,
+    export_stacked_line_legend,
+)
+from legend_utils import apply_legend_labels, parse_legend_labels
 
 # ------------------ global color scheme (kept from gain plot) ------------------
 DEFAULT_SOLID_COLORS = ["#2bb6f6", "#f5a623"]
@@ -201,7 +209,7 @@ def plot_xy(x, series_list, names, out_path, y_label,
             y_min=None, y_max=None, y_step=None,
             smooth_window: int = 5, x_step: float = None, x_ticks=None,
             x_log: bool = False, x_min: float | None = None, x_max: float | None = None):
-    fig, ax = plt.subplots(figsize=(12, 4.2), dpi=120)
+    fig, ax = plt.subplots(figsize=(CARTESIAN_FIGURE_WIDTH_IN, CARTESIAN_FIGURE_HEIGHT_IN), dpi=120)
     ax.set_facecolor("white")
     ax.grid(True, which="both", axis="both", color=grid_color, linewidth=0.9)
     ax.set_axisbelow(True)
@@ -239,27 +247,22 @@ def plot_xy(x, series_list, names, out_path, y_label,
         ln, = ax.plot(x, ysm, linewidth=2.0, linestyle=st_in, solid_capstyle="round", color=color_in)
         lines.append(ln)
 
-    # legend with explicit dash preview (even though VSWR lines are solid, we keep consistency)
-    handles = []
-    for ln in lines:
-        st = ln.get_linestyle()
-        c = ln.get_color()
-        if st == "--":
-            h = Line2D([0],[0], color=c, lw=2.0, linestyle='-', dashes=[8,6,8,6,8,6], dash_capstyle="round")
-        else:
-            h = Line2D([0],[0], color=c, lw=2.0, linestyle='-')
-        handles.append(h)
-
-    leg = ax.legend(handles, names, loc="center left", bbox_to_anchor=(1.02, 0.5),
-                    frameon=False, handlelength=7, handletextpad=1.0)
-    for text in leg.get_texts():
-        text.set_color("#8a949c")
+    legend_items = [(name, ln.get_color(), ln.get_linestyle()) for name, ln in zip(names, lines)]
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
-    plt.savefig(out_path, format="svg", bbox_inches="tight")
-    plt.close()
-    return out_path
+    fig.savefig(out_path, format="svg", bbox_inches="tight")
+    plt.close(fig)
+    legend_path = export_stacked_line_legend(
+        legend_items,
+        out_path,
+        ncol=1,
+        fontsize=STACKED_LEGEND_FONT_SIZE,
+        linewidth=2.0,
+        row_sep=STACKED_LEGEND_ROW_SEP,
+        entry_sep=STACKED_LEGEND_ENTRY_SEP,
+    )
+    return out_path, str(legend_path) if legend_path is not None else None
 
 
 def interpolate_complex_trace(freqs_hz: np.ndarray, trace: np.ndarray, target_hz: float) -> complex:
@@ -327,6 +330,7 @@ def main():
     p.add_argument("--smooth-window", type=int, default=5, help="Centered moving-average window (points). Use 1 to disable.")
     p.add_argument("--grid-color", default="#6f7a81", help="Grid/axis color (hex).")
     p.add_argument("--line-colors", default=None, help="Comma-separated colors for the port traces.")
+    p.add_argument("--legend-labels", default=None, help="Comma-separated legend overrides for VSWR traces, in plotted series order.")
     args = p.parse_args()
 
     set_line_colors(parse_color_list(args.line_colors))
@@ -339,6 +343,7 @@ def main():
     if nports >= 2:
         traces.append(np.array([pair_to_complex(r[6], r[7], fmt) for r in data], dtype=complex))
         names.append("Port 2 (S22)")
+    names = apply_legend_labels(names, parse_legend_labels(args.legend_labels))
 
     # Determine default filename
     in_path = Path(args.input)
@@ -362,14 +367,27 @@ def main():
     styles = ["-"] * len(series)
     colors = [color_for_index("-", i) for i in range(len(series))]
 
-    plot_xy(
-        f_plot, series, names, out_path, y_label="VSWR",
-        grid_color=args.grid_color, styles=styles, colors=colors,
-        y_min=args.ymin, y_max=args.ymax, y_step=args.y_step,
-        smooth_window=args.smooth_window, x_step=args.x_step, x_log=args.x_log,
-        x_min=x_axis_min, x_max=x_axis_max,
+    out_path, legend_path = plot_xy(
+        f_plot,
+        series,
+        names,
+        out_path,
+        y_label="VSWR",
+        grid_color=args.grid_color,
+        styles=styles,
+        colors=colors,
+        y_min=args.ymin,
+        y_max=args.ymax,
+        y_step=args.y_step,
+        smooth_window=args.smooth_window,
+        x_step=args.x_step,
+        x_log=args.x_log,
+        x_min=x_axis_min,
+        x_max=x_axis_max,
     )
     print(f"Saved: {out_path}")
+    if legend_path:
+        print(f"Saved: {legend_path}")
 
 if __name__ == "__main__":
     main()
