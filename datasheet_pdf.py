@@ -75,6 +75,8 @@ class ChartReplacement:
     kind: str
     rect: fitz.Rect
     asset_path: Path
+    legend_rect: fitz.Rect | None = None
+    legend_asset_path: Path | None = None
 
 
 def _load_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
@@ -432,6 +434,10 @@ def _find_plot_asset(output: Path, extract_workbook: Path, suffix: str) -> Path:
     raise ValueError(f"Missing required plot asset '{suffix}'. Checked: {checked_list}")
 
 
+def _legend_asset_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}_legend{path.suffix}")
+
+
 def _extract_frequency_ghz(text: str) -> float | None:
     match = re.search(r"(\d+(?:[\.,]\d+)?)\s*ghz", str(text), re.IGNORECASE)
     if not match:
@@ -589,7 +595,21 @@ def _build_chart_replacements(page: fitz.Page, output: Path, extract_workbook: P
 
     resolved: list[ChartReplacement] = []
     for replacement in replacements:
-        rects = [fitz.Rect(replacement.rect)] + legend_rects.get(replacement.kind, [])
+        grouped_legend_rects = legend_rects.get(replacement.kind, [])
+        legend_asset_path = _legend_asset_path(replacement.asset_path)
+        if grouped_legend_rects and legend_asset_path.exists():
+            resolved.append(
+                ChartReplacement(
+                    replacement.kind,
+                    _expand_rect(fitz.Rect(replacement.rect)),
+                    replacement.asset_path,
+                    legend_rect=_expand_rect(_union_rects(grouped_legend_rects)),
+                    legend_asset_path=legend_asset_path,
+                )
+            )
+            continue
+
+        rects = [fitz.Rect(replacement.rect)] + grouped_legend_rects
         resolved.append(
             ChartReplacement(
                 replacement.kind,
@@ -630,9 +650,13 @@ def _replace_chart_images(doc: fitz.Document, output: Path, extract_workbook: Pa
     replacements = _build_chart_replacements(page, output, extract_workbook)
     for replacement in replacements:
         page.add_redact_annot(replacement.rect, fill=(1.0, 1.0, 1.0))
+        if replacement.legend_rect is not None:
+            page.add_redact_annot(replacement.legend_rect, fill=(1.0, 1.0, 1.0))
     page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
     for replacement in replacements:
         _place_svg_as_vector(page, replacement.rect, replacement.asset_path)
+        if replacement.legend_rect is not None and replacement.legend_asset_path is not None:
+            _place_svg_as_vector(page, replacement.legend_rect, replacement.legend_asset_path)
 
 
 def build_datasheet_pdf(output: Path, template: Path, extract_workbook: Path) -> dict[str, str]:

@@ -5,7 +5,7 @@ plot_vswr.py  — VSWR plotting with unified styling
 Matches the styling used in the user's plotting framework (plot.py):
 - Global color scheme (kept from gain plot)
 - Grid/axes color, minimalist spines
-- Legend outside the plot, custom handle length & text color
+- Separate legend SVG with the same styling as the plot legend
 - Optional smoothing and tick controls
 
 Usage:
@@ -27,7 +27,7 @@ from plot import (
     STACKED_LEGEND_ENTRY_SEP,
     STACKED_LEGEND_FONT_SIZE,
     STACKED_LEGEND_ROW_SEP,
-    add_stacked_line_legend,
+    export_stacked_line_legend,
 )
 from legend_utils import apply_legend_labels, parse_legend_labels
 
@@ -245,24 +245,22 @@ def plot_xy(x, series_list, names, out_path, y_label,
         ln, = ax.plot(x, ysm, linewidth=2.0, linestyle=st_in, solid_capstyle="round", color=color_in)
         lines.append(ln)
 
-    add_stacked_line_legend(
-        ax,
-        [(name, ln.get_color(), ln.get_linestyle()) for name, ln in zip(names, lines)],
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        bbox_transform=ax.transAxes,
+    legend_items = [(name, ln.get_color(), ln.get_linestyle()) for name, ln in zip(names, lines)]
+
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    fig.savefig(out_path, format="svg", bbox_inches="tight")
+    plt.close(fig)
+    legend_path = export_stacked_line_legend(
+        legend_items,
+        out_path,
         ncol=1,
         fontsize=STACKED_LEGEND_FONT_SIZE,
         linewidth=2.0,
         row_sep=STACKED_LEGEND_ROW_SEP,
         entry_sep=STACKED_LEGEND_ENTRY_SEP,
     )
-
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(out_path, format="svg", bbox_inches="tight")
-    plt.close()
-    return out_path
+    return out_path, str(legend_path) if legend_path is not None else None
 
 
 def interpolate_complex_trace(freqs_hz: np.ndarray, trace: np.ndarray, target_hz: float) -> complex:
@@ -367,14 +365,27 @@ def main():
     styles = ["-"] * len(series)
     colors = [color_for_index("-", i) for i in range(len(series))]
 
-    plot_xy(
-        f_plot, series, names, out_path, y_label="VSWR",
-        grid_color=args.grid_color, styles=styles, colors=colors,
-        y_min=args.ymin, y_max=args.ymax, y_step=args.y_step,
-        smooth_window=args.smooth_window, x_step=args.x_step, x_log=args.x_log,
-        x_min=x_axis_min, x_max=x_axis_max,
+    out_path, legend_path = plot_xy(
+        f_plot,
+        series,
+        names,
+        out_path,
+        y_label="VSWR",
+        grid_color=args.grid_color,
+        styles=styles,
+        colors=colors,
+        y_min=args.ymin,
+        y_max=args.ymax,
+        y_step=args.y_step,
+        smooth_window=args.smooth_window,
+        x_step=args.x_step,
+        x_log=args.x_log,
+        x_min=x_axis_min,
+        x_max=x_axis_max,
     )
     print(f"Saved: {out_path}")
+    if legend_path:
+        print(f"Saved: {legend_path}")
 
 if __name__ == "__main__":
     main()

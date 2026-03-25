@@ -2084,14 +2084,21 @@ class ModernMainWindow(QMainWindow):
         if stage_key == "datasheet":
             return [self.deduced_datasheet_output()]
         if stage_key == "vswr":
-            return [self.deduced_vswr_output()]
+            vswr_output = self.deduced_vswr_output()
+            return [
+                vswr_output,
+                vswr_output.with_name(f"{vswr_output.stem}_legend{vswr_output.suffix}"),
+            ]
         if stage_key == "plot":
             stem = self.deduced_beam_output().stem
             out_dir = self.project_results_dir()
             return [
                 out_dir / f"{stem}_gain.svg",
+                out_dir / f"{stem}_gain_legend.svg",
                 out_dir / f"{stem}_beamwidth.svg",
+                out_dir / f"{stem}_beamwidth_legend.svg",
                 out_dir / f"{stem}_beam_efficiency.svg",
+                out_dir / f"{stem}_beam_efficiency_legend.svg",
             ]
         return []
 

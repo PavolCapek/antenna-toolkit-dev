@@ -23,11 +23,17 @@ Features:
 
 Outputs:
 - <book>_gain.svg
+- <book>_gain_legend.svg
 - <book>_beamwidth.svg
+- <book>_beamwidth_legend.svg
 - <book>_beam_efficiency.svg
+- <book>_beam_efficiency_legend.svg
 - polar_combined/<book>_polar_<f>_combined.svg
+- polar_combined/<book>_polar_<f>_combined_legend.svg
 - polar_single/azimuth/<book>_polar_azimuth_<f>.svg   (solid)
+- polar_single/azimuth/<book>_polar_azimuth_<f>_legend.svg   (solid)
 - polar_single/elevation/<book>_polar_elevation_<f>.svg (dashed)
+- polar_single/elevation/<book>_polar_elevation_<f>_legend.svg (dashed)
 """
 import argparse
 from pathlib import Path
@@ -59,6 +65,7 @@ STACKED_LEGEND_TEXT_COLOR = "#8a949c"
 STACKED_LEGEND_COLUMN_SEP = 16.0
 STACKED_LEGEND_ROW_SEP = 24.0
 STACKED_LEGEND_ENTRY_SEP = 0.6
+LEGEND_FILE_SUFFIX = "_legend"
 
 def color_for_index(style: str, idx: int) -> str:
     base = SOLID_COLORS if style == '-' else DASHED_COLORS
@@ -77,6 +84,11 @@ def sanitize(s: str) -> str:
     s = re.sub(r"\s+", "_", s.strip())
     s = re.sub(r"[^A-Za-z0-9_.-]", "", s)
     return s if s else "sheet"
+
+
+def legend_output_path(out_path: str | Path) -> Path:
+    path = Path(out_path)
+    return path.with_name(f"{path.stem}{LEGEND_FILE_SUFFIX}{path.suffix}")
 
 
 def format_frequency_tick(value: float, _pos=None) -> str:
@@ -324,6 +336,45 @@ def add_stacked_line_legend(
     ax.add_artist(anchored)
     return anchored
 
+
+def export_stacked_line_legend(
+    items: list[tuple[str, str, str]],
+    out_path: str | Path,
+    *,
+    ncol: int = 1,
+    fontsize: float = STACKED_LEGEND_FONT_SIZE,
+    text_color: str = STACKED_LEGEND_TEXT_COLOR,
+    linewidth: float = 2.2,
+    column_sep: float = STACKED_LEGEND_COLUMN_SEP,
+    row_sep: float = STACKED_LEGEND_ROW_SEP,
+    entry_sep: float = STACKED_LEGEND_ENTRY_SEP,
+) -> Path | None:
+    if not items:
+        return None
+
+    legend_path = legend_output_path(out_path)
+    fig = plt.figure(figsize=(12, 4.2), dpi=120)
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    ax.set_axis_off()
+    add_stacked_line_legend(
+        ax,
+        items,
+        loc="center",
+        bbox_to_anchor=(0.5, 0.5),
+        bbox_transform=ax.transAxes,
+        ncol=ncol,
+        fontsize=fontsize,
+        text_color=text_color,
+        linewidth=linewidth,
+        column_sep=column_sep,
+        row_sep=row_sep,
+        entry_sep=entry_sep,
+    )
+    legend_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(legend_path, format="svg", bbox_inches="tight", pad_inches=0.03)
+    plt.close(fig)
+    return legend_path
+
 # ------------------ plotting: cartesian ------------------
 
 def plot_xy(x, series_list, names, out_path, y_label,
@@ -367,24 +418,22 @@ def plot_xy(x, series_list, names, out_path, y_label,
         ln, = ax.plot(x, ysm, linewidth=2.0, linestyle=st_in, solid_capstyle="round", color=color_in)
         lines.append(ln)
 
-    add_stacked_line_legend(
-        ax,
-        [(name, ln.get_color(), ln.get_linestyle()) for name, ln in zip(names, lines)],
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        bbox_transform=ax.transAxes,
+    legend_items = [(name, ln.get_color(), ln.get_linestyle()) for name, ln in zip(names, lines)]
+
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    fig.savefig(out_path, format="svg", bbox_inches="tight")
+    plt.close(fig)
+    legend_path = export_stacked_line_legend(
+        legend_items,
+        out_path,
         ncol=1,
         fontsize=STACKED_LEGEND_FONT_SIZE,
         linewidth=2.0,
         row_sep=STACKED_LEGEND_ROW_SEP,
         entry_sep=STACKED_LEGEND_ENTRY_SEP,
     )
-
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(out_path, format="svg", bbox_inches="tight")
-    plt.close()
-    return out_path
+    return out_path, str(legend_path) if legend_path is not None else None
 
 # ------------------ plotting: polar ------------------
 
@@ -450,12 +499,13 @@ def save_polar(out_path, datasets, title,
                 linestyle=ls, color=color)
         legend_items.append((d.get("label", ""), color, ls))
 
-    add_stacked_line_legend(
-        ax,
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.savefig(out_path, format="svg", bbox_inches="tight")
+    plt.close(fig)
+    legend_path = export_stacked_line_legend(
         legend_items,
-        loc="lower center",
-        bbox_to_anchor=(0.5, -0.19),
-        bbox_transform=ax.transAxes,
+        out_path,
         ncol=legend_ncol,
         fontsize=STACKED_LEGEND_FONT_SIZE,
         linewidth=2.3,
@@ -463,11 +513,7 @@ def save_polar(out_path, datasets, title,
         row_sep=STACKED_LEGEND_ROW_SEP,
         entry_sep=STACKED_LEGEND_ENTRY_SEP,
     )
-
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
-    plt.savefig(out_path, format="svg", bbox_inches="tight")
-    plt.close(fig)
+    return out_path, str(legend_path) if legend_path is not None else None
 
 
 def resolved_axis_limits(default_min: float | None, default_max: float | None,
@@ -619,12 +665,25 @@ def main():
                 styles_g = ["-"] * len(series_g)
                 colors_g = [color_for_index("-", i) for i in range(len(series_g))]
                 out_gain = str(out_dir / f"{bookstem}_gain.svg")
-                plot_xy(freq_g, series_g, names_g, out_gain, y_label="Gain / dBi",
-                        styles=styles_g, colors=colors_g,
-                        grid_color=args.grid_color, y_min=y_min, y_max=y_max,
-                        y_step=resolved_tick_step(2.0, args.gain_y_step),
-                        smooth_window=args.smooth_window, x_step=args.x_step, x_log=args.x_log)
+                out_gain, out_gain_legend = plot_xy(
+                    freq_g,
+                    series_g,
+                    names_g,
+                    out_gain,
+                    y_label="Gain / dBi",
+                    styles=styles_g,
+                    colors=colors_g,
+                    grid_color=args.grid_color,
+                    y_min=y_min,
+                    y_max=y_max,
+                    y_step=resolved_tick_step(2.0, args.gain_y_step),
+                    smooth_window=args.smooth_window,
+                    x_step=args.x_step,
+                    x_log=args.x_log,
+                )
                 print(out_gain)
+                if out_gain_legend:
+                    print(out_gain_legend)
 
     # Beamwidth
     if bw_series:
@@ -647,12 +706,25 @@ def main():
                     else:
                         bw_colors.append(color_for_index('--', dashed_count)); dashed_count += 1
                 y_min, y_max = resolved_axis_limits(0.0, 100.0, args.beamwidth_ymin, args.beamwidth_ymax)
-                plot_xy(freq_bw, bw_series_aligned, bw_plot_names, out_bw, y_label="Beamwidth / deg",
-                        styles=bw_styles, colors=bw_colors, grid_color=args.grid_color,
-                        y_min=y_min, y_max=y_max,
-                        y_step=resolved_tick_step(10.0, args.beamwidth_y_step),
-                        smooth_window=args.smooth_window, x_step=args.x_step, x_log=args.x_log)
+                out_bw, out_bw_legend = plot_xy(
+                    freq_bw,
+                    bw_series_aligned,
+                    bw_plot_names,
+                    out_bw,
+                    y_label="Beamwidth / deg",
+                    styles=bw_styles,
+                    colors=bw_colors,
+                    grid_color=args.grid_color,
+                    y_min=y_min,
+                    y_max=y_max,
+                    y_step=resolved_tick_step(10.0, args.beamwidth_y_step),
+                    smooth_window=args.smooth_window,
+                    x_step=args.x_step,
+                    x_log=args.x_log,
+                )
                 print(out_bw)
+                if out_bw_legend:
+                    print(out_bw_legend)
 
     # Beam efficiency
     if be_series:
@@ -671,12 +743,25 @@ def main():
                 be_colors = [color_for_index("-", i) for i in range(len(be_series_aligned))]
                 be_plot_names = apply_legend_labels(be_names, beam_eff_legend_labels)
                 y_min, y_max = resolved_axis_limits(0.0, 100.0, args.beam_eff_ymin, args.beam_eff_ymax)
-                plot_xy(freq_be, be_series_aligned, be_plot_names, out_be, y_label="Beam Efficiency / %",
-                        styles=be_styles, colors=be_colors,
-                        grid_color=args.grid_color, y_min=y_min, y_max=y_max,
-                        y_step=resolved_tick_step(10.0, args.beam_eff_y_step),
-                        smooth_window=args.smooth_window, x_step=args.x_step, x_log=args.x_log)
+                out_be, out_be_legend = plot_xy(
+                    freq_be,
+                    be_series_aligned,
+                    be_plot_names,
+                    out_be,
+                    y_label="Beam Efficiency / %",
+                    styles=be_styles,
+                    colors=be_colors,
+                    grid_color=args.grid_color,
+                    y_min=y_min,
+                    y_max=y_max,
+                    y_step=resolved_tick_step(10.0, args.beam_eff_y_step),
+                    smooth_window=args.smooth_window,
+                    x_step=args.x_step,
+                    x_log=args.x_log,
+                )
                 print(out_be)
+                if out_be_legend:
+                    print(out_be_legend)
 
     # ----------- Polar plots -----------
     def get_angle_and_freqs(df: pd.DataFrame):
@@ -771,11 +856,20 @@ def main():
             title = f"Polar patterns @ {freq_col}"
             out_name_c = f"{bookstem}_polar_{sanitize(freq_col)}_combined.svg"
             out_path_c = str(out_dir / "polar_combined" / out_name_c)
-            save_polar(out_path_c, datasets_combined, title,
-                       grid_color=args.grid_color, rings=rings,
-                       angle_tick_step=args.angle_step, clip_db=args.clip_db,
-                       smooth_window=args.smooth_window, legend_ncol=2)
+            out_path_c, out_path_c_legend = save_polar(
+                out_path_c,
+                datasets_combined,
+                title,
+                grid_color=args.grid_color,
+                rings=rings,
+                angle_tick_step=args.angle_step,
+                clip_db=args.clip_db,
+                smooth_window=args.smooth_window,
+                legend_ncol=2,
+            )
             print(out_path_c)
+            if out_path_c_legend:
+                print(out_path_c_legend)
 
         # Single-phi: Azimuth (solid)
         ds_az = build_phi_datasets(freq_col, "phi0", linestyle='-')
@@ -783,11 +877,20 @@ def main():
             title_az = f"Azimuth (φ=0°) @ {freq_col}"
             out_name_az = f"{bookstem}_polar_azimuth_{sanitize(freq_col)}.svg"
             out_path_az = str(out_dir / "polar_single" / "azimuth" / out_name_az)
-            save_polar(out_path_az, ds_az, title_az,
-                       grid_color=args.grid_color, rings=rings,
-                       angle_tick_step=args.angle_step, clip_db=args.clip_db,
-                       smooth_window=args.smooth_window, legend_ncol=1)
+            out_path_az, out_path_az_legend = save_polar(
+                out_path_az,
+                ds_az,
+                title_az,
+                grid_color=args.grid_color,
+                rings=rings,
+                angle_tick_step=args.angle_step,
+                clip_db=args.clip_db,
+                smooth_window=args.smooth_window,
+                legend_ncol=1,
+            )
             print(out_path_az)
+            if out_path_az_legend:
+                print(out_path_az_legend)
 
         # Single-phi: Elevation (dashed)
         ds_el = build_phi_datasets(freq_col, "phi90", linestyle='--')
@@ -795,11 +898,20 @@ def main():
             title_el = f"Elevation (φ=90°) @ {freq_col}"
             out_name_el = f"{bookstem}_polar_elevation_{sanitize(freq_col)}.svg"
             out_path_el = str(out_dir / "polar_single" / "elevation" / out_name_el)
-            save_polar(out_path_el, ds_el, title_el,
-                       grid_color=args.grid_color, rings=rings,
-                       angle_tick_step=args.angle_step, clip_db=args.clip_db,
-                       smooth_window=args.smooth_window, legend_ncol=1)
+            out_path_el, out_path_el_legend = save_polar(
+                out_path_el,
+                ds_el,
+                title_el,
+                grid_color=args.grid_color,
+                rings=rings,
+                angle_tick_step=args.angle_step,
+                clip_db=args.clip_db,
+                smooth_window=args.smooth_window,
+                legend_ncol=1,
+            )
             print(out_path_el)
+            if out_path_el_legend:
+                print(out_path_el_legend)
 
 if __name__ == "__main__":
     main()
