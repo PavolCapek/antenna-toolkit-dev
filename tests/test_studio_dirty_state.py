@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
 
+import antenna_toolkit_studio as studio_module
 from antenna_toolkit_studio import ModernMainWindow, StepperField
 from project_store import ProjectRecord, ProjectStore
 
@@ -130,6 +132,36 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.assertEqual(self.window.width(), 1234)
         self.assertEqual(self.window.height(), 777)
+
+    def test_startup_restores_last_active_project(self) -> None:
+        temp_root = tempfile.TemporaryDirectory()
+        root = Path(temp_root.name)
+        state_path = root / ".nova_qt_studio_state.json"
+        project_store = ProjectStore(root)
+        project = ProjectRecord(
+            name="Restored Project",
+            slug="restored_project",
+            settings=self.window.collect_preset_values(),
+            presets={},
+            active_preset="",
+            run_state={},
+        )
+        project_store.save_project(project)
+        state_path.write_text(json.dumps({"active_project": project.slug, "theme": "dark"}), encoding="utf-8")
+
+        with (
+            mock.patch.object(studio_module, "THIS_DIR", root),
+            mock.patch.object(studio_module, "STATE_FILE", state_path),
+        ):
+            restored = studio_module.ModernMainWindow()
+            self.app.processEvents()
+            try:
+                self.assertEqual(restored.active_project_slug, project.slug)
+                self.assertEqual(restored.project_combo.currentData(), project.slug)
+            finally:
+                with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Discard):
+                    restored.close()
+        temp_root.cleanup()
 
     def test_theme_selector_supports_additional_themes_and_persists_selection(self) -> None:
         self.assertEqual(self.window.theme_selector.count(), 5)

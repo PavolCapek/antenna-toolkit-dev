@@ -840,10 +840,11 @@ class ModernMainWindow(QMainWindow):
         self.theme = str(self.store.get("theme", "light")).lower()
         if self.theme not in THEME_LABELS:
             self.theme = "light"
+        initial_project_slug = str(self.store.get("active_project", "")).strip()
         self._build_ui()
         self._apply_style()
-        self.refresh_project_list(select_slug="")
-        self._reset_to_default_state()
+        self._reset_to_default_state(clear_persisted_project=False)
+        self.refresh_project_list(select_slug=initial_project_slug)
         self._restore_geometry()
         self._update_layout_mode(force=True)
         self.store.set("theme", self.theme)
@@ -1214,7 +1215,7 @@ class ModernMainWindow(QMainWindow):
         inputs_panel_layout.setContentsMargins(0, 0, 0, 0)
         inputs_panel_layout.setSpacing(12)
         inputs_left = QWidget()
-        inputs_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        inputs_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         inputs_left_layout = QVBoxLayout(inputs_left)
         inputs_left_layout.setContentsMargins(0, 0, 0, 0)
         inputs_left_layout.setSpacing(12)
@@ -1223,8 +1224,7 @@ class ModernMainWindow(QMainWindow):
         inputs_left_layout.addStretch(1)
         inputs_panel_layout.addWidget(inputs_left, 1)
         inputs_panel_layout.addWidget(ffs_card, 2)
-        inputs_lay.addWidget(inputs_panel)
-        inputs_lay.addStretch(1)
+        inputs_lay.addWidget(inputs_panel, 1)
 
         self.beam_smooth = NoWheelSpinBox(); self.beam_smooth.setRange(1, 99); self.beam_smooth.setValue(int(self.store.get("smooth", 5))); self.beam_smooth.valueChanged.connect(lambda v: self.store.set("smooth", int(v)))
         self.theta_window = TrimmedDoubleSpinBox(); self.theta_window.setRange(0.0, 90.0); self.theta_window.setDecimals(6); self.theta_window.setSingleStep(0.5); self.theta_window.setValue(float(self.store.get("theta", 8.0))); self.theta_window.valueChanged.connect(lambda v: self.store.set("theta", float(v)))
@@ -1395,6 +1395,7 @@ class ModernMainWindow(QMainWindow):
 
         processing_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 2, 1]})
         self.processing_panel = processing_panel
+        processing_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         processing_panel.set_cards([
             workbook_card,
             frequency_card,
@@ -1403,14 +1404,13 @@ class ModernMainWindow(QMainWindow):
             efficiency_range_card,
             vswr_range_card,
         ])
-        processing_lay.addWidget(processing_panel)
-        processing_lay.addStretch(1)
+        processing_lay.addWidget(processing_panel, 1)
 
         colors_panel = ResponsiveCardPanel(max_columns=2, min_card_width=320)
         self.colors_panel = colors_panel
+        colors_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         colors_panel.set_cards([plot_color_card, legend_card, polar_card])
-        colors_lay.addWidget(colors_panel)
-        colors_lay.addStretch(1)
+        colors_lay.addWidget(colors_panel, 1)
 
         self.workflow_tabs.addTab(inputs_scroll, "Inputs")
         self.workflow_tabs.addTab(processing_scroll, "Processing")
@@ -1457,7 +1457,7 @@ class ModernMainWindow(QMainWindow):
         super().resizeEvent(event)
         self._update_layout_mode()
 
-    def _reset_to_default_state(self) -> None:
+    def _reset_to_default_state(self, clear_persisted_project: bool = True) -> None:
         self._loading_project = True
         self.active_project_slug = ""
         self.active_project_name = ""
@@ -1505,7 +1505,8 @@ class ModernMainWindow(QMainWindow):
         self.project_combo.blockSignals(True)
         self.project_combo.setCurrentIndex(0)
         self.project_combo.blockSignals(False)
-        self.store.set("active_project", "")
+        if clear_persisted_project:
+            self.store.set("active_project", "")
         self._loading_project = False
         self.refresh_derived_paths()
 
@@ -1618,13 +1619,13 @@ class ModernMainWindow(QMainWindow):
     def _layout_metrics(self) -> dict[str, object]:
         if self._compact_layout:
             return {
-                "base_font_size": 10,
-                "widget_font_size": 10,
+                "base_font_size": 11,
+                "widget_font_size": 11,
                 "title_band_radius": 24,
                 "workspace_shell_radius": 24,
                 "card_radius": 18,
-                "root_margin": 12,
-                "root_spacing": 12,
+                "root_margin": 14,
+                "root_spacing": 14,
                 "title_margins": (18, 14, 18, 14),
                 "title_spacing": 12,
                 "brand_spacing": 3,
@@ -1633,9 +1634,9 @@ class ModernMainWindow(QMainWindow):
                 "shell_spacing": 10,
                 "scroll_top_margin": 2,
                 "scroll_spacing": 10,
-                "card_margin": 12,
-                "card_spacing": 6,
-                "card_body_spacing": 6,
+                "card_margin": 14,
+                "card_spacing": 7,
+                "card_body_spacing": 7,
                 "panel_gap": 10,
                 "button_gap": 6,
                 "command_panel_min_card_width": 430,
@@ -1647,28 +1648,28 @@ class ModernMainWindow(QMainWindow):
                 "ffs_min_button_width": 118,
                 "s2p_min_button_width": 122,
                 "ffs_list_min_height": 170,
-                "brand_title_size": 18,
-                "brand_subtitle_size": 9.5,
-                "run_info_size": 9.5,
-                "card_title_size": 12.5,
-                "eyebrow_size": 8.5,
-                "project_name_size": 16.5,
-                "helper_size": 9.5,
-                "badge_font_size": 8.5,
-                "badge_padding": (4, 8),
+                "brand_title_size": 19,
+                "brand_subtitle_size": 10.25,
+                "run_info_size": 10.25,
+                "card_title_size": 13,
+                "eyebrow_size": 9,
+                "project_name_size": 17.5,
+                "helper_size": 10.25,
+                "badge_font_size": 9,
+                "badge_padding": (5, 9),
                 "tab_margin_top": 4,
-                "tab_padding": (7, 12),
-                "tab_min_width": 96,
-                "input_padding": (6, 9),
-                "button_padding": (8, 12),
-                "primary_button_padding": (8, 14),
-                "step_button_padding_v": 5,
-                "step_button_font_size": 10,
-                "pill_padding": (5, 8),
+                "tab_padding": (8, 14),
+                "tab_min_width": 102,
+                "input_padding": (7, 10),
+                "button_padding": (9, 13),
+                "primary_button_padding": (10, 15),
+                "step_button_padding_v": 6,
+                "step_button_font_size": 11,
+                "pill_padding": (6, 9),
             }
         return {
-            "base_font_size": 11,
-            "widget_font_size": 11,
+            "base_font_size": 12,
+            "widget_font_size": 12,
             "title_band_radius": 28,
             "workspace_shell_radius": 28,
             "card_radius": 20,
@@ -1682,11 +1683,11 @@ class ModernMainWindow(QMainWindow):
             "shell_spacing": 14,
             "scroll_top_margin": 6,
             "scroll_spacing": 14,
-            "card_margin": 16,
-            "card_spacing": 8,
-            "card_body_spacing": 8,
-            "panel_gap": 12,
-            "button_gap": 8,
+            "card_margin": 18,
+            "card_spacing": 10,
+            "card_body_spacing": 10,
+            "panel_gap": 14,
+            "button_gap": 10,
             "command_panel_min_card_width": 480,
             "processing_panel_min_card_width": 320,
             "colors_panel_min_card_width": 320,
@@ -1696,24 +1697,24 @@ class ModernMainWindow(QMainWindow):
             "ffs_min_button_width": 135,
             "s2p_min_button_width": 145,
             "ffs_list_min_height": 230,
-            "brand_title_size": 21,
-            "brand_subtitle_size": 10.75,
-            "run_info_size": 10.5,
-            "card_title_size": 13.5,
-            "eyebrow_size": 9,
-            "project_name_size": 19,
-            "helper_size": 10.5,
-            "badge_font_size": 9,
-            "badge_padding": (6, 10),
+            "brand_title_size": 24,
+            "brand_subtitle_size": 11.5,
+            "run_info_size": 11.5,
+            "card_title_size": 15,
+            "eyebrow_size": 9.5,
+            "project_name_size": 20.5,
+            "helper_size": 11.5,
+            "badge_font_size": 10,
+            "badge_padding": (7, 11),
             "tab_margin_top": 8,
-            "tab_padding": (10, 16),
-            "tab_min_width": 110,
-            "input_padding": (8, 11),
-            "button_padding": (10, 14),
-            "primary_button_padding": (10, 16),
-            "step_button_padding_v": 6,
-            "step_button_font_size": 11,
-            "pill_padding": (7, 10),
+            "tab_padding": (11, 18),
+            "tab_min_width": 120,
+            "input_padding": (9, 12),
+            "button_padding": (11, 15),
+            "primary_button_padding": (12, 18),
+            "step_button_padding_v": 7,
+            "step_button_font_size": 12,
+            "pill_padding": (8, 11),
         }
 
     def _set_pipeline_details_visible(self, visible: bool) -> None:
