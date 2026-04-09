@@ -12,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
 
+import antenna_toolkit_qt as qt_module
 import antenna_toolkit_studio as studio_module
 from antenna_toolkit_studio import ModernMainWindow, StepperField
 from project_store import ProjectRecord, ProjectStore
@@ -53,7 +54,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertFalse(self.window.has_unsaved_project_changes())
         self.assertFalse(self.window.project_save_button.isEnabled())
 
-        self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
+        self.window._add_ffs_files(["Input data/a.ffs"])
         self.app.processEvents()
 
         self.assertTrue(self.window.has_unsaved_project_changes())
@@ -91,14 +92,17 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
         self.app.processEvents()
+
+        self.assertFalse(self.window.has_unsaved_project_changes())
+
         self.window.save_preset()
         self.app.processEvents()
 
-        self.assertTrue(self.window.has_unsaved_project_changes())
+        self.assertFalse(self.window.has_unsaved_project_changes())
         self.assertEqual(self.window.store.get("ui_presets", {})["Preset A"]["smooth"], self.window.beam_smooth.value())
         loaded_before_second_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_before_second_save.presets, {})
-        self.assertEqual(loaded_before_second_save.settings["smooth"], self.project.settings["smooth"])
+        self.assertEqual(loaded_before_second_save.settings, {})
 
         self.window.save_project_changes()
         self.app.processEvents()
@@ -106,7 +110,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         loaded_after_second_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_after_second_save.presets, {})
         self.assertEqual(loaded_after_second_save.active_preset, "Preset A")
-        self.assertEqual(loaded_after_second_save.settings["smooth"], self.window.beam_smooth.value())
+        self.assertEqual(loaded_after_second_save.settings, {})
 
     def test_global_presets_remain_available_without_or_across_projects(self) -> None:
         self.window.global_presets["Preset A"] = self.window.collect_preset_values()
@@ -138,10 +142,35 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.assertEqual(self.window.active_project_slug, second.slug)
         self.assertGreaterEqual(self.window.preset_combo.findData("Preset A"), 0)
+        self.assertEqual(self.window.current_preset_name(), "")
         self.assertEqual(self.window.project_store.load_project(second.slug).active_preset, "")
 
+    def test_switching_projects_applies_each_projects_selected_preset(self) -> None:
+        preset_a = dict(self.window.collect_preset_values())
+        preset_a["smooth"] = 7
+        preset_b = dict(self.window.collect_preset_values())
+        preset_b["smooth"] = 11
+        self.window.global_presets = {"Preset A": preset_a, "Preset B": preset_b}
+        self.window.global_active_preset = "Preset A"
+        self.window._persist_global_presets()
+
+        project_a = ProjectRecord(name="Preset A Project", slug="preset_a_project", active_preset="Preset A")
+        project_b = ProjectRecord(name="Preset B Project", slug="preset_b_project", active_preset="Preset B")
+        self.window.project_store.save_project(project_a)
+        self.window.project_store.save_project(project_b)
+
+        self.window.refresh_project_list(select_slug=project_a.slug)
+        self.app.processEvents()
+        self.assertEqual(self.window.current_preset_name(), "Preset A")
+        self.assertEqual(self.window.beam_smooth.value(), 7)
+
+        self.window.refresh_project_list(select_slug=project_b.slug)
+        self.app.processEvents()
+        self.assertEqual(self.window.current_preset_name(), "Preset B")
+        self.assertEqual(self.window.beam_smooth.value(), 11)
+
     def test_exit_prompt_can_save_or_cancel_dirty_project(self) -> None:
-        self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
+        self.window._add_ffs_files(["Input data/a.ffs"])
         self.app.processEvents()
 
         with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Save):
@@ -149,7 +178,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertTrue(confirmed)
         self.assertFalse(self.window.has_unsaved_project_changes())
 
-        self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
+        self.window._add_ffs_files(["Input data/b.ffs"])
         self.app.processEvents()
 
         with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Cancel):
@@ -208,6 +237,22 @@ class StudioDirtyStateTests(unittest.TestCase):
                     restored.close()
         temp_root.cleanup()
 
+    def test_state_file_migrates_from_legacy_workspace_location(self) -> None:
+        temp_root = tempfile.TemporaryDirectory()
+        appdata_root = tempfile.TemporaryDirectory()
+        legacy_path = Path(temp_root.name) / ".nova_qt_studio_state.json"
+        legacy_path.write_text(json.dumps({"ui_presets": {"Preset A": {"smooth": 7}}}), encoding="utf-8")
+
+        with mock.patch.dict(os.environ, {"APPDATA": appdata_root.name}, clear=False):
+            state_path = qt_module.resolve_state_file(".nova_qt_studio_state.json", legacy_path)
+
+        self.assertTrue(state_path.exists())
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["ui_presets"]["Preset A"]["smooth"], 7)
+
+        temp_root.cleanup()
+        appdata_root.cleanup()
+
     def test_theme_selector_supports_additional_themes_and_persists_selection(self) -> None:
         self.assertEqual(self.window.theme_selector.count(), 5)
         theme_index = self.window.theme_selector.findData("sage")
@@ -223,7 +268,10 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertGreaterEqual(QApplication.font().pointSizeF(), 10.0)
 
     def test_compact_layout_collapses_secondary_command_details(self) -> None:
-        with mock.patch.object(self.window, "_screen_available_height", return_value=1200):
+        with (
+            mock.patch.object(self.window, "_screen_available_height", return_value=1200),
+            mock.patch.object(self.window, "_available_window_width", return_value=1300),
+        ):
             self.window._update_layout_mode(force=True)
         self.app.processEvents()
 
@@ -235,7 +283,10 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.ffs_list.minimumHeight(), 140)
         self.assertGreaterEqual(QApplication.font().pointSizeF(), 10.0)
 
-        with mock.patch.object(self.window, "_screen_available_height", return_value=1440):
+        with (
+            mock.patch.object(self.window, "_screen_available_height", return_value=1440),
+            mock.patch.object(self.window, "_available_window_width", return_value=1600),
+        ):
             self.window._update_layout_mode(force=True)
         self.app.processEvents()
 
@@ -279,7 +330,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         ):
             self.window.run_full()
 
-        self.assertEqual(queued, ["beam", "extract", "datasheet", "plot", "vswr"])
+        self.assertEqual(queued, ["beam", "extract", "plot", "datasheet", "vswr"])
 
     def test_create_project_starts_blank_until_user_saves_inputs(self) -> None:
         self.window._add_ffs_files(["Input data/a.ffs"])
@@ -304,7 +355,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(loaded.touchstone_file, "")
         self.assertEqual(loaded.presets, {})
         self.assertEqual(loaded.active_preset, "")
-        self.assertEqual(loaded.settings["smooth"], 5)
+        self.assertEqual(loaded.settings, {})
 
     def test_edit_project_renames_project_and_keeps_saved_inputs(self) -> None:
         self.window._add_ffs_files(["Input data/a.ffs"])

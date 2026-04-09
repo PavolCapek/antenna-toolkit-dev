@@ -11,7 +11,7 @@ from typing import Any
 
 PROJECTS_DIRNAME = "Projects"
 PROJECT_FILE_NAME = "project.json"
-CURRENT_PROJECT_SCHEMA_VERSION = 2
+CURRENT_PROJECT_SCHEMA_VERSION = 3
 
 
 def utc_now_iso() -> str:
@@ -111,8 +111,6 @@ class ProjectRecord:
             "slug": self.slug,
             "ffs_items": self.ffs_items,
             "touchstone_file": self.touchstone_file,
-            "settings": self.settings,
-            "presets": self.presets,
             "active_preset": self.active_preset,
             "run_state": self.run_state,
         }
@@ -247,8 +245,8 @@ class ProjectStore:
             schema_version=CURRENT_PROJECT_SCHEMA_VERSION,
             ffs_items=[dict(item) for item in source.ffs_items],
             touchstone_file=source.touchstone_file,
-            settings=dict(source.settings),
-            presets={key: dict(value) for key, value in source.presets.items()},
+            settings={},
+            presets={},
             active_preset=source.active_preset,
             run_state={},
         )

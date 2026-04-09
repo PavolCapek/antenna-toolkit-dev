@@ -46,7 +46,7 @@ class ProjectStoreTests(unittest.TestCase):
         )
         self.assertEqual(project.run_state["history"][0]["action"], "imported")
 
-    def test_save_and_load_preserves_presets_and_run_state(self) -> None:
+    def test_save_and_load_preserves_active_preset_and_run_state(self) -> None:
         project = ProjectRecord(
             name="Dish A",
             slug="dish_a",
@@ -62,8 +62,9 @@ class ProjectStoreTests(unittest.TestCase):
         loaded = self.store.load_project("dish_a")
 
         self.assertEqual(loaded.schema_version, CURRENT_PROJECT_SCHEMA_VERSION)
-        self.assertEqual(loaded.presets["Tight"]["smooth"], 7)
         self.assertEqual(loaded.active_preset, "Tight")
+        self.assertEqual(loaded.settings, {})
+        self.assertEqual(loaded.presets, {})
         self.assertEqual(loaded.run_state["stages"]["beam"]["status"], "success")
 
     def test_duplicate_export_and_import_bundle(self) -> None:
@@ -110,6 +111,8 @@ class ProjectStoreTests(unittest.TestCase):
         payload = json.loads((project_dir / PROJECT_FILE_NAME).read_text(encoding="utf-8"))
 
         self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA_VERSION)
+        self.assertNotIn("settings", payload)
+        self.assertNotIn("presets", payload)
 
     def test_rename_updates_slugged_outputs(self) -> None:
         project = ProjectRecord(name="Dish E", slug="dish_e")

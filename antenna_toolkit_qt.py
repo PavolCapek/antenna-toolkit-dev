@@ -23,7 +23,7 @@ Dependencies
 Author: ChatGPT
 """
 from __future__ import annotations
-import os, sys, json, platform, shlex, re, time
+import os, sys, json, platform, shlex, re, shutil, time
 from pathlib import Path
 from typing import List
 
@@ -43,7 +43,6 @@ SCRIPT_EXTRACT = str(THIS_DIR / "extract_data_xlsx.py")
 SCRIPT_DATASHEET = str(THIS_DIR / "datasheet_pdf.py")
 SCRIPT_PLOT = str(THIS_DIR / "plot.py")
 SCRIPT_VSWR = str(THIS_DIR / "plot_vswr.py")
-STATE_FILE = THIS_DIR / ".nova_qt_state.json"
 RESULTS_DIR = THIS_DIR / "Results"
 DEFAULT_GRID_COLOR = "#6f7a81"
 DEFAULT_LINE_COLORS = [
@@ -83,6 +82,40 @@ PRESET_KEYS = [
     "angle",
     "clip",
 ]
+
+
+def app_state_dir() -> Path:
+    if os.name == "nt":
+        base = Path(
+            os.environ.get("APPDATA")
+            or os.environ.get("LOCALAPPDATA")
+            or (Path.home() / "AppData" / "Roaming")
+        )
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    return base / "AntennaToolkit"
+
+
+def resolve_state_file(filename: str, legacy_path: Path | None = None) -> Path:
+    state_path = app_state_dir() / filename
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    if legacy_path and legacy_path.exists() and not state_path.exists():
+        try:
+            shutil.copy2(legacy_path, state_path)
+        except Exception:
+            try:
+                state_path.write_text(legacy_path.read_text(encoding="utf-8"), encoding="utf-8")
+            except Exception:
+                pass
+    return state_path
+
+
+STATE_FILE = resolve_state_file(".nova_qt_state.json", THIS_DIR / ".nova_qt_state.json")
 
 
 def suggest_preset_name(existing_names: list[str], base_name: str) -> str:
@@ -164,8 +197,12 @@ class Persist:
         self.path = path
         self.data = {}
         try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
             if path.exists():
-                self.data = json.loads(path.read_text())
+                self.data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             self.data = {}
     def get(self, key: str, default=None):
@@ -173,7 +210,8 @@ class Persist:
     def set(self, key: str, value):
         self.data[key] = value
         try:
-            self.path.write_text(json.dumps(self.data, indent=2))
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
         except Exception:
             pass
 

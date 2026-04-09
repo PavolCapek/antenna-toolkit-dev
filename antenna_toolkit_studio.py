@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from antenna_toolkit_qt import (
     THIS_DIR, SCRIPT_BEAM, SCRIPT_EXTRACT, SCRIPT_DATASHEET, SCRIPT_PLOT, SCRIPT_VSWR,
     suggest_preset_name, normalize_preset_payload,
-    DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, Persist, Proc,
+    DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, Persist, Proc, resolve_state_file,
     which_python, open_in_file_manager, resolve_workspace_path,
     display_workspace_path, deduce_project_name, normalized_project_stem,
 )
@@ -33,8 +33,9 @@ from project_store import (
 )
 
 APP_TITLE = "Antenna Toolkit Studio"
-STATE_FILE = THIS_DIR / ".nova_qt_studio_state.json"
+STATE_FILE = resolve_state_file(".nova_qt_studio_state.json", THIS_DIR / ".nova_qt_studio_state.json")
 COMPACT_SCREEN_HEIGHT = 1200
+COMPACT_WINDOW_WIDTH = 1360
 GREY_COLOR_OPTIONS = [
     ("Charcoal", "#4b5563"),
     ("Slate", "#6b7280"),
@@ -772,7 +773,7 @@ class HelpWindow(QWidget):
             "2. Add or edit project inputs on the Inputs tab.\n"
             "3. Choose or update the project preset and tuning controls.\n"
             "4. Click Save project to persist the current inputs and preset.\n"
-            "5. Run the pipeline from the top command area."
+            "5. Run the pipeline from the Run tab."
         )
         workspace_note.setWordWrap(True)
         workspace_note.setObjectName("helper")
@@ -1071,19 +1072,11 @@ class ModernMainWindow(QMainWindow):
         project_card.body.addLayout(badge_grid)
 
         command_left = QWidget()
-        command_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        command_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         command_left_layout = QVBoxLayout(command_left)
         command_left_layout.setContentsMargins(0, 0, 0, 0)
-        command_left_layout.setSpacing(12)
+        command_left_layout.setSpacing(0)
         command_left_layout.addWidget(project_card)
-        command_right = QWidget()
-        command_right.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        command_right_layout = QVBoxLayout(command_right)
-        command_right_layout.setContentsMargins(0, 0, 0, 0)
-        command_right_layout.setSpacing(12)
-        command_right_layout.addWidget(quick_actions)
-        command_panel.set_cards([command_left, command_right])
-        root_lay.addWidget(command_panel)
 
         workspace_shell = QFrame()
         workspace_shell.setObjectName("workspaceShell")
@@ -1092,15 +1085,63 @@ class ModernMainWindow(QMainWindow):
         self.shell_lay = shell_lay
         shell_lay.setContentsMargins(20, 20, 20, 20)
         shell_lay.setSpacing(14)
+        readiness_card = Card("Run readiness", "Status")
+        self.readiness_card = readiness_card
+        readiness_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.readiness_summary = QLabel("Create a project to start tracking run readiness.")
+        self.readiness_summary.setObjectName("helper")
+        self.readiness_summary.setWordWrap(True)
+        readiness_card.body.addWidget(self.readiness_summary)
+        readiness_panel = ResponsiveCardPanel(max_columns=4, min_card_width=170)
+        self.readiness_panel = readiness_panel
+        readiness_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.readiness_badges: dict[str, QLabel] = {}
+        readiness_tiles: list[QWidget] = []
+        for key, title in (
+            ("project", "Project"),
+            ("inputs", "Far-field"),
+            ("touchstone", "Touchstone"),
+            ("outputs", "Outputs"),
+        ):
+            tile = QWidget()
+            tile_lay = QVBoxLayout(tile)
+            tile_lay.setContentsMargins(0, 0, 0, 0)
+            tile_lay.setSpacing(4)
+            tile_title = QLabel(title)
+            tile_title.setObjectName("helper")
+            tile_value = QLabel("Waiting")
+            tile_value.setObjectName("summaryBadge")
+            self.readiness_badges[key] = tile_value
+            tile_lay.addWidget(tile_title)
+            tile_lay.addWidget(tile_value)
+            readiness_tiles.append(tile)
+        readiness_panel.set_cards(readiness_tiles)
+        readiness_card.body.addWidget(readiness_panel)
+        readiness_action_row = QHBoxLayout()
+        readiness_action_row.setContentsMargins(0, 0, 0, 0)
+        readiness_action_row.setSpacing(10)
+        self.readiness_action = QPushButton("Create project")
+        self.readiness_action.setObjectName("primaryButton")
+        self.readiness_action.setMinimumWidth(180)
+        readiness_action_row.addWidget(self.readiness_action, 0, Qt.AlignLeft)
+        readiness_action_row.addStretch(1)
+        readiness_card.body.addLayout(readiness_action_row)
         self.workflow_tabs = QTabWidget()
         self.workflow_tabs.setObjectName("workflowTabs")
+        self.workflow_tabs.setDocumentMode(True)
+        self.workflow_tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.workflow_tabs.currentChanged.connect(self.on_tab_changed)
         shell_lay.addWidget(self.workflow_tabs, 1)
-        root_lay.addWidget(workspace_shell, 1)
+        command_panel.set_cards([command_left, workspace_shell])
+        root_lay.addWidget(command_panel, 1)
 
+        run_scroll, _run_page, run_lay = self._make_scroll_page()
         inputs_scroll, _inputs_page, inputs_lay = self._make_scroll_page()
         processing_scroll, _processing_page, processing_lay = self._make_scroll_page()
-        colors_scroll, _colors_page, colors_lay = self._make_scroll_page()
+        style_scroll, _style_page, style_lay = self._make_scroll_page()
+        run_lay.addWidget(readiness_card)
+        run_lay.addWidget(quick_actions)
+        run_lay.addStretch(1)
 
         preset_card = Card("Saved presets", "Presets")
         self.preset_card = preset_card
@@ -1137,7 +1178,9 @@ class ModernMainWindow(QMainWindow):
         self.preset_actions = preset_actions
         preset_actions.set_buttons([self.preset_new_button, self.preset_save_button, self.preset_more_button])
         preset_card.body.addWidget(preset_actions)
+        command_left_layout.addSpacing(14)
         command_left_layout.addWidget(preset_card)
+        command_left_layout.addStretch(1)
         self.validation_label = QLabel("No validation issues.")
         self.validation_label.setObjectName("helper")
         self.validation_label.setWordWrap(True)
@@ -1214,11 +1257,6 @@ class ModernMainWindow(QMainWindow):
         self.s2p_actions = s2p_actions
         s2p_actions.set_buttons([self.select_s2p_button, self.clear_s2p_button, self.open_s2p_button])
         s2p_card.body.addWidget(s2p_actions)
-        inputs_panel = QWidget()
-        inputs_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        inputs_panel_layout = QHBoxLayout(inputs_panel)
-        inputs_panel_layout.setContentsMargins(0, 0, 0, 0)
-        inputs_panel_layout.setSpacing(12)
         inputs_left = QWidget()
         inputs_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         inputs_left_layout = QVBoxLayout(inputs_left)
@@ -1227,8 +1265,10 @@ class ModernMainWindow(QMainWindow):
         inputs_left_layout.addWidget(inputs_help_card)
         inputs_left_layout.addWidget(s2p_card)
         inputs_left_layout.addStretch(1)
-        inputs_panel_layout.addWidget(inputs_left, 1)
-        inputs_panel_layout.addWidget(ffs_card, 2)
+        inputs_panel = ResponsiveCardPanel(max_columns=1, min_card_width=360)
+        self.inputs_panel = inputs_panel
+        inputs_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        inputs_panel.set_cards([inputs_left, ffs_card])
         inputs_lay.addWidget(inputs_panel, 1)
 
         self.beam_smooth = NoWheelSpinBox(); self.beam_smooth.setRange(1, 99); self.beam_smooth.setValue(int(self.store.get("smooth", 5))); self.beam_smooth.valueChanged.connect(lambda v: self.store.set("smooth", int(v)))
@@ -1398,7 +1438,7 @@ class ModernMainWindow(QMainWindow):
         add_form_row(legend_form, "VSWR legends", self.vswr_legend_labels, "Optional comma-separated legend labels for the VSWR plot, in trace order.")
         legend_card.body.addLayout(legend_form)
 
-        processing_panel = ResponsiveCardPanel(max_columns=3, min_card_width=320, column_orders={2: [0, 2, 1]})
+        processing_panel = ResponsiveCardPanel(max_columns=2, min_card_width=320)
         self.processing_panel = processing_panel
         processing_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         processing_panel.set_cards([
@@ -1409,17 +1449,27 @@ class ModernMainWindow(QMainWindow):
             efficiency_range_card,
             vswr_range_card,
         ])
+        self.ranges_panel = processing_panel
         processing_lay.addWidget(processing_panel, 1)
+        processing_lay.addStretch(1)
 
         colors_panel = ResponsiveCardPanel(max_columns=2, min_card_width=320)
         self.colors_panel = colors_panel
         colors_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        colors_panel.set_cards([plot_color_card, legend_card, polar_card])
-        colors_lay.addWidget(colors_panel, 1)
+        colors_panel.set_cards([plot_color_card, polar_card])
+        style_lay.addWidget(colors_panel, 1)
+
+        style_lay.addWidget(legend_card, 1)
+        style_lay.addStretch(1)
 
         self.workflow_tabs.addTab(inputs_scroll, "Inputs")
         self.workflow_tabs.addTab(processing_scroll, "Processing")
-        self.workflow_tabs.addTab(colors_scroll, "Style")
+        self.workflow_tabs.addTab(style_scroll, "Style")
+        self.workflow_tabs.addTab(run_scroll, "Run")
+        self.workflow_tabs.setTabToolTip(0, "Far-field and Touchstone inputs.")
+        self.workflow_tabs.setTabToolTip(1, "Beam, workbook, VSWR, and axis-range controls.")
+        self.workflow_tabs.setTabToolTip(2, "Plot colors, polar presentation, and legend labels.")
+        self.workflow_tabs.setTabToolTip(3, "Run the pipeline, inspect readiness, and review generated output paths.")
         self.setCentralWidget(root)
 
         self.console_window = ConsoleWindow(self, self.store)
@@ -1433,7 +1483,8 @@ class ModernMainWindow(QMainWindow):
         self._sync_theme_selector()
         self._sync_console_toggle()
         self._sync_help_toggle()
-        self.workflow_tabs.setCurrentIndex(0)
+        restore_index = int(self.store.get("studio_nav_index", 0))
+        self.workflow_tabs.setCurrentIndex(max(0, min(restore_index, self.workflow_tabs.count() - 1)))
         self.on_tab_changed(self.workflow_tabs.currentIndex())
 
     def _make_scroll_page(self) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
@@ -1448,6 +1499,37 @@ class ModernMainWindow(QMainWindow):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setWidget(content)
         return scroll, content, layout
+
+    def _select_workflow_tab(self, title: str) -> None:
+        for index in range(self.workflow_tabs.count()):
+            if self.workflow_tabs.tabText(index) == title:
+                self.workflow_tabs.setCurrentIndex(index)
+                return
+
+    def _show_inputs_tab(self) -> None:
+        self._select_workflow_tab("Inputs")
+
+    def _show_processing_tab(self) -> None:
+        self._select_workflow_tab("Processing")
+
+    def _open_manual_runs_menu(self) -> None:
+        if self.run_more_button.isEnabled():
+            self.run_more_button.showMenu()
+
+    def _set_readiness_action(self, text: str, callback, enabled: bool = True, tooltip: str = "") -> None:
+        previous = getattr(self, "_readiness_action_callback", None)
+        if previous is not None:
+            try:
+                self.readiness_action.clicked.disconnect(previous)
+            except TypeError:
+                pass
+        self._readiness_action_callback = callback if enabled else None
+        if enabled and callback is not None:
+            self.readiness_action.clicked.connect(callback)
+        self.readiness_action.setText(text)
+        self.readiness_action.setEnabled(enabled)
+        self.readiness_action.setToolTip(tooltip or text)
+        self.readiness_action.setVisible(text != "Run Full Pipeline")
 
     def on_tab_changed(self, index: int) -> None:
         if index < 0:
@@ -1548,6 +1630,9 @@ class ModernMainWindow(QMainWindow):
             "clip": -30.0,
         }
 
+    def _apply_default_project_settings(self) -> None:
+        self.apply_preset_values(self._default_project_settings())
+
     def _project_signature(self, project: ProjectRecord | None = None) -> str:
         project = project or self.current_project()
         if not project:
@@ -1617,8 +1702,22 @@ class ModernMainWindow(QMainWindow):
             return int(app.primaryScreen().availableGeometry().height())
         return int(self.height())
 
+    def _available_window_width(self) -> int:
+        if self.width() > 0:
+            return int(self.width())
+        screen = self.screen()
+        if screen:
+            return int(screen.availableGeometry().width())
+        app = QApplication.instance()
+        if app and app.primaryScreen():
+            return int(app.primaryScreen().availableGeometry().width())
+        return 0
+
     def _should_use_compact_layout(self) -> bool:
-        return self._screen_available_height() <= COMPACT_SCREEN_HEIGHT
+        return (
+            self._screen_available_height() <= COMPACT_SCREEN_HEIGHT
+            or self._available_window_width() <= COMPACT_WINDOW_WIDTH
+        )
 
     def _layout_metrics(self) -> dict[str, object]:
         if self._compact_layout:
@@ -1644,7 +1743,10 @@ class ModernMainWindow(QMainWindow):
                 "panel_gap": 10,
                 "button_gap": 6,
                 "command_panel_min_card_width": 430,
+                "readiness_panel_min_card_width": 150,
+                "inputs_panel_min_card_width": 320,
                 "processing_panel_min_card_width": 300,
+                "ranges_panel_min_card_width": 300,
                 "colors_panel_min_card_width": 300,
                 "hero_min_button_width": 132,
                 "project_min_button_width": 118,
@@ -1693,7 +1795,10 @@ class ModernMainWindow(QMainWindow):
             "panel_gap": 14,
             "button_gap": 10,
             "command_panel_min_card_width": 480,
+            "readiness_panel_min_card_width": 170,
+            "inputs_panel_min_card_width": 360,
             "processing_panel_min_card_width": 320,
+            "ranges_panel_min_card_width": 320,
             "colors_panel_min_card_width": 320,
             "hero_min_button_width": 150,
             "project_min_button_width": 130,
@@ -1756,7 +1861,10 @@ class ModernMainWindow(QMainWindow):
         panel_gap = int(metrics["panel_gap"])
         for panel, min_width in (
             (self.command_panel, int(metrics["command_panel_min_card_width"])),
+            (self.readiness_panel, int(metrics["readiness_panel_min_card_width"])),
+            (self.inputs_panel, int(metrics["inputs_panel_min_card_width"])),
             (self.processing_panel, int(metrics["processing_panel_min_card_width"])),
+            (self.ranges_panel, int(metrics["ranges_panel_min_card_width"])),
             (self.colors_panel, int(metrics["colors_panel_min_card_width"])),
         ):
             panel.min_card_width = min_width
@@ -2079,6 +2187,10 @@ class ModernMainWindow(QMainWindow):
         if stage_key == "datasheet":
             snapshot["extract_workbook"] = self._path_fingerprint(self.deduced_extract_output())
             snapshot["template_pdf"] = self._path_fingerprint(DATASHEET_TEMPLATE)
+            snapshot["plot_outputs"] = [
+                self._path_fingerprint(path)
+                for path in self._stage_output_files("plot")
+            ]
         return snapshot
 
     def _stage_output_files(self, stage_key: str) -> list[Path]:
@@ -2245,6 +2357,23 @@ class ModernMainWindow(QMainWindow):
             lines.append(f"{format_timestamp(str(entry.get('at', '')))}: {stage_label} {action}")
         return "\n".join(lines) if lines else "No stage history yet."
 
+    def _latest_failed_stage_key(self) -> str:
+        return next(
+            (
+                stage_key
+                for stage_key, _label in STAGE_DEFINITIONS
+                if (
+                    str(self._stage_state(stage_key).get("status", "")).strip().lower() == "failed"
+                    and (
+                        not str(self._stage_state(stage_key).get("last_success_at", "")).strip()
+                        or str(self._stage_state(stage_key).get("last_finished_at", "")).strip()
+                        >= str(self._stage_state(stage_key).get("last_success_at", "")).strip()
+                    )
+                )
+            ),
+            "",
+        )
+
     def _refresh_stage_labels(self) -> None:
         if not self.stage_status_labels or not self.stage_open_buttons:
             return
@@ -2278,6 +2407,156 @@ class ModernMainWindow(QMainWindow):
                 text = f"{stage_label}: waiting"
             self.stage_status_labels[stage_key].setText(text)
 
+    def _refresh_run_readiness(self) -> None:
+        has_project = bool(self.active_project_slug)
+        total_ffs = len(self.collect_ffs_items()) if has_project else 0
+        enabled_ffs = self._enabled_ffs_count() if has_project else 0
+        missing_enabled = self._missing_enabled_ffs() if has_project else []
+        s2p = self.selected_s2p() if has_project else ""
+        touchstone_ready = bool(s2p) and Path(s2p).exists()
+        frequency_ready = self._frequency_window_is_valid()
+        stale_stages = self._stale_stage_keys() if has_project else []
+        latest_failed = self._latest_failed_stage_key() if has_project else ""
+        applicable_stages = [
+            stage_key
+            for stage_key, _label in STAGE_DEFINITIONS
+            if has_project and self._stage_is_applicable(stage_key)
+        ]
+        ready_stages = [stage_key for stage_key in applicable_stages if self._stage_output_exists(stage_key)]
+        running = bool(self._current_stage_key or self._pending_stage_keys or self.proc.running_cmd or self.proc.queue)
+        unsaved_changes = self.has_unsaved_project_changes()
+        full_ready = (
+            has_project
+            and frequency_ready
+            and enabled_ffs > 0
+            and not missing_enabled
+            and touchstone_ready
+            and DATASHEET_TEMPLATE.exists()
+        )
+        vswr_ready = has_project and frequency_ready and touchstone_ready
+
+        if not has_project:
+            self.readiness_badges["project"].setText("Not selected")
+            self.readiness_badges["inputs"].setText("No files")
+            self.readiness_badges["touchstone"].setText("Not selected")
+            self.readiness_badges["outputs"].setText("No outputs")
+            self.readiness_summary.setText("Create a project first. Input paths, preset selection, and output freshness are tracked per project.")
+            self._set_readiness_action("Create project", self.create_project, tooltip="Create a new project.")
+            return
+
+        self.readiness_badges["project"].setText("Unsaved" if unsaved_changes else "Saved")
+        if missing_enabled:
+            self.readiness_badges["inputs"].setText("Files missing")
+        elif total_ffs == 0:
+            self.readiness_badges["inputs"].setText("No files")
+        elif enabled_ffs == 0:
+            self.readiness_badges["inputs"].setText("All disabled")
+        else:
+            self.readiness_badges["inputs"].setText(f"{enabled_ffs} ready")
+
+        if not s2p:
+            self.readiness_badges["touchstone"].setText("Optional")
+        elif touchstone_ready:
+            self.readiness_badges["touchstone"].setText("Ready")
+        else:
+            self.readiness_badges["touchstone"].setText("File missing")
+
+        if running:
+            outputs_state = "Running"
+        elif stale_stages:
+            outputs_state = f"{len(stale_stages)} stale"
+        elif not ready_stages:
+            outputs_state = "Not generated"
+        elif len(ready_stages) < len(applicable_stages):
+            outputs_state = "Partial"
+        else:
+            outputs_state = "Up to date"
+        self.readiness_badges["outputs"].setText(outputs_state)
+
+        if running:
+            stage_label = STAGE_LABELS.get(self._current_stage_key, self._current_stage_key.title()) if self._current_stage_key else "Pipeline"
+            queued = len(self._pending_stage_keys)
+            self.readiness_summary.setText(
+                f"{stage_label} is running."
+                + (f" {queued} stage(s) remain queued." if queued else " The queue is active.")
+            )
+            self._set_readiness_action("Cancel run", self.cancel_run, tooltip="Stop the current run and clear any queued stages.")
+            return
+
+        if unsaved_changes:
+            self.readiness_summary.setText("Save the current project before running so the edited inputs and preset selection match the next run snapshot.")
+            self._set_readiness_action("Save project", self.save_project_changes, tooltip="Persist the current project state.")
+            return
+
+        if not frequency_ready:
+            self.readiness_summary.setText("The shared frequency window is invalid. Fix it before running stages that depend on workbook, extract, plot, or VSWR settings.")
+            self._set_readiness_action("Open Processing", self._show_processing_tab, tooltip="Go to the Processing tab to fix the shared frequency window.")
+            return
+
+        if missing_enabled:
+            self.readiness_summary.setText("One or more enabled far-field files are missing. Fix or disable them before running workbook-based stages.")
+            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to fix far-field file paths.")
+            return
+
+        if total_ffs == 0:
+            if vswr_ready:
+                self.readiness_summary.setText("No far-field files are configured, so VSWR is the only runnable output right now.")
+                self._set_readiness_action("Run VSWR", self.run_vswr, tooltip="Generate the VSWR output from the selected Touchstone file.")
+            else:
+                self.readiness_summary.setText("Add far-field files for workbook and plot stages, or select a Touchstone file if you only need VSWR.")
+                self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to add far-field files or a Touchstone file.")
+            return
+
+        if enabled_ffs == 0:
+            if vswr_ready:
+                self.readiness_summary.setText("All far-field files are disabled, so VSWR is the only runnable output right now.")
+                self._set_readiness_action("Run VSWR", self.run_vswr, tooltip="Generate the VSWR output from the selected Touchstone file.")
+            else:
+                self.readiness_summary.setText("All far-field files are disabled. Enable at least one to run workbook and plot stages.")
+                self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to re-enable far-field files.")
+            return
+
+        if s2p and not touchstone_ready:
+            self.readiness_summary.setText("The selected Touchstone file is missing. Full Pipeline and VSWR stay unavailable until you fix that path.")
+            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to fix the Touchstone file path.")
+            return
+
+        if not s2p:
+            self.readiness_summary.setText("Far-field stages are ready, but Touchstone is still missing. Use Manual runs for workbook, extract, or plots, or add Touchstone for Full Pipeline.")
+            self._set_readiness_action("Manual runs", self._open_manual_runs_menu, tooltip="Open the single-stage run menu.")
+            return
+
+        if not DATASHEET_TEMPLATE.exists():
+            self.readiness_summary.setText("Datasheet.pdf is missing from the project root, so Full Pipeline cannot complete. Use Manual runs until the template is restored.")
+            self._set_readiness_action("Manual runs", self._open_manual_runs_menu, tooltip="Open the single-stage run menu.")
+            return
+
+        if latest_failed:
+            self.readiness_summary.setText(f"Last run failed in {STAGE_LABELS.get(latest_failed, latest_failed.title())}. Retry after reviewing the console output.")
+            self._set_readiness_action("Run Full Pipeline", self.run_full, tooltip="Retry the full pipeline.")
+            return
+
+        if stale_stages:
+            labels = ", ".join(STAGE_LABELS[key] for key in stale_stages[:3])
+            if len(stale_stages) > 3:
+                labels += ", ..."
+            self.readiness_summary.setText(f"Saved inputs changed since the last successful run. Rebuild the stale outputs: {labels}.")
+            self._set_readiness_action("Run Full Pipeline", self.run_full, tooltip="Rebuild all outputs for the current project.")
+            return
+
+        if not ready_stages:
+            self.readiness_summary.setText("The project is configured, but no outputs have been generated yet.")
+            self._set_readiness_action("Run Full Pipeline", self.run_full, tooltip="Generate all configured outputs.")
+            return
+
+        if len(ready_stages) < len(applicable_stages):
+            self.readiness_summary.setText("Some configured outputs are ready, but others have not been generated yet.")
+            self._set_readiness_action("Run Full Pipeline", self.run_full, tooltip="Complete the remaining outputs with a full rerun.")
+            return
+
+        self.readiness_summary.setText("Inputs, selected preset, and generated outputs are in sync.")
+        self._set_readiness_action("Run Full Pipeline", self.run_full, tooltip="Run the full pipeline again for a fresh rebuild.")
+
     def _refresh_project_summary(self) -> None:
         has_project = bool(self.active_project_slug)
         messages = self._validation_messages()
@@ -2293,6 +2572,7 @@ class ModernMainWindow(QMainWindow):
             self.last_run_label.setText("Last successful run: never")
             self.run_state_label.setText("No stage history yet.")
             self.run_summary.setText("No run summary yet.")
+            self._refresh_run_readiness()
             self._refresh_stage_labels()
             return
 
@@ -2349,21 +2629,7 @@ class ModernMainWindow(QMainWindow):
                 + (f" | {queued} stage(s) queued" if queued else "")
             )
         else:
-            latest_failed = next(
-                (
-                    stage_key
-                    for stage_key, _label in STAGE_DEFINITIONS
-                    if (
-                        str(self._stage_state(stage_key).get("status", "")).strip().lower() == "failed"
-                        and (
-                            not str(self._stage_state(stage_key).get("last_success_at", "")).strip()
-                            or str(self._stage_state(stage_key).get("last_finished_at", "")).strip()
-                            >= str(self._stage_state(stage_key).get("last_success_at", "")).strip()
-                        )
-                    )
-                ),
-                "",
-            )
+            latest_failed = self._latest_failed_stage_key()
             if latest_failed:
                 self.run_summary.setText(f"Last run failed in {STAGE_LABELS.get(latest_failed, latest_failed.title())}.")
             elif stale_stages:
@@ -2374,6 +2640,7 @@ class ModernMainWindow(QMainWindow):
                 self.run_summary.setText("Outputs are up to date.")
             else:
                 self.run_summary.setText("No completed run yet.")
+        self._refresh_run_readiness()
         self._refresh_stage_labels()
 
     def selected_ffs(self) -> list[str]:
@@ -2398,7 +2665,7 @@ class ModernMainWindow(QMainWindow):
                 for item in self.collect_ffs_items()
             ],
             touchstone_file=serialize_workspace_path(THIS_DIR, self.selected_s2p()),
-            settings=self.collect_preset_values(),
+            settings={},
             presets={},
             active_preset=self.project_active_preset,
             run_state=clean_run_state(dict(self.project_run_state)),
@@ -2512,6 +2779,10 @@ class ModernMainWindow(QMainWindow):
                 self.preset_state_label.setText(f"Preset '{self.current_preset_name()}' is available globally. Select a project to save that choice with it.")
             else:
                 self.preset_state_label.setText("Choose a preset or keep working manually.")
+        elif self.project_active_preset and self.project_active_preset not in self.global_presets:
+            self.preset_state_label.setText(
+                f"Project preset '{self.project_active_preset}' is missing. Select an existing preset or save the current controls as a new one."
+            )
         elif not has_preset:
             self.preset_state_label.setText("Manual settings only. Save them as a preset if you want to reuse them.")
         elif self._preset_matches_selected():
@@ -2573,7 +2844,7 @@ class ModernMainWindow(QMainWindow):
         self.global_active_preset = active_name
         self.store.set(ACTIVE_PRESET_KEY, active_name)
 
-    def _merge_project_presets_into_global(self, presets: dict[str, dict[str, object]] | object) -> bool:
+    def _migrate_legacy_project_presets(self, presets: dict[str, dict[str, object]] | object) -> bool:
         imported = normalize_preset_payload(presets)
         changed = False
         for name, values in imported.items():
@@ -2600,19 +2871,24 @@ class ModernMainWindow(QMainWindow):
             guessed = guess_touchstone_path(project.name, self.selected_ffs())
             touchstone = guessed
         self.s2p_field.setText(display_workspace_path(touchstone))
-        self._merge_project_presets_into_global(project.presets)
-        self.project_active_preset = project.active_preset if project.active_preset in self.global_presets else ""
-        self.global_active_preset = self.project_active_preset or self.global_active_preset
+        legacy_presets_migrated = self._migrate_legacy_project_presets(project.presets)
+        self.project_active_preset = project.active_preset.strip()
+        missing_preset = bool(self.project_active_preset and self.project_active_preset not in self.global_presets)
+        self._apply_default_project_settings()
+        if not missing_preset and self.project_active_preset:
+            self.global_active_preset = self.project_active_preset
+            self.apply_preset_values(self.global_presets.get(self.project_active_preset, {}))
+        elif missing_preset:
+            self.status(f"Preset '{self.project_active_preset}' is missing; using default controls for this project")
         self._persist_global_presets()
         self.refresh_preset_list(select_name=self.project_active_preset)
-        self.apply_preset_values(project.settings)
         self.store.set("beam_ffs", self.selected_ffs())
         self.store.set("vswr_s2p", touchstone)
         self._loading_project = False
         self._capture_saved_project_signature(self.current_project())
         if self._loaded_project_schema_version < CURRENT_PROJECT_SCHEMA_VERSION:
             self.save_active_project()
-        elif project.presets:
+        elif project.settings or project.presets or legacy_presets_migrated:
             self.save_active_project()
         self.refresh_derived_paths()
 
@@ -2656,7 +2932,7 @@ class ModernMainWindow(QMainWindow):
             slug=slug,
             ffs_items=[],
             touchstone_file="",
-            settings=self._default_project_settings(),
+            settings={},
             presets={},
             active_preset=self.current_preset_name(),
             run_state={},
@@ -2767,10 +3043,10 @@ class ModernMainWindow(QMainWindow):
         name = self.preset_combo.currentData()
         return str(name or "")
 
-    def refresh_preset_list(self, select_name: str = "") -> None:
+    def refresh_preset_list(self, select_name: str | None = None) -> None:
         if not hasattr(self, "preset_combo"):
             return
-        if not select_name:
+        if select_name is None:
             select_name = self.project_active_preset or self.global_active_preset
         self.preset_combo.blockSignals(True)
         self.preset_combo.clear()
@@ -3345,6 +3621,12 @@ class ModernMainWindow(QMainWindow):
         if self._stage_is_stale("extract"):
             self.status("Extract output is stale. Run Extract Data again before generating the datasheet")
             return
+        if not self._stage_output_exists("plot"):
+            self.status("Generate plots first so the datasheet can embed the chart assets")
+            return
+        if self._stage_is_stale("plot"):
+            self.status("Plot output is stale. Run Plots only again before generating the datasheet")
+            return
         args = [
             which_python(),
             "-u",
@@ -3478,19 +3760,6 @@ class ModernMainWindow(QMainWindow):
         args_extract = self.build_extract_args()
         if args_extract:
             self._enqueue_stage("extract", args_extract)
-            self._enqueue_stage(
-                "datasheet",
-                [
-                    which_python(),
-                    "-u",
-                    SCRIPT_DATASHEET,
-                    str(self.deduced_datasheet_output()),
-                    "--template",
-                    str(DATASHEET_TEMPLATE),
-                    "--extract-workbook",
-                    str(self.deduced_extract_output()),
-                ],
-            )
 
         args_plot = [which_python(), "-u", SCRIPT_PLOT, out,
                 "--out-dir", str(self.project_results_dir()),
@@ -3530,6 +3799,20 @@ class ModernMainWindow(QMainWindow):
         if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
             args_plot += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
         self._enqueue_stage("plot", args_plot)
+        if args_extract:
+            self._enqueue_stage(
+                "datasheet",
+                [
+                    which_python(),
+                    "-u",
+                    SCRIPT_DATASHEET,
+                    str(self.deduced_datasheet_output()),
+                    "--template",
+                    str(DATASHEET_TEMPLATE),
+                    "--extract-workbook",
+                    str(self.deduced_extract_output()),
+                ],
+            )
 
         args_vswr = [which_python(), "-u", SCRIPT_VSWR, s2p,
                 "--output", str(self.deduced_vswr_output()),
