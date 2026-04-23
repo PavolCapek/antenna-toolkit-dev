@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from studio_support import (
     THIS_DIR, SCRIPT_BEAM, SCRIPT_EXTRACT, SCRIPT_DATASHEET, SCRIPT_PLOT, SCRIPT_VSWR,
     suggest_preset_name, normalize_preset_payload, PresetFileStore, preset_storage_dir, legacy_preset_storage_dirs,
-    DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, Persist, Proc, resolve_state_file, app_state_dir, is_url,
+    DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, DEFAULT_BEAMWIDTH_DB_COLORS, Persist, Proc, resolve_state_file, app_state_dir, is_url,
     which_python, open_in_file_manager, resolve_workspace_path,
     display_workspace_path, deduce_project_name, normalized_project_stem,
 )
@@ -1486,6 +1486,9 @@ class ModernMainWindow(QMainWindow):
         self.polar_grid_line_width = TrimmedDoubleSpinBox(); self.polar_grid_line_width.setRange(0.1, 10.0); self.polar_grid_line_width.setDecimals(2); self.polar_grid_line_width.setSingleStep(0.1); self.polar_grid_line_width.setValue(float(self.store.get("polar_grid_line_width", self.store.get("plot_grid_line_width", 0.9)))); self.polar_grid_line_width.valueChanged.connect(lambda v: self.store.set("polar_grid_line_width", float(v)))
         self.plot_line1 = StudioColorSelector(self.store, "plot_line_1", DEFAULT_LINE_COLORS[0][1])
         self.plot_line2 = StudioColorSelector(self.store, "plot_line_2", DEFAULT_LINE_COLORS[1][1])
+        self.beamwidth_3db_color = StudioColorSelector(self.store, "beamwidth_3db_color", DEFAULT_BEAMWIDTH_DB_COLORS[0][1], presets=DEFAULT_BEAMWIDTH_DB_COLORS)
+        self.beamwidth_6db_color = StudioColorSelector(self.store, "beamwidth_6db_color", DEFAULT_BEAMWIDTH_DB_COLORS[1][1], presets=DEFAULT_BEAMWIDTH_DB_COLORS)
+        self.beamwidth_10db_color = StudioColorSelector(self.store, "beamwidth_10db_color", DEFAULT_BEAMWIDTH_DB_COLORS[2][1], presets=DEFAULT_BEAMWIDTH_DB_COLORS)
         self.cartesian_line_width = TrimmedDoubleSpinBox(); self.cartesian_line_width.setRange(0.1, 20.0); self.cartesian_line_width.setDecimals(2); self.cartesian_line_width.setSingleStep(0.1); self.cartesian_line_width.setValue(float(self.store.get("cartesian_line_width", self.store.get("plot_line_width", 2.0)))); self.cartesian_line_width.valueChanged.connect(lambda v: self.store.set("cartesian_line_width", float(v)))
         self.polar_line_width = TrimmedDoubleSpinBox(); self.polar_line_width.setRange(0.1, 20.0); self.polar_line_width.setDecimals(2); self.polar_line_width.setSingleStep(0.1); self.polar_line_width.setValue(float(self.store.get("polar_line_width", self.store.get("plot_line_width", 2.0)))); self.polar_line_width.valueChanged.connect(lambda v: self.store.set("polar_line_width", float(v)))
         self.cartesian_font_size = TrimmedDoubleSpinBox(); self.cartesian_font_size.setRange(1.0, 72.0); self.cartesian_font_size.setDecimals(1); self.cartesian_font_size.setSingleStep(0.5); self.cartesian_font_size.setValue(float(self.store.get("cartesian_font_size", self.store.get("plot_font_size", 10.5)))); self.cartesian_font_size.valueChanged.connect(lambda v: self.store.set("cartesian_font_size", float(v)))
@@ -1519,6 +1522,9 @@ class ModernMainWindow(QMainWindow):
         add_form_row(plot_color_form, "Grid color", self.plot_grid, "Grid and axis color used across the cartesian, polar, and VSWR plots. Presets are neutral greys, with a custom color option.")
         add_form_row(plot_color_form, "Line color 1", self.plot_line1, "Primary line color used across the cartesian, polar, and VSWR plots.")
         add_form_row(plot_color_form, "Line color 2", self.plot_line2, "Secondary line color used across the cartesian, polar, and VSWR plots.")
+        add_form_row(plot_color_form, "3 dB", self.beamwidth_3db_color, "Line color used for 3 dB E-plane and H-plane beamwidth plots.")
+        add_form_row(plot_color_form, "6 dB", self.beamwidth_6db_color, "Line color used for 6 dB E-plane and H-plane beamwidth plots.")
+        add_form_row(plot_color_form, "10 dB", self.beamwidth_10db_color, "Line color used for 10 dB E-plane and H-plane beamwidth plots.")
         plot_color_card.body.addLayout(plot_color_form)
 
         cartesian_metrics_card = Card("Cartesian styling")
@@ -1804,6 +1810,9 @@ class ModernMainWindow(QMainWindow):
         self.polar_legend_font_size.setValue(10.5)
         self.plot_line1.set_color(DEFAULT_LINE_COLORS[0][1], persist=False)
         self.plot_line2.set_color(DEFAULT_LINE_COLORS[1][1], persist=False)
+        self.beamwidth_3db_color.set_color(DEFAULT_BEAMWIDTH_DB_COLORS[0][1], persist=False)
+        self.beamwidth_6db_color.set_color(DEFAULT_BEAMWIDTH_DB_COLORS[1][1], persist=False)
+        self.beamwidth_10db_color.set_color(DEFAULT_BEAMWIDTH_DB_COLORS[2][1], persist=False)
         self.gain_legend_labels.clear()
         self.beamwidth_legend_labels.clear()
         self.beam_eff_legend_labels.clear()
@@ -1857,6 +1866,9 @@ class ModernMainWindow(QMainWindow):
             "polar_legend_font_size": 10.5,
             "plot_line_1": DEFAULT_LINE_COLORS[0][1],
             "plot_line_2": DEFAULT_LINE_COLORS[1][1],
+            "beamwidth_3db_color": DEFAULT_BEAMWIDTH_DB_COLORS[0][1],
+            "beamwidth_6db_color": DEFAULT_BEAMWIDTH_DB_COLORS[1][1],
+            "beamwidth_10db_color": DEFAULT_BEAMWIDTH_DB_COLORS[2][1],
             "gain_legend_labels": "",
             "beamwidth_legend_labels": "",
             "beam_eff_legend_labels": "",
@@ -2336,6 +2348,9 @@ class ModernMainWindow(QMainWindow):
             self.polar_legend_font_size.valueChanged,
             self.plot_line1.colorChanged,
             self.plot_line2.colorChanged,
+            self.beamwidth_3db_color.colorChanged,
+            self.beamwidth_6db_color.colorChanged,
+            self.beamwidth_10db_color.colorChanged,
             self.gain_legend_labels.textChanged,
             self.beamwidth_legend_labels.textChanged,
             self.beam_eff_legend_labels.textChanged,
@@ -2404,6 +2419,7 @@ class ModernMainWindow(QMainWindow):
                 "cartesian_font_size", "polar_font_size",
                 "cartesian_legend_font_size", "polar_legend_font_size",
                 "plot_line_1", "plot_line_2",
+                "beamwidth_3db_color", "beamwidth_6db_color", "beamwidth_10db_color",
                 "gain_legend_labels", "beamwidth_legend_labels", "beam_eff_legend_labels",
                 "rings", "angle", "clip",
             ],
@@ -2474,6 +2490,7 @@ class ModernMainWindow(QMainWindow):
                 out_dir / f"{stem}-beam-efficiency.svg",
                 out_dir / f"{stem}-beam-efficiency-legend.svg",
             ]
+            files.extend(path for path in out_dir.glob(f"{stem}-beamwidth-*-plane-*.svg") if path.is_file())
             for folder_name in ("polar_combined", "polar_single"):
                 folder = out_dir / folder_name
                 if folder.exists():
@@ -3176,6 +3193,17 @@ class ModernMainWindow(QMainWindow):
     def current_project(self) -> ProjectRecord | None:
         if not self.active_project_slug:
             return None
+        existing_presets: dict[str, dict[str, object]] = {}
+        try:
+            existing_project = self.project_store.load_project(self.active_project_slug)
+        except Exception:
+            existing_project = None
+        if existing_project is not None:
+            existing_presets = {
+                str(name): dict(values)
+                for name, values in existing_project.presets.items()
+                if isinstance(values, dict)
+            }
         return ProjectRecord(
             name=self.active_project_name or self.active_project_slug,
             slug=self.active_project_slug,
@@ -3189,8 +3217,8 @@ class ModernMainWindow(QMainWindow):
             ],
             touchstone_file=serialize_workspace_path(THIS_DIR, self.selected_s2p()),
             technical_data_file=serialize_workspace_path(THIS_DIR, self.selected_technical_data()),
-            settings={},
-            presets={},
+            settings=self.collect_preset_values(),
+            presets=existing_presets,
             active_preset=self.project_active_preset,
             run_state=clean_run_state(dict(self.project_run_state)),
         )
@@ -3462,11 +3490,13 @@ class ModernMainWindow(QMainWindow):
         self.project_active_preset = project.active_preset.strip()
         missing_preset = bool(self.project_active_preset and self.project_active_preset not in self.global_presets)
         self._apply_default_project_settings()
+        if project.settings:
+            self.apply_preset_values(project.settings)
         if not missing_preset and self.project_active_preset:
             self.global_active_preset = self.project_active_preset
             self.apply_preset_values(self.global_presets.get(self.project_active_preset, {}))
         elif missing_preset:
-            self.status(f"Preset '{self.project_active_preset}' is missing; using default controls for this project")
+            self.status(f"Preset '{self.project_active_preset}' is missing; using saved project settings")
         self._persist_global_presets()
         self.refresh_preset_list(select_name=self.project_active_preset)
         self.store.set("beam_ffs", self.selected_ffs())
@@ -3691,6 +3721,9 @@ class ModernMainWindow(QMainWindow):
             "polar_legend_font_size": float(self.polar_legend_font_size.value()),
             "plot_line_1": self.plot_line1.color(),
             "plot_line_2": self.plot_line2.color(),
+            "beamwidth_3db_color": self.beamwidth_3db_color.color(),
+            "beamwidth_6db_color": self.beamwidth_6db_color.color(),
+            "beamwidth_10db_color": self.beamwidth_10db_color.color(),
             "gain_legend_labels": self.gain_legend_labels.text().strip(),
             "beamwidth_legend_labels": self.beamwidth_legend_labels.text().strip(),
             "beam_eff_legend_labels": self.beam_eff_legend_labels.text().strip(),
@@ -3751,6 +3784,9 @@ class ModernMainWindow(QMainWindow):
         if polar_legend_font_size is not None: self.polar_legend_font_size.setValue(float(polar_legend_font_size))
         if "plot_line_1" in values: self.plot_line1.set_color(str(values["plot_line_1"]))
         if "plot_line_2" in values: self.plot_line2.set_color(str(values["plot_line_2"]))
+        if "beamwidth_3db_color" in values: self.beamwidth_3db_color.set_color(str(values["beamwidth_3db_color"]))
+        if "beamwidth_6db_color" in values: self.beamwidth_6db_color.set_color(str(values["beamwidth_6db_color"]))
+        if "beamwidth_10db_color" in values: self.beamwidth_10db_color.set_color(str(values["beamwidth_10db_color"]))
         if "gain_legend_labels" in values: self.gain_legend_labels.setText(str(values["gain_legend_labels"]))
         if "beamwidth_legend_labels" in values: self.beamwidth_legend_labels.setText(str(values["beamwidth_legend_labels"]))
         if "beam_eff_legend_labels" in values: self.beam_eff_legend_labels.setText(str(values["beam_eff_legend_labels"]))
@@ -4521,6 +4557,7 @@ class ModernMainWindow(QMainWindow):
                 "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
                 "--polar-grid-line-width", str(self.polar_grid_line_width.value()),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
+                "--beamwidth-db-colors", ",".join([self.beamwidth_3db_color.color(), self.beamwidth_6db_color.color(), self.beamwidth_10db_color.color()]),
                 "--cartesian-line-width", str(self.cartesian_line_width.value()),
                 "--polar-line-width", str(self.polar_line_width.value()),
                 "--cartesian-font-size", str(self.cartesian_font_size.value()),
@@ -4659,6 +4696,7 @@ class ModernMainWindow(QMainWindow):
                 "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
                 "--polar-grid-line-width", str(self.polar_grid_line_width.value()),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
+                "--beamwidth-db-colors", ",".join([self.beamwidth_3db_color.color(), self.beamwidth_6db_color.color(), self.beamwidth_10db_color.color()]),
                 "--cartesian-line-width", str(self.cartesian_line_width.value()),
                 "--polar-line-width", str(self.polar_line_width.value()),
                 "--cartesian-font-size", str(self.cartesian_font_size.value()),

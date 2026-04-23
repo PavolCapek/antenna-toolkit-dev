@@ -15,6 +15,23 @@ from xml.sax.saxutils import escape as xml_escape
 import fitz
 import pandas as pd
 
+from datasheet_models import (
+    FIELD_LABELS,
+    FIELD_LABEL_ALIASES,
+    TECHNICAL_DATA_PLACEHOLDER,
+    TECHNICAL_DATA_RESERVED_KEYS,
+    DatasheetModel,
+    TechnicalDataEntry,
+    build_performance_fields,
+    load_technical_data_entries,
+    normalize_technical_key,
+    polarization_keys_from_source_files,
+    technical_data_by_key,
+    text_or_placeholder,
+)
+from datasheet_service import build_render_context
+from datasheet_templates import DatasheetTemplateAdapter
+
 fitz.TOOLS.mupdf_display_errors(False)
 fitz.TOOLS.mupdf_display_warnings(False)
 
@@ -33,78 +50,13 @@ MYRIAD_FONT_FILES = {
     "MyriadPro-SemiboldIt": MYRIAD_FONT_DIR / "MYRIADPRO-SEMIBOLDIT.OTF",
 }
 
-FIELD_LABELS = [
-    "Frequency Range",
-    "Gain",
-    "Azimuth Beam Width -3 dB/-6dB",
-    "Elevation Beam Width -3 dB/-6dB",
-    "Beam Efficiency",
-    "Front-to-Back Ratio",
-    "VSWR",
-    "Polarization",
-    "Impedance",
-]
-FIELD_LABEL_ALIASES = {
-    "Frequency Range": (
-        "Frequency Range",
-        "Frequency",
-        "Frequency Band",
-        "Operating Frequency",
-    ),
-    "Gain": (
-        "Gain",
-        "Nominal Gain",
-        "Antenna Gain",
-    ),
-    "Azimuth Beam Width -3 dB/-6dB": (
-        "Azimuth Beam Width -3 dB/-6dB",
-        "Azimuth Beam Width",
-        "Azimuth Beamwidth",
-        "Beamwidth Azimuth",
-        "Beamwidth H plane.",
-        "Beamwidth H plane",
-        "H Plane Beamwidth",
-        "H-Plane Beamwidth",
-        "Horizontal Beamwidth",
-        "Horizontal Beam Width",
-    ),
-    "Elevation Beam Width -3 dB/-6dB": (
-        "Elevation Beam Width -3 dB/-6dB",
-        "Elevation Beam Width",
-        "Elevation Beamwidth",
-        "Beamwidth Elevation",
-        "Beamwidth E plane.",
-        "Beamwidth E plane",
-        "E Plane Beamwidth",
-        "E-Plane Beamwidth",
-        "Vertical Beamwidth",
-        "Vertical Beam Width",
-    ),
-    "Beam Efficiency": (
-        "Beam Efficiency",
-        "Efficiency",
-    ),
-    "Front-to-Back Ratio": (
-        "Front-to-Back Ratio",
-        "Front to Back Ratio",
-        "Front Back Ratio",
-        "F/B Ratio",
-    ),
-    "VSWR": (
-        "VSWR",
-    ),
-    "Polarization": (
-        "Polarization",
-    ),
-    "Impedance": (
-        "Impedance",
-        "Nominal Impedance",
-    ),
-}
-TECHNICAL_DATA_PLACEHOLDER = "text_placeholder"
 MISSING_VALUE_COLOR = (0.9, 0.0, 0.0)
-TECHNICAL_DATA_RESERVED_KEYS = {"antenna name", "product id"}
-KNOWN_POLARIZATION_KEYS = {"horizontal", "vertical", "rhcp", "lhcp"}
+PERFORMANCE_FIELD_KEYS = {
+    re.sub(r"\s+", " ", str(alias or "").strip()).lower()
+    for aliases in FIELD_LABEL_ALIASES.values()
+    for alias in aliases
+    if str(alias or "").strip()
+}
 
 
 def emit_progress(stage: str, current: int, total: int, label: str) -> None:
@@ -162,6 +114,7 @@ class ChartReplacement:
     asset_path: Path
     legend_rect: fitz.Rect | None = None
     legend_asset_path: Path | None = None
+    erase_rect: fitz.Rect | None = None
 
 
 @dataclass
@@ -286,13 +239,7 @@ def _infer_polarization_from_source_file(path_text: object) -> str:
 
 
 def _polarization_keys_from_source_files(ffs_summary: pd.DataFrame) -> pd.Series:
-    if "source_file" not in ffs_summary.columns:
-        raise ValueError("ffs_summary is missing required column: source_file")
-    keys = ffs_summary["source_file"].map(_infer_polarization_from_source_file).map(_normalize_polarization)
-    if "polarization" in ffs_summary.columns:
-        workbook_keys = ffs_summary["polarization"].map(_normalize_polarization)
-        keys = keys.where(keys.isin(KNOWN_POLARIZATION_KEYS), workbook_keys)
-    return keys
+    return polarization_keys_from_source_files(ffs_summary)
 
 
 def _polarization_text(ffs_summary: pd.DataFrame) -> str:
@@ -315,94 +262,11 @@ def _polarization_text(ffs_summary: pd.DataFrame) -> str:
 
 
 def build_replacements_from_workbook(extract_workbook: Path) -> dict[str, str]:
-    ffs_summary = _load_sheet(extract_workbook, "ffs_summary")
-    touchstone_summary = _load_sheet(extract_workbook, "touchstone_summary")
-
-    if ffs_summary.empty:
-        raise ValueError("The extracted workbook has no far-field summary rows.")
-    if touchstone_summary.empty:
-        raise ValueError("The extracted workbook has no Touchstone summary rows.")
-
-    required_ffs = {
-        "source_file",
-        "freq_min_GHz",
-        "freq_max_GHz",
-        "max_gain_dBi_in_range",
-        "avg_azimuth_bw_3dB_deg",
-        "avg_azimuth_bw_6dB_deg",
-        "avg_elevation_bw_3dB_deg",
-        "avg_elevation_bw_6dB_deg",
-        "avg_beam_efficiency_percent",
-        "avg_front_to_back_dB",
-    }
-    required_touchstone = {"max_vswr_in_range", "reference_impedance_ohm"}
-    missing_ffs = sorted(required_ffs.difference(ffs_summary.columns))
-    missing_touchstone = sorted(required_touchstone.difference(touchstone_summary.columns))
-    if missing_ffs:
-        raise ValueError(f"ffs_summary is missing required columns: {', '.join(missing_ffs)}")
-    if missing_touchstone:
-        raise ValueError(f"touchstone_summary is missing required columns: {', '.join(missing_touchstone)}")
-
-    polarizations = ffs_summary.assign(_polarization_key=_polarization_keys_from_source_files(ffs_summary))
-    horizontal = polarizations[polarizations["_polarization_key"] == "horizontal"]
-    vertical = polarizations[polarizations["_polarization_key"] == "vertical"]
-    has_dual_linear = not horizontal.empty and not vertical.empty
-    if has_dual_linear:
-        azimuth_beamwidth = _format_beamwidth_text(horizontal.iloc[0], vertical.iloc[0], "avg_azimuth_bw_3dB_deg", "avg_azimuth_bw_6dB_deg")
-        elevation_beamwidth = _format_beamwidth_text(horizontal.iloc[0], vertical.iloc[0], "avg_elevation_bw_3dB_deg", "avg_elevation_bw_6dB_deg")
-    else:
-        summary_row = ffs_summary.iloc[0]
-        azimuth_beamwidth = _format_single_beamwidth_text(summary_row, "avg_azimuth_bw_3dB_deg", "avg_azimuth_bw_6dB_deg")
-        elevation_beamwidth = _format_single_beamwidth_text(summary_row, "avg_elevation_bw_3dB_deg", "avg_elevation_bw_6dB_deg")
-
-    freq_min_values = [
-        _as_float(ffs_summary["freq_min_GHz"].min()),
-        _as_float(touchstone_summary.get("freq_min_GHz", pd.Series(dtype=float)).min()),
-    ]
-    freq_max_values = [
-        _as_float(ffs_summary["freq_max_GHz"].max()),
-        _as_float(touchstone_summary.get("freq_max_GHz", pd.Series(dtype=float)).max()),
-    ]
-    freq_min_candidates = [value for value in freq_min_values if value is not None]
-    freq_max_candidates = [value for value in freq_max_values if value is not None]
-    if not freq_min_candidates or not freq_max_candidates:
-        raise ValueError("Unable to derive the frequency range from the extracted workbook.")
-    freq_min = min(freq_min_candidates)
-    freq_max = max(freq_max_candidates)
-
-    gain = _as_float(ffs_summary["max_gain_dBi_in_range"].max())
-    beam_eff = _as_float(ffs_summary["avg_beam_efficiency_percent"].mean())
-    front_to_back = _as_float(ffs_summary["avg_front_to_back_dB"].mean())
-    max_vswr = _as_float(touchstone_summary["max_vswr_in_range"].max())
-    ref_values = touchstone_summary["reference_impedance_ohm"].dropna()
-    ref_impedance = _as_float(ref_values.iloc[0] if not ref_values.empty else None)
-
-    required_values = {
-        "gain": gain is not None,
-        "beam efficiency": beam_eff is not None,
-        "front-to-back ratio": front_to_back is not None,
-        "vswr": max_vswr is not None,
-        "impedance": ref_impedance is not None,
-    }
-    missing_values = [name for name, present in required_values.items() if not present]
-    if missing_values:
-        raise ValueError(f"Unable to derive datasheet values: {', '.join(missing_values)}")
-
-    return {
-        "Frequency Range": _format_frequency_range(freq_min, freq_max),
-        "Gain": _format_decimal_with_suffix(gain, "dBi", 1),
-        "Azimuth Beam Width -3 dB/-6dB": azimuth_beamwidth,
-        "Elevation Beam Width -3 dB/-6dB": elevation_beamwidth,
-        "Beam Efficiency": f"{_round_half_up(beam_eff)} %*",
-        "Front-to-Back Ratio": _format_int_with_suffix(front_to_back, "dB"),
-        "VSWR": _format_vswr_limit(max_vswr),
-        "Polarization": _polarization_text(ffs_summary),
-        "Impedance": _format_int_with_suffix(ref_impedance, "Ohm"),
-    }
+    return build_performance_fields(extract_workbook)
 
 
 def _normalize_technical_key(value: object) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+    return normalize_technical_key(value)
 
 
 def _format_technical_cell(value: object) -> str:
@@ -421,40 +285,15 @@ def _format_technical_cell(value: object) -> str:
 
 
 def load_technical_data_workbook(path: Path) -> list[TechnicalDataEntry]:
-    try:
-        data = pd.read_excel(path, sheet_name=0, header=None, dtype=object)
-    except Exception as exc:
-        raise ValueError(f"Could not read Technical Data workbook '{path}'.") from exc
-    if data.shape[1] < 2:
-        data[1] = ""
-
-    entries: list[TechnicalDataEntry] = []
-    index_by_key: dict[str, int] = {}
-    for _idx, row in data.iloc[:, :2].iterrows():
-        label = _format_technical_cell(row.iloc[0])
-        key = _normalize_technical_key(label)
-        if not key:
-            continue
-        value = _format_technical_cell(row.iloc[1])
-        if key in index_by_key:
-            entries[index_by_key[key]].value = value
-            continue
-        index_by_key[key] = len(entries)
-        entries.append(TechnicalDataEntry(label=label, value=value))
-    if not entries:
-        raise ValueError("Technical Data workbook does not contain any field/value rows.")
-    return entries
+    return load_technical_data_entries(path)
 
 
 def _technical_data_by_key(entries: list[TechnicalDataEntry]) -> dict[str, TechnicalDataEntry]:
-    return {_normalize_technical_key(entry.label): entry for entry in entries}
+    return technical_data_by_key(entries)
 
 
 def _text_or_placeholder(value: str) -> tuple[str, bool]:
-    text = str(value or "").strip()
-    if text:
-        return text, False
-    return TECHNICAL_DATA_PLACEHOLDER, True
+    return text_or_placeholder(value)
 
 
 def _register_pdf_font(
@@ -603,6 +442,24 @@ def _technical_data_region(page: fitz.Page, spans: list[TextSpan] | None = None)
     return technical_heading.bbox.y1, performance_heading.bbox.y0
 
 
+def _netqui_technical_data_bounds(
+    page: fitz.Page,
+    spans: list[TextSpan],
+) -> tuple[TextSpan, TextSpan, float] | None:
+    electrical_heading = _find_span_exact(page, "ELECTRICAL DATA", spans)
+    mechanical_heading = _find_span_exact(page, "MECHANICAL DATA", spans)
+    if electrical_heading is None or mechanical_heading is None:
+        return None
+    lower_bound_candidates = [
+        span.bbox.y0
+        for span in spans
+        if span.text in {"DIMMENSIONS", "DIMENSIONS"} and span.bbox.y0 > electrical_heading.bbox.y1
+    ]
+    if not lower_bound_candidates:
+        return None
+    return electrical_heading, mechanical_heading, min(lower_bound_candidates)
+
+
 def _technical_table_separators(page: fitz.Page, top_y: float, bottom_y: float) -> tuple[list[float], float]:
     separators: list[float] = []
     table_right = 299.0
@@ -674,70 +531,132 @@ def _redraw_split_table_separators(page: fitz.Page) -> None:
         )
 
 
-def _technical_data_row_slots(page: fitz.Page) -> list[TechnicalDataRowSlot]:
+def _technical_data_row_slots(page: fitz.Page, *, layout_mode: str = "auto") -> list[TechnicalDataRowSlot]:
     spans = _extract_page_spans(page)
-    region = _technical_data_region(page, spans)
-    if region is None:
-        return []
-    top_y, bottom_y = region
-    separators, detected_table_right = _technical_table_separators(page, top_y, bottom_y)
-    labels = [
-        span
-        for span in spans
-        if top_y < span.bbox.y0 < bottom_y
-        and 25.0 <= span.bbox.x0 <= 125.0
-        and span.bbox.x1 <= 138.0
-    ]
-    labels.sort(key=lambda span: (span.bbox.y0, span.bbox.x0))
-    if not labels:
-        return []
-
-    value_x = 140.0
-    table_right = min(page.rect.x1 - 20.0, detected_table_right)
-    slots: list[TechnicalDataRowSlot] = []
-    for index, label_span in enumerate(labels):
-        next_separator = next((y for y in separators if y > label_span.bbox.y1 + 0.3), None)
-        previous_separator = max((y for y in separators if y < label_span.bbox.y0 - 0.3), default=None)
-        if previous_separator is not None:
-            row_top = max(top_y, previous_separator + 0.5)
-        else:
-            row_top = max(top_y, label_span.bbox.y0 - 1.0)
-        if next_separator is not None:
-            row_bottom = next_separator
-        else:
-            next_y = labels[index + 1].bbox.y0 if index + 1 < len(labels) else min(bottom_y - 6.0, label_span.bbox.y0 + 13.0)
-            row_bottom = max(label_span.bbox.y1 + 2.0, min(bottom_y - 4.0, next_y - 1.0))
-        value_spans = [
+    region = _technical_data_region(page, spans) if layout_mode in {"auto", "generic"} else None
+    if region is not None:
+        top_y, bottom_y = region
+        separators, detected_table_right = _technical_table_separators(page, top_y, bottom_y)
+        labels = [
             span
             for span in spans
-            if value_x - 3.0 <= span.bbox.x0 <= table_right + 2.0
-            and row_top - 1.0 <= span.bbox.y0 < row_bottom + 1.0
+            if top_y < span.bbox.y0 < bottom_y
+            and 25.0 <= span.bbox.x0 <= 125.0
+            and span.bbox.x1 <= 138.0
         ]
-        value_origin_span = value_spans[0] if value_spans else label_span
-        value_style_span = value_origin_span
-        if (
-            label_span.text == "Temperature"
-            and len(value_spans) > 1
-            and value_origin_span.text.strip() in {"-", "+"}
-        ):
-            value_style_span = value_spans[1]
-        slots.append(
-            TechnicalDataRowSlot(
-                label=label_span.text,
-                label_rect=fitz.Rect(label_span.bbox),
-                value_rect=fitz.Rect(value_x, row_top, table_right, row_bottom),
-                erase_rect=fitz.Rect(value_x - 2.0, row_top, table_right + 2.0, row_bottom + 1.0),
-                label_font_name=label_span.font,
-                label_font_size=float(label_span.size),
-                label_color=_int_color_to_rgb(label_span.color),
-                value_font_name=value_style_span.font,
-                value_font_size=float(value_style_span.size),
-                value_origin=value_origin_span.origin,
-                value_color=_int_color_to_rgb(value_style_span.color),
-                row_bottom=row_bottom,
-                table_right=table_right,
+        labels.sort(key=lambda span: (span.bbox.y0, span.bbox.x0))
+        if not labels:
+            return []
+
+        value_x = 140.0
+        table_right = min(page.rect.x1 - 20.0, detected_table_right)
+        slots: list[TechnicalDataRowSlot] = []
+        for index, label_span in enumerate(labels):
+            next_separator = next((y for y in separators if y > label_span.bbox.y1 + 0.3), None)
+            previous_separator = max((y for y in separators if y < label_span.bbox.y0 - 0.3), default=None)
+            if previous_separator is not None:
+                row_top = max(top_y, previous_separator + 0.5)
+            else:
+                row_top = max(top_y, label_span.bbox.y0 - 1.0)
+            if next_separator is not None:
+                row_bottom = next_separator
+            else:
+                next_y = labels[index + 1].bbox.y0 if index + 1 < len(labels) else min(bottom_y - 6.0, label_span.bbox.y0 + 13.0)
+                row_bottom = max(label_span.bbox.y1 + 2.0, min(bottom_y - 4.0, next_y - 1.0))
+            value_spans = [
+                span
+                for span in spans
+                if value_x - 3.0 <= span.bbox.x0 <= table_right + 2.0
+                and row_top - 1.0 <= span.bbox.y0 < row_bottom + 1.0
+            ]
+            value_origin_span = value_spans[0] if value_spans else label_span
+            value_style_span = value_origin_span
+            if (
+                label_span.text == "Temperature"
+                and len(value_spans) > 1
+                and value_origin_span.text.strip() in {"-", "+"}
+            ):
+                value_style_span = value_spans[1]
+            slots.append(
+                TechnicalDataRowSlot(
+                    label=label_span.text,
+                    label_rect=fitz.Rect(label_span.bbox),
+                    value_rect=fitz.Rect(value_x, row_top, table_right, row_bottom),
+                    erase_rect=fitz.Rect(value_x - 2.0, row_top, table_right + 2.0, row_bottom + 1.0),
+                    label_font_name=label_span.font,
+                    label_font_size=float(label_span.size),
+                    label_color=_int_color_to_rgb(label_span.color),
+                    value_font_name=value_style_span.font,
+                    value_font_size=float(value_style_span.size),
+                    value_origin=value_origin_span.origin,
+                    value_color=_int_color_to_rgb(value_style_span.color),
+                    row_bottom=row_bottom,
+                    table_right=table_right,
+                )
             )
-        )
+        return slots
+
+    netqui_bounds = _netqui_technical_data_bounds(page, spans) if layout_mode in {"auto", "netqui"} else None
+    if netqui_bounds is None:
+        return []
+
+    electrical_heading, mechanical_heading, bottom_y = netqui_bounds
+    sections = [
+        {
+            "heading": electrical_heading,
+            "label_x0": 25.0,
+            "label_x1": 140.0,
+            "value_x": 148.5,
+            "table_right": 295.0,
+        },
+        {
+            "heading": mechanical_heading,
+            "label_x0": 285.0,
+            "label_x1": 425.0,
+            "value_x": 433.5,
+            "table_right": min(page.rect.x1 - 20.0, 548.0),
+        },
+    ]
+    slots: list[TechnicalDataRowSlot] = []
+    for section in sections:
+        labels = [
+            span
+            for span in spans
+            if span.bbox.y0 > section["heading"].bbox.y1
+            and span.bbox.y0 < bottom_y
+            and section["label_x0"] <= span.bbox.x0 <= section["label_x1"]
+            and span.bbox.x1 <= section["label_x1"] + 18.0
+        ]
+        labels.sort(key=lambda span: (span.bbox.y0, span.bbox.x0))
+        for index, label_span in enumerate(labels):
+            row_top = max(section["heading"].bbox.y1 + 1.0, label_span.bbox.y0 - 1.0)
+            next_y = labels[index + 1].bbox.y0 if index + 1 < len(labels) else bottom_y - 6.0
+            row_bottom = max(label_span.bbox.y1 + 2.0, min(bottom_y - 4.0, next_y - 1.0))
+            value_spans = [
+                span
+                for span in spans
+                if section["value_x"] - 4.0 <= span.bbox.x0 <= section["table_right"] + 2.0
+                and row_top - 1.0 <= span.bbox.y0 < row_bottom + 1.0
+            ]
+            value_origin_span = value_spans[0] if value_spans else label_span
+            value_style_span = value_origin_span
+            slots.append(
+                TechnicalDataRowSlot(
+                    label=label_span.text,
+                    label_rect=fitz.Rect(label_span.bbox),
+                    value_rect=fitz.Rect(section["value_x"], row_top, section["table_right"], row_bottom),
+                    erase_rect=fitz.Rect(section["value_x"] - 2.0, row_top, section["table_right"] + 2.0, row_bottom + 1.0),
+                    label_font_name=label_span.font,
+                    label_font_size=float(label_span.size),
+                    label_color=_int_color_to_rgb(label_span.color),
+                    value_font_name=value_style_span.font,
+                    value_font_size=float(value_style_span.size),
+                    value_origin=(section["value_x"], value_origin_span.origin[1]),
+                    value_color=_int_color_to_rgb(value_style_span.color),
+                    row_bottom=row_bottom,
+                    table_right=section["table_right"],
+                )
+            )
     return slots
 
 
@@ -803,19 +722,27 @@ def _replace_technical_table(
     doc: fitz.Document,
     entries: list[TechnicalDataEntry],
     *,
+    adapter: DatasheetTemplateAdapter | None = None,
     registered_fonts: set[str],
 ) -> None:
     page = doc[0]
-    slots = _technical_data_row_slots(page)
+    layout_mode = adapter.technical_layout_mode if adapter is not None else "auto"
+    slots = _technical_data_row_slots(page, layout_mode=layout_mode)
     if not slots:
         return
     data_by_key = _technical_data_by_key(entries)
     used_keys: set[str] = set()
-    for slot in slots:
+    editable_slots = [
+        slot
+        for slot in slots
+        if (key := _normalize_technical_key(slot.label))
+        and key not in PERFORMANCE_FIELD_KEYS
+    ]
+    for slot in editable_slots:
         page.add_redact_annot(slot.erase_rect, fill=None)
     page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0)
 
-    for slot in slots:
+    for slot in editable_slots:
         key = _normalize_technical_key(slot.label)
         entry = data_by_key.get(key)
         if entry is not None:
@@ -844,6 +771,7 @@ def _replace_technical_table(
         for entry in entries
         if _normalize_technical_key(entry.label) not in used_keys
         and _normalize_technical_key(entry.label) not in TECHNICAL_DATA_RESERVED_KEYS
+        and bool(str(entry.value or "").strip())
     ]
     if not extra_entries:
         return
@@ -1125,14 +1053,14 @@ def _update_footer_page_numbers(
 
 def _apply_technical_data(
     doc: fitz.Document,
-    technical_data_workbook: Path,
+    entries: list[TechnicalDataEntry],
     generated_at: datetime,
     *,
+    adapter: DatasheetTemplateAdapter | None = None,
     registered_fonts: set[str],
 ) -> dict[str, str]:
-    entries = load_technical_data_workbook(technical_data_workbook)
     header_values = _replace_header_placeholders(doc, entries, registered_fonts=registered_fonts)
-    _replace_technical_table(doc, entries, registered_fonts=registered_fonts)
+    _replace_technical_table(doc, entries, adapter=adapter, registered_fonts=registered_fonts)
     antenna_name = header_values.get("antenna name") or TECHNICAL_DATA_PLACEHOLDER
     _update_footer_page_numbers(doc, antenna_name, generated_at, registered_fonts=registered_fonts)
     return {
@@ -1537,6 +1465,106 @@ def _find_plot_asset(output: Path, extract_workbook: Path, suffix: str) -> Path:
     raise ValueError(f"Missing required plot asset '{suffix}'. Checked: {checked_list}")
 
 
+def _manifest_chart_record(artifact_manifest: dict[str, object] | None, key: str) -> dict[str, object] | None:
+    if not isinstance(artifact_manifest, dict):
+        return None
+    charts = artifact_manifest.get("charts")
+    if not isinstance(charts, dict):
+        return None
+    record = charts.get(key)
+    return record if isinstance(record, dict) else None
+
+
+def _manifest_svg_path(record: dict[str, object] | None, field: str = "svg") -> Path | None:
+    if not isinstance(record, dict):
+        return None
+    value = str(record.get(field) or "").strip()
+    if not value:
+        return None
+    path = Path(value)
+    return path if path.exists() else None
+
+
+def _find_manifest_chart_asset(artifact_manifest: dict[str, object] | None, key: str) -> Path | None:
+    return _manifest_svg_path(_manifest_chart_record(artifact_manifest, key))
+
+
+def _find_manifest_beamwidth_plane_asset(
+    artifact_manifest: dict[str, object] | None,
+    plane: str,
+    suffixes: list[str],
+) -> Path | None:
+    if not isinstance(artifact_manifest, dict):
+        return None
+    charts = artifact_manifest.get("charts")
+    if not isinstance(charts, dict):
+        return None
+    records = charts.get("beamwidth_planes")
+    if not isinstance(records, list):
+        return None
+    normalized_plane = str(plane).strip().lower()
+    for suffix in suffixes:
+        wanted_polarization = {"h": "H", "v": "V", "": ""}.get(suffix, suffix.upper())
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            if str(record.get("plane") or "").strip().lower() != normalized_plane:
+                continue
+            polarization = str(record.get("polarization") or "").strip().upper()
+            if wanted_polarization and polarization != wanted_polarization:
+                continue
+            if not wanted_polarization and polarization not in {"", "UNKNOWN"}:
+                continue
+            path = _manifest_svg_path(record)
+            if path is not None:
+                return path
+    return None
+
+
+def _find_manifest_polar_assets(
+    artifact_manifest: dict[str, object] | None,
+    template_frequency: float | None,
+) -> tuple[Path, Path] | None:
+    if not isinstance(artifact_manifest, dict):
+        return None
+    charts = artifact_manifest.get("charts")
+    if not isinstance(charts, dict):
+        return None
+    records = charts.get("polar_single")
+    if not isinstance(records, list):
+        return None
+
+    by_plane: dict[str, dict[float, Path]] = {"azimuth": {}, "elevation": {}}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        plane = str(record.get("plane") or "").strip().lower()
+        if plane not in by_plane:
+            continue
+        try:
+            frequency = float(record.get("frequency_ghz"))
+        except (TypeError, ValueError):
+            continue
+        path = _manifest_svg_path(record)
+        if path is None:
+            continue
+        by_plane[plane].setdefault(frequency, path)
+
+    common_frequencies = sorted(set(by_plane["azimuth"]).intersection(by_plane["elevation"]))
+    if not common_frequencies:
+        return None
+    reference_frequency = template_frequency if template_frequency is not None else (sum(common_frequencies) / len(common_frequencies))
+    selected = min(common_frequencies, key=lambda value: (abs(value - reference_frequency), value))
+    return by_plane["azimuth"][selected], by_plane["elevation"][selected]
+
+
+def _find_optional_plot_asset(output: Path, extract_workbook: Path, suffix: str) -> Path | None:
+    try:
+        return _find_plot_asset(output, extract_workbook, suffix)
+    except ValueError:
+        return None
+
+
 def _legend_asset_path(path: Path) -> Path:
     preferred = path.with_name(f"{path.stem}-legend{path.suffix}")
     legacy = path.with_name(f"{path.stem}_legend{path.suffix}")
@@ -1600,7 +1628,13 @@ def _find_polar_plot_assets(
     output: Path,
     extract_workbook: Path,
     spans: list[TextSpan] | None = None,
+    artifact_manifest: dict[str, object] | None = None,
 ) -> tuple[Path, Path]:
+    template_frequency = _find_template_polar_frequency(page, spans)
+    manifest_assets = _find_manifest_polar_assets(artifact_manifest, template_frequency)
+    if manifest_assets is not None:
+        return manifest_assets
+
     plane_assets: dict[str, dict[float, Path]] = {"azimuth": {}, "elevation": {}}
     checked: list[Path] = []
     for directory in _candidate_dirs(output, extract_workbook):
@@ -1622,11 +1656,49 @@ def _find_polar_plot_assets(
         checked_list = ", ".join(str(path) for path in checked) if checked else "none"
         raise ValueError(f"Missing required polar plot assets. Checked: {checked_list}")
 
-    template_frequency = _find_template_polar_frequency(page, spans)
     if template_frequency is None:
         template_frequency = sum(common_frequencies) / len(common_frequencies)
     selected_frequency = min(common_frequencies, key=lambda value: (abs(value - template_frequency), value))
     return plane_assets["azimuth"][selected_frequency], plane_assets["elevation"][selected_frequency]
+
+
+def _beamwidth_polarization_suffixes(extract_workbook: Path) -> list[str]:
+    try:
+        ffs_summary = _load_sheet(extract_workbook, "ffs_summary")
+        keys = list(dict.fromkeys(_polarization_keys_from_source_files(ffs_summary)))
+    except ValueError:
+        keys = []
+    suffixes = [
+        {"horizontal": "h", "vertical": "v"}.get(str(key).strip().lower(), "")
+        for key in keys
+    ]
+    suffixes = [suffix for suffix in suffixes if suffix]
+    suffixes.sort(key=lambda suffix: {"v": 0, "h": 1}.get(suffix, 2))
+    for fallback in ("v", "h", ""):
+        if fallback not in suffixes:
+            suffixes.append(fallback)
+    return suffixes
+
+
+def _find_beamwidth_plane_asset(
+    output: Path,
+    extract_workbook: Path,
+    plane: str,
+    artifact_manifest: dict[str, object] | None = None,
+) -> Path:
+    checked: list[str] = []
+    suffixes = _beamwidth_polarization_suffixes(extract_workbook)
+    manifest_asset = _find_manifest_beamwidth_plane_asset(artifact_manifest, plane, suffixes)
+    if manifest_asset is not None:
+        return manifest_asset
+    for suffix in suffixes:
+        suffix_part = f"-{suffix}" if suffix else ""
+        asset_suffix = f"-beamwidth-{plane}{suffix_part}.svg"
+        checked.append(asset_suffix)
+        asset = _find_optional_plot_asset(output, extract_workbook, asset_suffix)
+        if asset is not None:
+            return asset
+    raise ValueError(f"Missing required beamwidth {plane} plot asset. Checked suffixes: {', '.join(checked)}")
 
 
 def _collect_chart_slots(page: fitz.Page) -> list[ChartSlot]:
@@ -1763,6 +1835,7 @@ def _normalize_plot_widths(replacements: list[ChartReplacement], kinds: set[str]
                 replacement.asset_path,
                 legend_rect=replacement.legend_rect,
                 legend_asset_path=replacement.legend_asset_path,
+                erase_rect=replacement.erase_rect,
             )
         )
     return normalized
@@ -1779,19 +1852,121 @@ def _legend_group(text: str) -> str | None:
     return None
 
 
-def _build_chart_replacements(page: fitz.Page, output: Path, extract_workbook: Path) -> list[ChartReplacement]:
+def _page_text(spans: list[TextSpan]) -> str:
+    return " ".join(span.text for span in spans)
+
+
+def _is_netqui_chart_page(spans: list[TextSpan], slots: list[ChartSlot]) -> bool:
+    text = _page_text(spans).upper()
+    return (
+        len(slots) >= 4
+        and "ANTENNA GAIN" in text
+        and "VSWR" in text
+        and "ANTENNA BEAMWIDTH" in text
+        and "RADIATION PATTERNS" in text
+    )
+
+
+def _dedupe_chart_slots(slots: list[ChartSlot]) -> list[ChartSlot]:
+    deduped: list[ChartSlot] = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for slot in slots:
+        key = tuple(round(value, 2) for value in slot.rect)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(slot)
+    return deduped
+
+
+def _chart_slot_rows(slots: list[ChartSlot], tolerance: float = 36.0) -> list[list[ChartSlot]]:
+    rows: list[list[ChartSlot]] = []
+    for slot in sorted(_dedupe_chart_slots(slots), key=lambda item: ((item.rect.y0 + item.rect.y1) / 2.0, item.rect.x0)):
+        center_y = (slot.rect.y0 + slot.rect.y1) / 2.0
+        if not rows:
+            rows.append([slot])
+            continue
+        row_center = sum((item.rect.y0 + item.rect.y1) / 2.0 for item in rows[-1]) / len(rows[-1])
+        if abs(center_y - row_center) <= tolerance:
+            rows[-1].append(slot)
+        else:
+            rows.append([slot])
+    return [sorted(row, key=lambda item: item.rect.x0) for row in rows]
+
+
+def _netqui_beamwidth_rects(slot_rect: fitz.Rect) -> tuple[fitz.Rect, fitz.Rect]:
+    full = fitz.Rect(slot_rect)
+    legend_width = min(max(full.width * 0.32, 82.0), 96.0)
+    legend = fitz.Rect(full.x1 - legend_width, full.y0 + 6.0, full.x1 - 2.0, full.y1 - 6.0)
+    plot = fitz.Rect(full.x0, full.y0, legend.x0 - 6.0, full.y1)
+    return plot, legend
+
+
+def _build_netqui_chart_replacements(
+    ordered_slots: list[ChartSlot],
+    output: Path,
+    extract_workbook: Path,
+    artifact_manifest: dict[str, object] | None = None,
+) -> list[ChartReplacement]:
+    rows = _chart_slot_rows(ordered_slots)
+    if len(rows) < 2 or len(rows[0]) < 2 or len(rows[1]) < 2:
+        raise ValueError("Netqui datasheet template does not contain the expected gain, VSWR, E-plane, and H-plane chart slots.")
+    gain_slot, vswr_slot = rows[0][0], rows[0][1]
+    e_plane_slot, h_plane_slot = rows[1][0], rows[1][1]
+    gain_asset = _find_manifest_chart_asset(artifact_manifest, "gain") or _find_plot_asset(output, extract_workbook, "-gain.svg")
+    replacements: list[ChartReplacement] = [
+        ChartReplacement("gain", fitz.Rect(gain_slot.rect), gain_asset),
+    ]
+    vswr_asset = _find_manifest_chart_asset(artifact_manifest, "vswr") or _find_optional_plot_asset(output, extract_workbook, "-vswr.svg")
+    if vswr_asset is not None:
+        replacements.append(ChartReplacement("vswr", fitz.Rect(vswr_slot.rect), vswr_asset))
+
+    for slot, kind, plane in [
+        (e_plane_slot, "beamwidth_e_plane", "e-plane"),
+        (h_plane_slot, "beamwidth_h_plane", "h-plane"),
+    ]:
+        asset = _find_beamwidth_plane_asset(output, extract_workbook, plane, artifact_manifest=artifact_manifest)
+        legend_asset = _legend_asset_path(asset)
+        plot_rect, legend_rect = _netqui_beamwidth_rects(fitz.Rect(slot.rect))
+        replacements.append(
+            ChartReplacement(
+                kind,
+                plot_rect,
+                asset,
+                legend_rect=legend_rect if legend_asset.exists() else None,
+                legend_asset_path=legend_asset if legend_asset.exists() else None,
+                erase_rect=fitz.Rect(slot.rect),
+            )
+        )
+    return replacements
+
+
+def _build_chart_replacements(
+    page: fitz.Page,
+    output: Path,
+    extract_workbook: Path,
+    *,
+    artifact_manifest: dict[str, object] | None = None,
+    adapter: DatasheetTemplateAdapter | None = None,
+) -> list[ChartReplacement]:
     slots = _collect_chart_slots(page)
     if len(slots) < 2:
         raise ValueError("Datasheet template page 2 does not contain the expected chart image slots.")
 
     ordered_slots = sorted(slots, key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
-    replacements: list[ChartReplacement] = [
-        ChartReplacement("gain", fitz.Rect(ordered_slots[0].rect), _find_plot_asset(output, extract_workbook, "-gain.svg")),
-        ChartReplacement("beamwidth", fitz.Rect(ordered_slots[1].rect), _find_plot_asset(output, extract_workbook, "-beamwidth.svg")),
-    ]
     spans = _extract_page_spans(page)
+    chart_mode = adapter.chart_layout_mode if adapter is not None else ("netqui" if _is_netqui_chart_page(spans, ordered_slots) else "generic")
+    if chart_mode == "netqui":
+        return _build_netqui_chart_replacements(ordered_slots, output, extract_workbook, artifact_manifest=artifact_manifest)
+
+    gain_asset = _find_manifest_chart_asset(artifact_manifest, "gain") or _find_plot_asset(output, extract_workbook, "-gain.svg")
+    beamwidth_asset = _find_manifest_chart_asset(artifact_manifest, "beamwidth") or _find_plot_asset(output, extract_workbook, "-beamwidth.svg")
+    replacements: list[ChartReplacement] = [
+        ChartReplacement("gain", fitz.Rect(ordered_slots[0].rect), gain_asset),
+        ChartReplacement("beamwidth", fitz.Rect(ordered_slots[1].rect), beamwidth_asset),
+    ]
     if len(ordered_slots) >= 4:
-        azimuth_asset, elevation_asset = _find_polar_plot_assets(page, output, extract_workbook, spans)
+        azimuth_asset, elevation_asset = _find_polar_plot_assets(page, output, extract_workbook, spans, artifact_manifest=artifact_manifest)
         polar_slots = sorted(ordered_slots[2:4], key=lambda slot: (slot.rect.x0, slot.rect.y0, slot.rect.y1, slot.rect.x1))
         replacements.extend(
             [
@@ -1934,16 +2109,29 @@ def _place_svg_as_vector(page: fitz.Page, target_rect: fitz.Rect, svg_path: Path
         page.show_pdf_page(target_rect, pdf_doc, 0, keep_proportion=True, overlay=True)
 
 
-def _replace_chart_images(doc: fitz.Document, output: Path, extract_workbook: Path) -> None:
+def _replace_chart_images(
+    doc: fitz.Document,
+    output: Path,
+    extract_workbook: Path,
+    *,
+    artifact_manifest: dict[str, object] | None = None,
+    adapter: DatasheetTemplateAdapter | None = None,
+) -> None:
     if doc.page_count < 2:
         return
 
     page = next((candidate for candidate in doc[1:] if len(_collect_chart_slots(candidate)) >= 2), None)
     if page is None:
         raise ValueError("Datasheet template does not contain the expected chart image slots.")
-    replacements = _build_chart_replacements(page, output, extract_workbook)
+    replacements = _build_chart_replacements(
+        page,
+        output,
+        extract_workbook,
+        artifact_manifest=artifact_manifest,
+        adapter=adapter,
+    )
     for replacement in replacements:
-        page.add_redact_annot(replacement.rect, fill=(1.0, 1.0, 1.0))
+        page.add_redact_annot(replacement.erase_rect or replacement.rect, fill=(1.0, 1.0, 1.0))
         if replacement.legend_rect is not None:
             page.add_redact_annot(replacement.legend_rect, fill=(1.0, 1.0, 1.0))
     page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
@@ -1963,12 +2151,21 @@ def build_datasheet_pdf(
 ) -> dict[str, str]:
     total_steps = 4 if technical_data_workbook else 3
     emit_progress("datasheet", 1, total_steps, f"Loading {extract_workbook.name}")
-    replacements = build_replacements_from_workbook(extract_workbook)
     template = template.resolve()
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
 
     with fitz.open(template) as doc:
+        context = build_render_context(
+            template,
+            doc,
+            extract_workbook.resolve(),
+            technical_data_workbook.resolve() if technical_data_workbook else None,
+            output_dir=output.parent,
+        )
+        adapter = context.adapter
+        model = context.model
+        replacements = dict(model.performance_fields)
         now = datetime.now().astimezone()
         output_metadata = _build_pdf_metadata(doc.metadata, output, now, metadata_author=metadata_author)
         page = doc[0]
@@ -1991,8 +2188,9 @@ def build_datasheet_pdf(
             replacements.update(
                 _apply_technical_data(
                     doc,
-                    technical_data_workbook,
+                    model.technical_entries,
                     now,
+                    adapter=adapter,
                     registered_fonts=registered_fonts,
                 )
             )
@@ -2000,7 +2198,13 @@ def build_datasheet_pdf(
 
         _redraw_split_table_separators(doc[0])
         emit_progress("datasheet", next_step, total_steps, "Embedding chart assets")
-        _replace_chart_images(doc, output, extract_workbook)
+        _replace_chart_images(
+            doc,
+            output,
+            extract_workbook,
+            artifact_manifest=model.artifact_manifest,
+            adapter=adapter,
+        )
         doc.set_metadata(output_metadata)
         if hasattr(doc, "set_xml_metadata"):
             doc.set_xml_metadata(_build_xmp_metadata(output_metadata, now, now))

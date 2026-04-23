@@ -51,16 +51,24 @@ from legend_utils import (
     apply_legend_labels,
     beam_efficiency_legend_label,
     beamwidth_legend_label,
+    detect_polarization,
     gain_legend_label,
     parse_legend_labels,
     polarization_sort_key,
     polar_legend_label,
 )
+from datasheet_artifacts import build_asset_record, update_artifact_manifest
 
 # ------------------ global color scheme ------------------
 DEFAULT_SOLID_COLORS = ["#2bb6f6", "#f5a623"]  # kept from gain plot
 SOLID_COLORS = DEFAULT_SOLID_COLORS[:]
 DASHED_COLORS = SOLID_COLORS[:]  # same hues for dashed variants
+DEFAULT_BEAMWIDTH_DB_COLORS = ["#ff0000", "#808080", "#000000"]
+BEAMWIDTH_DB_SERIES = [
+    ("3dB", "beamwidth_3dB_2sided_deg"),
+    ("6dB", "beamwidth_6dB_2sided_deg"),
+    ("10dB", "beamwidth_10dB_2sided_deg"),
+]
 DEFAULT_PLOT_FONT_SIZE = 10.5
 DEFAULT_LEGEND_FONT_SIZE = 10.5
 DEFAULT_GRID_LINE_WIDTH = 0.9
@@ -156,10 +164,11 @@ def smooth_circular(y: np.ndarray, window: int) -> np.ndarray:
     return s[pad:-pad]
 
 
-def parse_color_list(raw: str | None) -> list[str]:
+def parse_color_list(raw: str | None, default: list[str] | None = None) -> list[str]:
+    fallback = default[:] if default is not None else DEFAULT_SOLID_COLORS[:]
     if not raw:
-        return DEFAULT_SOLID_COLORS[:]
-    return [item.strip() for item in raw.split(",") if item.strip()] or DEFAULT_SOLID_COLORS[:]
+        return fallback
+    return [item.strip() for item in raw.split(",") if item.strip()] or fallback
 
 
 def build_step_ticks(xmin: float, xmax: float, step: float) -> np.ndarray | None:
@@ -248,6 +257,18 @@ def align_series_to_axis(source_x: np.ndarray, source_y: np.ndarray, target_x: n
         for x, y in zip(np.asarray(source_x, dtype=float), np.asarray(source_y, dtype=float))
     }
     return np.asarray([lookup[round(float(x), 9)] for x in np.asarray(target_x, dtype=float)], dtype=float)
+
+
+def beamwidth_plane_phi(polarization: str, plane: str) -> int:
+    pol = str(polarization).strip().upper()
+    plane_key = str(plane).strip().upper()
+    if plane_key not in {"E", "H"}:
+        raise ValueError(f"Unsupported beamwidth plane: {plane}")
+    if pol == "V":
+        return 90 if plane_key == "E" else 0
+    if pol == "H":
+        return 0 if plane_key == "E" else 90
+    raise ValueError(f"Unsupported beamwidth polarization: {polarization}")
 
 
 def _legend_entry_box(
@@ -636,6 +657,7 @@ def main():
     parser.add_argument("--x-step", type=float, default=None, help="Optional x tick step for cartesian plots (GHz).")
     parser.add_argument("--x-log", action="store_true", help="Use logarithmic scaling on the x-axis for cartesian plots.")
     parser.add_argument("--line-colors", default=None, help="Comma-separated line colors applied across the plots.")
+    parser.add_argument("--beamwidth-db-colors", default=None, help="Comma-separated colors for 3 dB, 6 dB, and 10 dB beamwidth E/H plane plots.")
     parser.add_argument("--line-width", type=float, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--cartesian-line-width", type=float, default=None, help="Line width used for cartesian plot traces and legends.")
     parser.add_argument("--polar-line-width", type=float, default=None, help="Line width used for polar plot traces and legends.")
@@ -674,6 +696,7 @@ def main():
     args = parser.parse_args()
 
     set_line_colors(parse_color_list(args.line_colors))
+    beamwidth_db_colors = parse_color_list(args.beamwidth_db_colors, DEFAULT_BEAMWIDTH_DB_COLORS)
     gain_legend_labels = parse_legend_labels(args.gain_legend_labels)
     beamwidth_legend_labels = parse_legend_labels(args.beamwidth_legend_labels)
     beam_eff_legend_labels = parse_legend_labels(args.beam_eff_legend_labels)
@@ -718,6 +741,12 @@ def main():
     bw_series, bw_names, bw_styles, bw_freqs = [], [], [], []
     be_series, be_names, be_freqs = [], [], []
     summary_frames: list[tuple[str, pd.DataFrame]] = []
+    manifest_gain: dict[str, object] | None = None
+    manifest_beamwidth: dict[str, object] | None = None
+    manifest_beam_efficiency: dict[str, object] | None = None
+    manifest_beamwidth_planes: list[dict[str, object]] = []
+    manifest_polar_combined: list[dict[str, object]] = []
+    manifest_polar_single: list[dict[str, object]] = []
 
     for sheet in summary_sheets:
         df = xls.parse(sheet)
@@ -746,6 +775,39 @@ def main():
             bw_series.append(sel["beamwidth_6dB_2sided_deg"].to_numpy(dtype=float))
             bw_names.append(beamwidth_legend_label(sheet, label_suffix))
             bw_styles.append(style)
+
+    def rows_for_phi(df: pd.DataFrame, phi: int) -> pd.DataFrame:
+        values = pd.to_numeric(df["phi_cut_deg"], errors="coerce")
+        return df[values == float(phi)]
+
+    beamwidth_plane_specs: list[dict[str, object]] = []
+    required_plane_columns = {"freq_GHz", "phi_cut_deg", *(column for _, column in BEAMWIDTH_DB_SERIES)}
+    for sheet, df in summary_frames:
+        polarization = detect_polarization(sheet)
+        if not required_plane_columns.issubset(df.columns):
+            continue
+        plot_polarization = polarization if polarization in {"H", "V"} else "V"
+        filename_suffix = f"-{polarization.lower()}" if polarization in {"H", "V"} else ""
+        for plane_key, plane_label, filename_plane in [
+            ("E", "E-plane", "e-plane"),
+            ("H", "H-plane", "h-plane"),
+        ]:
+            phi = beamwidth_plane_phi(plot_polarization, plane_key)
+            sel = rows_for_phi(df, phi)
+            if sel.empty:
+                continue
+            freq_axis = sel["freq_GHz"].to_numpy(dtype=float)
+            beamwidth_plane_specs.append(
+                {
+                    "polarization": polarization or "",
+                    "filename_suffix": filename_suffix,
+                    "plane_label": plane_label,
+                    "filename_plane": filename_plane,
+                    "freq_axes": [freq_axis] * len(BEAMWIDTH_DB_SERIES),
+                    "series": [sel[column].to_numpy(dtype=float) for _, column in BEAMWIDTH_DB_SERIES],
+                    "names": [f"{label} {plane_label}" for label, _ in BEAMWIDTH_DB_SERIES],
+                }
+            )
 
     def _count_polar_progress_steps() -> int:
         all_freq_cols: set[str] = set()
@@ -789,7 +851,7 @@ def main():
             steps += int(has_az or has_el) + int(has_az) + int(has_el)
         return steps
 
-    progress_total = int(bool(gain_series)) + int(bool(bw_series)) + int(bool(be_series)) + _count_polar_progress_steps()
+    progress_total = int(bool(gain_series)) + int(bool(bw_series)) + len(beamwidth_plane_specs) + int(bool(be_series)) + _count_polar_progress_steps()
     progress_step = 0
 
     def advance_plot_progress(label: str) -> None:
@@ -850,6 +912,7 @@ def main():
                 print(out_gain)
                 if out_gain_legend:
                     print(out_gain_legend)
+                manifest_gain = build_asset_record(out_gain, legend_path=out_gain_legend)
 
     # Beamwidth
     if bw_series:
@@ -898,6 +961,63 @@ def main():
                 print(out_bw)
                 if out_bw_legend:
                     print(out_bw_legend)
+                manifest_beamwidth = build_asset_record(out_bw, legend_path=out_bw_legend)
+
+    # Per-polarization E-plane/H-plane beamwidth plots
+    for spec in beamwidth_plane_specs:
+        plane_label = str(spec["plane_label"])
+        polarization = str(spec["polarization"])
+        freq_axes = spec["freq_axes"]
+        series_raw = spec["series"]
+        freq_plane = common_frequency_axis(freq_axes)  # type: ignore[arg-type]
+        if freq_plane is None or len(freq_plane) == 0:
+            advance_plot_progress(f"Skipped beamwidth {plane_label} {polarization}: no common frequency axis")
+            print(f"Skipped beamwidth {plane_label} {polarization}: no common frequency axis across series.")
+            continue
+        series_plane = [
+            align_series_to_axis(x, y, freq_plane)
+            for x, y in zip(freq_axes, series_raw)  # type: ignore[arg-type]
+        ]
+        freq_plane, masked_groups, _ = apply_freq_window(freq_plane, [series_plane], args.fmin, args.fmax)
+        series_plane = masked_groups[0]
+        if len(freq_plane) == 0 or not series_plane:
+            advance_plot_progress(f"Skipped beamwidth {plane_label} {polarization}: selected window left no samples")
+            print(f"Skipped beamwidth {plane_label} {polarization}: selected frequency window left no samples.")
+            continue
+        advance_plot_progress(f"Rendering beamwidth {plane_label} {polarization} plot")
+        out_plane = str(out_dir / f"{bookstem}-beamwidth-{spec['filename_plane']}{spec['filename_suffix']}.svg")
+        y_min, y_max = resolved_axis_limits(0.0, 100.0, args.beamwidth_ymin, args.beamwidth_ymax)
+        out_plane, out_plane_legend = plot_xy(
+            freq_plane,
+            series_plane,
+            spec["names"],  # type: ignore[arg-type]
+            out_plane,
+            y_label="Beamwidth / deg",
+            styles=["-"] * len(series_plane),
+            colors=[beamwidth_db_colors[i % len(beamwidth_db_colors)] for i in range(len(series_plane))],
+            grid_color=args.grid_color,
+            y_min=y_min,
+            y_max=y_max,
+            y_step=resolved_tick_step(10.0, args.beamwidth_y_step),
+            smooth_window=args.smooth_window,
+            x_step=args.x_step,
+            x_log=args.x_log,
+            font_size=cartesian_font_size,
+            legend_font_size=cartesian_legend_font_size,
+            grid_line_width=cartesian_grid_line_width,
+            line_width=cartesian_line_width,
+        )
+        print(out_plane)
+        if out_plane_legend:
+            print(out_plane_legend)
+        manifest_plane = build_asset_record(
+            out_plane,
+            legend_path=out_plane_legend,
+            plane=str(spec["filename_plane"]),
+            polarization=str(spec["polarization"] or ""),
+        )
+        if manifest_plane is not None:
+            manifest_beamwidth_planes.append(manifest_plane)
 
     # Beam efficiency
     if be_series:
@@ -942,6 +1062,7 @@ def main():
                 print(out_be)
                 if out_be_legend:
                     print(out_be_legend)
+                manifest_beam_efficiency = build_asset_record(out_be, legend_path=out_be_legend)
 
     # ----------- Polar plots -----------
     def get_angle_and_freqs(df: pd.DataFrame):
@@ -1055,6 +1176,13 @@ def main():
             print(out_path_c)
             if out_path_c_legend:
                 print(out_path_c_legend)
+            manifest_combined = build_asset_record(
+                out_path_c,
+                legend_path=out_path_c_legend,
+                frequency_ghz=parse_freq_ghz_from_text(freq_col),
+            )
+            if manifest_combined is not None:
+                manifest_polar_combined.append(manifest_combined)
 
         # Single-phi: Azimuth (solid)
         ds_az = build_phi_datasets(freq_col, "phi0", linestyle='-')
@@ -1081,6 +1209,14 @@ def main():
             print(out_path_az)
             if out_path_az_legend:
                 print(out_path_az_legend)
+            manifest_az = build_asset_record(
+                out_path_az,
+                legend_path=out_path_az_legend,
+                plane="azimuth",
+                frequency_ghz=parse_freq_ghz_from_text(freq_col),
+            )
+            if manifest_az is not None:
+                manifest_polar_single.append(manifest_az)
 
         # Single-phi: Elevation (dashed)
         ds_el = build_phi_datasets(freq_col, "phi90", linestyle='--')
@@ -1107,6 +1243,25 @@ def main():
             print(out_path_el)
             if out_path_el_legend:
                 print(out_path_el_legend)
+            manifest_el = build_asset_record(
+                out_path_el,
+                legend_path=out_path_el_legend,
+                plane="elevation",
+                frequency_ghz=parse_freq_ghz_from_text(freq_col),
+            )
+            if manifest_el is not None:
+                manifest_polar_single.append(manifest_el)
+
+    update_artifact_manifest(
+        out_dir,
+        bookstem,
+        gain=manifest_gain,
+        beamwidth=manifest_beamwidth,
+        beam_efficiency=manifest_beam_efficiency,
+        beamwidth_planes=manifest_beamwidth_planes,
+        polar_combined=manifest_polar_combined,
+        polar_single=manifest_polar_single,
+    )
 
 if __name__ == "__main__":
     main()
