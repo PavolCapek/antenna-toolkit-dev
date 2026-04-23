@@ -10,6 +10,8 @@ from project_store import (
     ProjectRecord,
     ProjectStore,
     PROJECT_FILE_NAME,
+    resolve_project_path,
+    serialize_workspace_path,
 )
 
 
@@ -120,6 +122,12 @@ class ProjectStoreTests(unittest.TestCase):
         self.assertIn("technical_data_file", payload)
         self.assertNotIn("settings", payload)
         self.assertNotIn("presets", payload)
+
+    def test_google_sheet_url_paths_are_preserved(self) -> None:
+        url = "https://docs.google.com/spreadsheets/d/sheet123/edit#gid=0"
+
+        self.assertEqual(serialize_workspace_path(self.root, url), url)
+        self.assertEqual(resolve_project_path(self.root, url), url)
 
     def test_rename_updates_slugged_outputs(self) -> None:
         project = ProjectRecord(name="Dish E", slug="dish_e")

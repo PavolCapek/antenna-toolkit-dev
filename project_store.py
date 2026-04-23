@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 PROJECTS_DIRNAME = "Projects"
 PROJECT_FILE_NAME = "project.json"
@@ -45,6 +46,8 @@ def sanitize_project_slug(name: str) -> str:
 def serialize_workspace_path(root: Path, path: str | Path | None) -> str:
     if not path:
         return ""
+    if is_url(path):
+        return str(path).strip()
     resolved = Path(path)
     resolved = resolved if resolved.is_absolute() else (root / resolved)
     resolved = resolved.resolve()
@@ -57,8 +60,17 @@ def serialize_workspace_path(root: Path, path: str | Path | None) -> str:
 def resolve_project_path(root: Path, value: str | Path | None) -> str:
     if not value:
         return ""
+    if is_url(value):
+        return str(value).strip()
     path = Path(value)
     return str(path.resolve() if path.is_absolute() else (root / path).resolve())
+
+
+def is_url(value: str | Path | None) -> bool:
+    if value is None:
+        return False
+    parsed = urlparse(str(value).strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 @dataclass

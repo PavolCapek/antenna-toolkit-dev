@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt, QTimer, QByteArray, Signal
 from PySide6.QtGui import QColor, QPalette, QTextCursor, QFont
@@ -24,7 +26,7 @@ from PySide6.QtWidgets import (
 from studio_support import (
     THIS_DIR, SCRIPT_BEAM, SCRIPT_EXTRACT, SCRIPT_DATASHEET, SCRIPT_PLOT, SCRIPT_VSWR,
     suggest_preset_name, normalize_preset_payload, PresetFileStore, preset_storage_dir, legacy_preset_storage_dirs,
-    DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, Persist, Proc, resolve_state_file,
+    DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, Persist, Proc, resolve_state_file, app_state_dir, is_url,
     which_python, open_in_file_manager, resolve_workspace_path,
     display_workspace_path, deduce_project_name, normalized_project_stem,
 )
@@ -56,6 +58,9 @@ DATASHEET_TEMPLATE = THIS_DIR / "Datasheet.pdf"
 DATASHEET_TEMPLATE_DIR = THIS_DIR / "Templates"
 DEFAULT_DATASHEET_TEMPLATE_NAME = DATASHEET_TEMPLATE.name
 DEFAULT_PDF_METADATA_AUTHOR = "RF elements"
+GOOGLE_SHEETS_OAUTH_CLIENT_KEY = "google_sheets_oauth_client_json"
+GOOGLE_SHEETS_TOKEN_FILENAME = "google_sheets_token.json"
+GOOGLE_SHEETS_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 THEME_OPTIONS = [
     ("light", "Canvas"),
     ("dark", "Midnight"),
@@ -267,6 +272,27 @@ THEME_STYLES = {
         "eyebrow_color": "#896038",
     },
 }
+
+
+class GoogleSheetDownloadError(RuntimeError):
+    pass
+
+
+def is_google_sheet_url(value: str | Path | None) -> bool:
+    if not is_url(value):
+        return False
+    parsed = urlparse(str(value).strip())
+    return parsed.netloc.lower().endswith("docs.google.com") and "/spreadsheets/" in parsed.path
+
+
+def extract_google_sheet_id(value: str | Path | None) -> str:
+    text = str(value or "").strip()
+    match = re.search(r"/spreadsheets/d/([^/?#]+)", text)
+    return match.group(1) if match else ""
+
+
+def google_sheet_export_url(spreadsheet_id: str) -> str:
+    return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=xlsx"
 
 
 def format_timestamp(value: str | None) -> str:
@@ -1310,14 +1336,24 @@ class ModernMainWindow(QMainWindow):
         self.technical_data_field.setToolTip("Technical Data workbook used to populate datasheet placeholders and the Technical Data table.")
         technical_data_card.body.addWidget(self.technical_data_field)
         self.select_technical_data_button = QPushButton("Select Technical Data"); self.select_technical_data_button.clicked.connect(self.browse_technical_data)
+        self.google_sheet_technical_data_button = QPushButton("Use Google Sheet"); self.google_sheet_technical_data_button.clicked.connect(self.use_google_sheet_technical_data)
+        self.google_credentials_button = QPushButton("Google Sign In"); self.google_credentials_button.clicked.connect(self.configure_google_sheet_credentials)
         self.clear_technical_data_button = QPushButton("Clear"); self.clear_technical_data_button.clicked.connect(self.clear_technical_data)
-        self.open_technical_data_button = QPushButton("Open"); self.open_technical_data_button.clicked.connect(lambda: open_in_file_manager(resolve_workspace_path(self.technical_data_field.text())))
+        self.open_technical_data_button = QPushButton("Open"); self.open_technical_data_button.clicked.connect(self.open_technical_data_source)
         self.select_technical_data_button.setToolTip("Choose the Excel workbook containing Antenna Name, Product ID, and Technical Data rows.")
+        self.google_sheet_technical_data_button.setToolTip("Use a private Google Sheet as the Technical Data source. It will be downloaded as XLSX on each datasheet run.")
+        self.google_credentials_button.setToolTip("Select OAuth client credentials and sign in to Google for private Sheet downloads.")
         self.clear_technical_data_button.setToolTip("Clear the current Technical Data workbook selection.")
-        self.open_technical_data_button.setToolTip("Open the selected Technical Data workbook in File Explorer.")
-        technical_data_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=145)
+        self.open_technical_data_button.setToolTip("Open the selected Technical Data workbook or Google Sheet.")
+        technical_data_actions = ResponsiveButtonPanel(max_columns=5, min_button_width=145)
         self.technical_data_actions = technical_data_actions
-        technical_data_actions.set_buttons([self.select_technical_data_button, self.clear_technical_data_button, self.open_technical_data_button])
+        technical_data_actions.set_buttons([
+            self.select_technical_data_button,
+            self.google_sheet_technical_data_button,
+            self.google_credentials_button,
+            self.clear_technical_data_button,
+            self.open_technical_data_button,
+        ])
         technical_data_card.body.addWidget(technical_data_actions)
         inputs_left = QWidget()
         inputs_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -2333,6 +2369,12 @@ class ModernMainWindow(QMainWindow):
         return sum(1 for item in self.collect_ffs_items() if bool(item["enabled"]))
 
     def _path_fingerprint(self, path: str | Path | None) -> dict[str, object]:
+        if is_url(path):
+            return {
+                "path": str(path).strip(),
+                "exists": True,
+                "type": "url",
+            }
         resolved = Path(resolve_workspace_path(path)) if path else Path()
         exists = bool(path) and resolved.exists()
         payload: dict[str, object] = {
@@ -2392,7 +2434,7 @@ class ModernMainWindow(QMainWindow):
         if stage_key in {"extract", "vswr", "datasheet"}:
             snapshot["touchstone"] = self._path_fingerprint(self.selected_s2p())
         if stage_key == "datasheet":
-            snapshot["technical_data"] = self._path_fingerprint(self.selected_technical_data())
+            snapshot["technical_data"] = self._technical_data_snapshot()
         if stage_key in {"extract", "plot", "datasheet"}:
             snapshot["beam_workbook"] = self._path_fingerprint(self.deduced_beam_output())
         if stage_key == "datasheet":
@@ -2581,7 +2623,13 @@ class ModernMainWindow(QMainWindow):
         elif not s2p:
             messages.append("VSWR stage is unavailable until a Touchstone file is selected.")
         technical_data = self.selected_technical_data()
-        if technical_data and not Path(technical_data).exists():
+        if is_url(technical_data) and not self.technical_data_is_google_sheet():
+            messages.append("Selected Technical Data URL is not a Google Sheet link.")
+        elif self.technical_data_is_google_sheet() and not extract_google_sheet_id(technical_data):
+            messages.append("Selected Google Sheet URL is missing a spreadsheet ID.")
+        elif self.technical_data_is_google_sheet() and not self.google_sheets_auth_configured():
+            messages.append("Google Sheets sign-in is required before Datasheet generation.")
+        elif technical_data and not is_url(technical_data) and not Path(technical_data).exists():
             messages.append(f"Selected Technical Data workbook is missing: {display_workspace_path(technical_data)}")
         elif not technical_data:
             messages.append("Datasheet stage is unavailable until a Technical Data workbook is selected.")
@@ -2752,7 +2800,7 @@ class ModernMainWindow(QMainWindow):
         s2p = self.selected_s2p() if has_project else ""
         touchstone_ready = bool(s2p) and Path(s2p).exists()
         technical_data = self.selected_technical_data() if has_project else ""
-        technical_data_ready = bool(technical_data) and Path(technical_data).exists()
+        technical_data_ready = self.technical_data_source_ready() if has_project else False
         template_path = self.selected_datasheet_template_path()
         template_ready = template_path.exists()
         frequency_ready = self._frequency_window_is_valid()
@@ -2868,6 +2916,16 @@ class ModernMainWindow(QMainWindow):
         if not s2p:
             self.readiness_summary.setText("Far-field stages are ready, but Touchstone is still missing. Use the Project workspace menu for workbook, extract, or plots, or add Touchstone for Full Pipeline.")
             self._set_readiness_action("Project actions", self._open_project_actions_menu, tooltip="Open the Project workspace actions menu.")
+            return
+
+        if is_url(technical_data) and not self.technical_data_is_google_sheet():
+            self.readiness_summary.setText("The selected Technical Data URL is not a Google Sheet link. Choose a local workbook or a valid Google Sheet.")
+            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to fix the Technical Data source.")
+            return
+
+        if self.technical_data_is_google_sheet() and not technical_data_ready:
+            self.readiness_summary.setText("Google Sheets sign-in is required before Datasheet or Full Pipeline can download the Technical Data workbook.")
+            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab and use Google Sign In.")
             return
 
         if technical_data and not technical_data_ready:
@@ -3002,7 +3060,115 @@ class ModernMainWindow(QMainWindow):
 
     def selected_technical_data(self) -> str:
         value = self.technical_data_field.text().strip()
+        if is_url(value):
+            return value
         return str(resolve_workspace_path(value)) if value else ""
+
+    def technical_data_is_google_sheet(self) -> bool:
+        return is_google_sheet_url(self.selected_technical_data())
+
+    def google_sheets_token_path(self) -> Path:
+        return app_state_dir() / GOOGLE_SHEETS_TOKEN_FILENAME
+
+    def google_sheets_oauth_client_path(self) -> Path:
+        value = str(self.store.get(GOOGLE_SHEETS_OAUTH_CLIENT_KEY, "") or "").strip()
+        if not value:
+            return Path()
+        path = Path(value)
+        return path if path.is_absolute() else resolve_workspace_path(path)
+
+    def google_sheets_auth_configured(self) -> bool:
+        client_path = self.google_sheets_oauth_client_path()
+        return bool(client_path and client_path.exists() and self.google_sheets_token_path().exists())
+
+    def technical_data_cache_path(self) -> Path:
+        return self.project_results_dir() / "_cache" / "technical-data.xlsx"
+
+    def _technical_data_snapshot(self) -> dict[str, object]:
+        source = self.selected_technical_data()
+        if self.technical_data_is_google_sheet():
+            return {
+                "source": source,
+                "type": "google_sheet",
+                "cached_xlsx": self._path_fingerprint(self.technical_data_cache_path()),
+            }
+        return self._path_fingerprint(source)
+
+    def _ensure_google_sheets_credentials(self, *, interactive: bool):
+        try:
+            from google.auth.exceptions import RefreshError
+            from google.auth.transport.requests import Request
+            from google.oauth2.credentials import Credentials
+            from google_auth_oauthlib.flow import InstalledAppFlow
+        except ImportError as exc:
+            raise GoogleSheetDownloadError("Install Google auth dependencies from requirements.txt before using Google Sheets.") from exc
+
+        token_path = self.google_sheets_token_path()
+        client_path = self.google_sheets_oauth_client_path()
+        credentials = None
+        if token_path.exists():
+            try:
+                credentials = Credentials.from_authorized_user_file(str(token_path), GOOGLE_SHEETS_SCOPES)
+            except Exception:
+                credentials = None
+        if credentials and credentials.valid:
+            return credentials
+        if credentials and credentials.expired and credentials.refresh_token:
+            try:
+                credentials.refresh(Request())
+                token_path.parent.mkdir(parents=True, exist_ok=True)
+                token_path.write_text(credentials.to_json(), encoding="utf-8")
+                return credentials
+            except RefreshError as exc:
+                if token_path.exists():
+                    token_path.unlink()
+                if not interactive:
+                    raise GoogleSheetDownloadError("Google Sheets sign-in expired. Use Google Sign In, then run again.") from exc
+        if not interactive:
+            raise GoogleSheetDownloadError("Google Sheets sign-in is required. Use Google Sign In before running Datasheet or Full Pipeline.")
+        if not client_path.exists():
+            raise GoogleSheetDownloadError("Select a Google OAuth client JSON before signing in.")
+        flow = InstalledAppFlow.from_client_secrets_file(str(client_path), GOOGLE_SHEETS_SCOPES)
+        credentials = flow.run_local_server(port=0)
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text(credentials.to_json(), encoding="utf-8")
+        return credentials
+
+    def download_google_sheet_technical_data(self, source: str) -> Path:
+        spreadsheet_id = extract_google_sheet_id(source)
+        if not spreadsheet_id:
+            raise GoogleSheetDownloadError("Selected Google Sheet URL is missing a spreadsheet ID.")
+        try:
+            from google.auth.transport.requests import AuthorizedSession
+        except ImportError as exc:
+            raise GoogleSheetDownloadError("Install Google auth dependencies from requirements.txt before using Google Sheets.") from exc
+
+        credentials = self._ensure_google_sheets_credentials(interactive=False)
+        session = AuthorizedSession(credentials)
+        response = session.get(google_sheet_export_url(spreadsheet_id), timeout=60)
+        if response.status_code != 200:
+            detail = response.text[:240].strip() if getattr(response, "text", "") else f"HTTP {response.status_code}"
+            raise GoogleSheetDownloadError(f"Could not download Google Sheet as XLSX: {detail}")
+        output = self.technical_data_cache_path()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(response.content)
+        return output
+
+    def prepare_technical_data_workbook(self) -> str:
+        source = self.selected_technical_data()
+        if not source:
+            return ""
+        if self.technical_data_is_google_sheet():
+            return str(self.download_google_sheet_technical_data(source))
+        return source
+
+    def technical_data_source_ready(self) -> bool:
+        source = self.selected_technical_data()
+        if not source:
+            return False
+        if is_url(source):
+            return self.technical_data_is_google_sheet() and bool(extract_google_sheet_id(source)) and self.google_sheets_auth_configured()
+        return Path(source).exists()
 
     def selected_pdf_metadata_author(self) -> str:
         return self.pdf_metadata_author.text().strip()
@@ -3102,6 +3268,8 @@ class ModernMainWindow(QMainWindow):
             self.clear_s2p_button,
             self.open_s2p_button,
             self.select_technical_data_button,
+            self.google_sheet_technical_data_button,
+            self.google_credentials_button,
             self.clear_technical_data_button,
             self.open_technical_data_button,
             self.datasheet_template_combo,
@@ -3457,8 +3625,12 @@ class ModernMainWindow(QMainWindow):
         self._mark_project_dirty()
 
     def _set_technical_data(self, path: str) -> None:
-        resolved = str(resolve_workspace_path(path)) if path else ""
-        self.technical_data_field.setText(display_workspace_path(resolved))
+        if is_url(path):
+            resolved = str(path).strip()
+            self.technical_data_field.setText(resolved)
+        else:
+            resolved = str(resolve_workspace_path(path)) if path else ""
+            self.technical_data_field.setText(display_workspace_path(resolved))
         self.store.set("technical_data_xlsx", resolved)
         self._mark_project_dirty()
 
@@ -3869,6 +4041,44 @@ class ModernMainWindow(QMainWindow):
         if fn:
             self._set_technical_data(fn)
 
+    def use_google_sheet_technical_data(self):
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
+        current = self.selected_technical_data() if self.technical_data_is_google_sheet() else ""
+        url, ok = QInputDialog.getText(self, "Use Google Sheet", "Google Sheet URL:", text=current)
+        url = url.strip()
+        if not ok or not url:
+            return
+        if not is_google_sheet_url(url) or not extract_google_sheet_id(url):
+            QMessageBox.warning(self, "Invalid Google Sheet", "Enter a Google Sheets URL like https://docs.google.com/spreadsheets/d/<id>/edit.")
+            return
+        self._set_technical_data(url)
+
+    def open_technical_data_source(self):
+        source = self.selected_technical_data()
+        if not source:
+            return
+        if is_url(source):
+            open_in_file_manager(source)
+            return
+        open_in_file_manager(resolve_workspace_path(source))
+
+    def configure_google_sheet_credentials(self):
+        client_path = self.google_sheets_oauth_client_path()
+        if not client_path.exists():
+            path, _ = QFileDialog.getOpenFileName(self, "Select Google OAuth Client JSON", str(THIS_DIR), "JSON (*.json)")
+            if not path:
+                return
+            self.store.set(GOOGLE_SHEETS_OAUTH_CLIENT_KEY, str(Path(path).resolve()))
+        try:
+            self._ensure_google_sheets_credentials(interactive=True)
+        except Exception as exc:
+            QMessageBox.warning(self, "Google Sign In Failed", str(exc))
+            return
+        self.status("Google Sheets sign-in is ready")
+        self.refresh_derived_paths()
+
     def clear_technical_data(self):
         if not self.active_project_slug:
             self.status("Create or select a project first")
@@ -4252,7 +4462,10 @@ class ModernMainWindow(QMainWindow):
         if not technical_data:
             self.status("Select a Technical Data workbook before generating the datasheet")
             return
-        if not Path(technical_data).exists():
+        if is_url(technical_data) and not self.technical_data_is_google_sheet():
+            self.status("Selected Technical Data URL is not a Google Sheet")
+            return
+        if not is_url(technical_data) and not Path(technical_data).exists():
             self.status("Selected Technical Data workbook is missing")
             return
         extract_output = self.deduced_extract_output()
@@ -4268,6 +4481,11 @@ class ModernMainWindow(QMainWindow):
         if self._stage_is_stale("plot"):
             self.status("Plot output is stale. Run Plots only again before generating the datasheet")
             return
+        try:
+            technical_data_workbook = self.prepare_technical_data_workbook()
+        except GoogleSheetDownloadError as exc:
+            self.status(str(exc))
+            return
         args = [
             which_python(),
             "-u",
@@ -4278,7 +4496,7 @@ class ModernMainWindow(QMainWindow):
             "--extract-workbook",
             str(extract_output),
             "--technical-data-workbook",
-            technical_data,
+            technical_data_workbook,
             "--metadata-author",
             self.selected_pdf_metadata_author(),
         ]
@@ -4411,8 +4629,16 @@ class ModernMainWindow(QMainWindow):
         if not technical_data:
             self.status("Select a Technical Data workbook before running the full pipeline")
             return
-        if not Path(technical_data).exists():
+        if is_url(technical_data) and not self.technical_data_is_google_sheet():
+            self.status("Selected Technical Data URL is not a Google Sheet")
+            return
+        if not is_url(technical_data) and not Path(technical_data).exists():
             self.status("Selected Technical Data workbook is missing")
+            return
+        try:
+            technical_data_workbook = self.prepare_technical_data_workbook()
+        except GoogleSheetDownloadError as exc:
+            self.status(str(exc))
             return
 
         args_beam = [which_python(), "-u", SCRIPT_BEAM, out] + ffs + [
@@ -4506,7 +4732,7 @@ class ModernMainWindow(QMainWindow):
                     "--extract-workbook",
                     str(self.deduced_extract_output()),
                     "--technical-data-workbook",
-                    technical_data,
+                    technical_data_workbook,
                     "--metadata-author",
                     self.selected_pdf_metadata_author(),
                 ],

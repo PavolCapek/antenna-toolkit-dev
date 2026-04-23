@@ -7,9 +7,10 @@ import re
 import shlex
 import shutil
 import sys
+import webbrowser
 from pathlib import Path
 from typing import List
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from PySide6.QtCore import QProcess, QProcessEnvironment
 
@@ -163,6 +164,12 @@ def is_win() -> bool:
 def open_in_file_manager(path: str | Path):
     if not path:
         return
+    if is_url(path):
+        try:
+            webbrowser.open(str(path))
+        except Exception:
+            pass
+        return
     p = Path(path)
     try:
         if is_win():
@@ -181,6 +188,8 @@ def open_in_file_manager(path: str | Path):
 def resolve_workspace_path(path: str | Path | None) -> Path:
     if not path:
         return THIS_DIR
+    if is_url(path):
+        return Path(str(path))
     p = Path(path)
     return p.resolve() if p.is_absolute() else (THIS_DIR / p).resolve()
 
@@ -188,6 +197,8 @@ def resolve_workspace_path(path: str | Path | None) -> Path:
 def display_workspace_path(path: str | Path | None) -> str:
     if not path:
         return ""
+    if is_url(path):
+        return str(path)
     p = resolve_workspace_path(path)
     try:
         return str(p.relative_to(THIS_DIR))
@@ -201,6 +212,13 @@ def display_command_part(part: str) -> str:
     if any(sep in part for sep in ("\\", "/")):
         return display_workspace_path(part)
     return part
+
+
+def is_url(value: str | Path | None) -> bool:
+    if value is None:
+        return False
+    parsed = urlparse(str(value).strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 class Persist:
