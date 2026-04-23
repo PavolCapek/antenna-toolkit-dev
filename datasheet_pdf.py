@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import re
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from xml.sax.saxutils import escape as xml_escape
 
 import fitz
 import pandas as pd
@@ -41,6 +44,88 @@ FIELD_LABELS = [
     "Polarization",
     "Impedance",
 ]
+FIELD_LABEL_ALIASES = {
+    "Frequency Range": (
+        "Frequency Range",
+        "Frequency",
+        "Frequency Band",
+        "Operating Frequency",
+    ),
+    "Gain": (
+        "Gain",
+        "Nominal Gain",
+        "Antenna Gain",
+    ),
+    "Azimuth Beam Width -3 dB/-6dB": (
+        "Azimuth Beam Width -3 dB/-6dB",
+        "Azimuth Beam Width",
+        "Azimuth Beamwidth",
+        "Beamwidth Azimuth",
+        "Beamwidth H plane.",
+        "Beamwidth H plane",
+        "H Plane Beamwidth",
+        "H-Plane Beamwidth",
+        "Horizontal Beamwidth",
+        "Horizontal Beam Width",
+    ),
+    "Elevation Beam Width -3 dB/-6dB": (
+        "Elevation Beam Width -3 dB/-6dB",
+        "Elevation Beam Width",
+        "Elevation Beamwidth",
+        "Beamwidth Elevation",
+        "Beamwidth E plane.",
+        "Beamwidth E plane",
+        "E Plane Beamwidth",
+        "E-Plane Beamwidth",
+        "Vertical Beamwidth",
+        "Vertical Beam Width",
+    ),
+    "Beam Efficiency": (
+        "Beam Efficiency",
+        "Efficiency",
+    ),
+    "Front-to-Back Ratio": (
+        "Front-to-Back Ratio",
+        "Front to Back Ratio",
+        "Front Back Ratio",
+        "F/B Ratio",
+    ),
+    "VSWR": (
+        "VSWR",
+    ),
+    "Polarization": (
+        "Polarization",
+    ),
+    "Impedance": (
+        "Impedance",
+        "Nominal Impedance",
+    ),
+}
+TECHNICAL_DATA_PLACEHOLDER = "text_placeholder"
+MISSING_VALUE_COLOR = (0.9, 0.0, 0.0)
+TECHNICAL_DATA_RESERVED_KEYS = {"antenna name", "product id"}
+KNOWN_POLARIZATION_KEYS = {"horizontal", "vertical", "rhcp", "lhcp"}
+
+
+def emit_progress(stage: str, current: int, total: int, label: str) -> None:
+    print(
+        f"AT_PROGRESS {json.dumps({'stage': stage, 'current': int(current), 'total': int(total), 'label': label})}",
+        flush=True,
+    )
+
+PDF_METADATA_KEYS = (
+    "title",
+    "author",
+    "subject",
+    "keywords",
+    "creator",
+    "producer",
+    "creationDate",
+    "modDate",
+    "trapped",
+)
+PDF_CREATOR = "Antenna Toolkit"
+PDF_PRODUCER = "Antenna Toolkit (PyMuPDF)"
 
 
 @dataclass(frozen=True)
@@ -77,6 +162,29 @@ class ChartReplacement:
     asset_path: Path
     legend_rect: fitz.Rect | None = None
     legend_asset_path: Path | None = None
+
+
+@dataclass
+class TechnicalDataEntry:
+    label: str
+    value: str
+
+
+@dataclass(frozen=True)
+class TechnicalDataRowSlot:
+    label: str
+    label_rect: fitz.Rect
+    value_rect: fitz.Rect
+    erase_rect: fitz.Rect
+    label_font_name: str
+    label_font_size: float
+    label_color: tuple[float, float, float]
+    value_font_name: str
+    value_font_size: float
+    value_origin: tuple[float, float]
+    value_color: tuple[float, float, float]
+    row_bottom: float
+    table_right: float
 
 
 def _load_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
@@ -130,6 +238,13 @@ def _format_beamwidth_text(horizontal: pd.Series, vertical: pd.Series, three_db_
     )
 
 
+def _format_single_beamwidth_text(row: pd.Series, three_db_col: str, six_db_col: str) -> str:
+    return (
+        f"{_round_half_up(float(row[three_db_col]))}\N{DEGREE SIGN} / "
+        f"{_round_half_up(float(row[six_db_col]))}\N{DEGREE SIGN}"
+    )
+
+
 def _format_vswr_limit(max_vswr: float) -> str:
     value = _round_half_up_to_decimals(max_vswr, 1)
     return f"<{value:.1f}"
@@ -173,7 +288,11 @@ def _infer_polarization_from_source_file(path_text: object) -> str:
 def _polarization_keys_from_source_files(ffs_summary: pd.DataFrame) -> pd.Series:
     if "source_file" not in ffs_summary.columns:
         raise ValueError("ffs_summary is missing required column: source_file")
-    return ffs_summary["source_file"].map(_infer_polarization_from_source_file).map(_normalize_polarization)
+    keys = ffs_summary["source_file"].map(_infer_polarization_from_source_file).map(_normalize_polarization)
+    if "polarization" in ffs_summary.columns:
+        workbook_keys = ffs_summary["polarization"].map(_normalize_polarization)
+        keys = keys.where(keys.isin(KNOWN_POLARIZATION_KEYS), workbook_keys)
+    return keys
 
 
 def _polarization_text(ffs_summary: pd.DataFrame) -> str:
@@ -190,6 +309,8 @@ def _polarization_text(ffs_summary: pd.DataFrame) -> str:
         return "RHCP"
     if "lhcp" in values:
         return "LHCP"
+    if len(ffs_summary) == 1:
+        return "Single Polarization"
     raise ValueError("Unable to derive polarization from the extracted workbook.")
 
 
@@ -225,11 +346,14 @@ def build_replacements_from_workbook(extract_workbook: Path) -> dict[str, str]:
     polarizations = ffs_summary.assign(_polarization_key=_polarization_keys_from_source_files(ffs_summary))
     horizontal = polarizations[polarizations["_polarization_key"] == "horizontal"]
     vertical = polarizations[polarizations["_polarization_key"] == "vertical"]
-    if horizontal.empty or vertical.empty:
-        raise ValueError("The extracted workbook must contain both Horizontal and Vertical far-field summaries.")
-
-    horizontal_row = horizontal.iloc[0]
-    vertical_row = vertical.iloc[0]
+    has_dual_linear = not horizontal.empty and not vertical.empty
+    if has_dual_linear:
+        azimuth_beamwidth = _format_beamwidth_text(horizontal.iloc[0], vertical.iloc[0], "avg_azimuth_bw_3dB_deg", "avg_azimuth_bw_6dB_deg")
+        elevation_beamwidth = _format_beamwidth_text(horizontal.iloc[0], vertical.iloc[0], "avg_elevation_bw_3dB_deg", "avg_elevation_bw_6dB_deg")
+    else:
+        summary_row = ffs_summary.iloc[0]
+        azimuth_beamwidth = _format_single_beamwidth_text(summary_row, "avg_azimuth_bw_3dB_deg", "avg_azimuth_bw_6dB_deg")
+        elevation_beamwidth = _format_single_beamwidth_text(summary_row, "avg_elevation_bw_3dB_deg", "avg_elevation_bw_6dB_deg")
 
     freq_min_values = [
         _as_float(ffs_summary["freq_min_GHz"].min()),
@@ -267,8 +391,8 @@ def build_replacements_from_workbook(extract_workbook: Path) -> dict[str, str]:
     return {
         "Frequency Range": _format_frequency_range(freq_min, freq_max),
         "Gain": _format_decimal_with_suffix(gain, "dBi", 1),
-        "Azimuth Beam Width -3 dB/-6dB": _format_beamwidth_text(horizontal_row, vertical_row, "avg_azimuth_bw_3dB_deg", "avg_azimuth_bw_6dB_deg"),
-        "Elevation Beam Width -3 dB/-6dB": _format_beamwidth_text(horizontal_row, vertical_row, "avg_elevation_bw_3dB_deg", "avg_elevation_bw_6dB_deg"),
+        "Azimuth Beam Width -3 dB/-6dB": azimuth_beamwidth,
+        "Elevation Beam Width -3 dB/-6dB": elevation_beamwidth,
         "Beam Efficiency": f"{_round_half_up(beam_eff)} %*",
         "Front-to-Back Ratio": _format_int_with_suffix(front_to_back, "dB"),
         "VSWR": _format_vswr_limit(max_vswr),
@@ -277,9 +401,749 @@ def build_replacements_from_workbook(extract_workbook: Path) -> dict[str, str]:
     }
 
 
+def _normalize_technical_key(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _format_technical_cell(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, float):
+        if math.isfinite(value) and value.is_integer():
+            return str(int(value))
+        return f"{value:g}"
+    return str(value).strip()
+
+
+def load_technical_data_workbook(path: Path) -> list[TechnicalDataEntry]:
+    try:
+        data = pd.read_excel(path, sheet_name=0, header=None, dtype=object)
+    except Exception as exc:
+        raise ValueError(f"Could not read Technical Data workbook '{path}'.") from exc
+    if data.shape[1] < 2:
+        data[1] = ""
+
+    entries: list[TechnicalDataEntry] = []
+    index_by_key: dict[str, int] = {}
+    for _idx, row in data.iloc[:, :2].iterrows():
+        label = _format_technical_cell(row.iloc[0])
+        key = _normalize_technical_key(label)
+        if not key:
+            continue
+        value = _format_technical_cell(row.iloc[1])
+        if key in index_by_key:
+            entries[index_by_key[key]].value = value
+            continue
+        index_by_key[key] = len(entries)
+        entries.append(TechnicalDataEntry(label=label, value=value))
+    if not entries:
+        raise ValueError("Technical Data workbook does not contain any field/value rows.")
+    return entries
+
+
+def _technical_data_by_key(entries: list[TechnicalDataEntry]) -> dict[str, TechnicalDataEntry]:
+    return {_normalize_technical_key(entry.label): entry for entry in entries}
+
+
+def _text_or_placeholder(value: str) -> tuple[str, bool]:
+    text = str(value or "").strip()
+    if text:
+        return text, False
+    return TECHNICAL_DATA_PLACEHOLDER, True
+
+
+def _register_pdf_font(
+    page: fitz.Page,
+    display_font: str,
+    registered_fonts: set[str],
+    required_text: str | None = None,
+) -> tuple[str, str | None, Path | None]:
+    font_path = _font_path_for_display_font(display_font)
+    pdf_font_name = display_font
+    fontfile = None
+    if font_path is not None:
+        fontfile = str(font_path)
+        page.insert_font(fontname=pdf_font_name, fontfile=fontfile)
+        registered_fonts.add(pdf_font_name)
+    else:
+        if required_text is not None and not _embedded_font_supports_text(page, display_font, required_text):
+            return "helv", None, None
+        pdf_font_name = _resolve_font_name(page, display_font)
+    return pdf_font_name, fontfile, font_path
+
+
+def _insert_fit_textbox(
+    page: fitz.Page,
+    rect: fitz.Rect,
+    text: str,
+    *,
+    font_name: str,
+    font_size: float,
+    color: tuple[float, float, float],
+    registered_fonts: set[str],
+) -> None:
+    pdf_font_name, fontfile, _font_path = _register_pdf_font(page, font_name, registered_fonts, required_text=text)
+    size = float(font_size)
+    for _attempt in range(8):
+        result = page.insert_textbox(
+            rect,
+            text,
+            fontsize=size,
+            fontname=pdf_font_name,
+            fontfile=fontfile,
+            color=color,
+            align=fitz.TEXT_ALIGN_LEFT,
+        )
+        if result >= 0:
+            return
+        size *= 0.9
+    page.insert_text((rect.x0, rect.y0 + max(size, 1.0)), text, fontsize=size, fontname=pdf_font_name, fontfile=fontfile, color=color)
+
+
+def _wrap_text_to_width(text: str, font: fitz.Font, font_size: float, max_width: float) -> list[str]:
+    words = str(text).split()
+    if not words:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if not current or font.text_length(candidate, fontsize=font_size) <= max_width:
+            current = candidate
+            continue
+        lines.append(current)
+        current = word
+        if font.text_length(current, fontsize=font_size) <= max_width:
+            continue
+        pieces: list[str] = []
+        piece = ""
+        for char in current:
+            if piece and font.text_length(piece + char, fontsize=font_size) > max_width:
+                pieces.append(piece)
+                piece = char
+            else:
+                piece += char
+        if pieces:
+            lines.extend(pieces)
+        current = piece
+    if current:
+        lines.append(current)
+    return lines or [""]
+
+
+def _insert_wrapped_text(
+    page: fitz.Page,
+    rect: fitz.Rect,
+    text: str,
+    *,
+    origin: tuple[float, float] | None,
+    font_name: str,
+    font_size: float,
+    color: tuple[float, float, float],
+    registered_fonts: set[str],
+) -> None:
+    pdf_font_name, fontfile, font_path = _register_pdf_font(page, font_name, registered_fonts, required_text=text)
+    font = _measurement_font(pdf_font_name, str(font_path) if font_path else None)
+    lines = _wrap_text_to_width(text, font, font_size, max(1.0, rect.width))
+    line_height = max(font_size * 1.2, font_size + 1.0)
+    x = rect.x0 if origin is None else origin[0]
+    first_baseline = (rect.y0 + font_size) if origin is None else origin[1]
+    max_baseline = rect.y1 + 0.8
+    for index, line in enumerate(lines):
+        baseline = first_baseline + (index * line_height)
+        if baseline > max_baseline and index > 0:
+            break
+        page.insert_text(
+            (x, baseline),
+            line,
+            fontsize=font_size,
+            fontname=pdf_font_name,
+            fontfile=fontfile,
+            color=color,
+        )
+
+
+def _insert_replacement_slot_text(
+    page: fitz.Page,
+    slot: ReplacementSlot,
+    text: str,
+    *,
+    registered_fonts: set[str],
+    color: tuple[float, float, float] | None = None,
+) -> None:
+    pdf_font_name, fontfile, font_path = _register_pdf_font(page, slot.font_name, registered_fonts, required_text=text)
+    fontsize = _fit_font_size(text, slot, font_path)
+    result = page.insert_text(
+        slot.origin,
+        text,
+        fontsize=fontsize,
+        fontname=pdf_font_name,
+        fontfile=fontfile,
+        color=color or slot.color,
+    )
+    if result <= 0:
+        raise ValueError(f"Replacement text for '{slot.label}' could not be inserted.")
+
+
+def _find_span_exact(page: fitz.Page, text: str, spans: list[TextSpan] | None = None) -> TextSpan | None:
+    page_spans = spans if spans is not None else _extract_page_spans(page)
+    return next((span for span in page_spans if span.text == text), None)
+
+
+def _technical_data_region(page: fitz.Page, spans: list[TextSpan] | None = None) -> tuple[float, float] | None:
+    technical_heading = _find_span_exact(page, "TECHNICAL DATA", spans)
+    performance_heading = _find_span_exact(page, "PERFORMANCE", spans)
+    if technical_heading is None or performance_heading is None:
+        return None
+    return technical_heading.bbox.y1, performance_heading.bbox.y0
+
+
+def _technical_table_separators(page: fitz.Page, top_y: float, bottom_y: float) -> tuple[list[float], float]:
+    separators: list[float] = []
+    table_right = 299.0
+    for drawing in page.get_drawings():
+        rect = drawing.get("rect")
+        width = drawing.get("width")
+        color = drawing.get("color")
+        if rect is None or width is None or color is None:
+            continue
+        if not (top_y < rect.y0 < bottom_y):
+            continue
+        if abs(rect.y1 - rect.y0) > 0.2 or width > 0.75:
+            continue
+        if not (rect.x0 <= 150.0 and rect.x1 >= 130.0):
+            continue
+        y = float(rect.y0)
+        if not any(abs(existing - y) <= 0.2 for existing in separators):
+            separators.append(y)
+        table_right = max(table_right, float(rect.x1))
+    return sorted(separators), table_right
+
+
+def _redraw_split_table_separators(page: fitz.Page) -> None:
+    segments: list[tuple[fitz.Rect, float, tuple[float, float, float]]] = []
+    for drawing in page.get_drawings():
+        rect = drawing.get("rect")
+        width = drawing.get("width")
+        color = drawing.get("color")
+        if rect is None or width is None or color is None:
+            continue
+        if abs(rect.y1 - rect.y0) > 0.2 or width > 0.75:
+            continue
+        segments.append((fitz.Rect(rect), float(width), color))
+
+    redrawn: set[tuple[float, float, float, float, tuple[float, float, float]]] = set()
+    for left, width, color in segments:
+        if not (35.0 <= left.x0 <= 38.0 and 137.0 <= left.x1 <= 139.0):
+            continue
+        right = next(
+            (
+                rect
+                for rect, right_width, right_color in segments
+                if abs(rect.y0 - left.y0) <= 0.2
+                and abs(rect.x0 - left.x1) <= 0.8
+                and 295.0 <= rect.x1 <= 305.0
+                and abs(right_width - width) <= 0.05
+                and all(abs(a - b) <= 0.01 for a, b in zip(right_color, color))
+            ),
+            None,
+        )
+        if right is None:
+            continue
+        key = (
+            round(left.x0, 3),
+            round(left.y0, 3),
+            round(right.x1, 3),
+            round(width, 3),
+            tuple(round(component, 6) for component in color),
+        )
+        if key in redrawn:
+            continue
+        redrawn.add(key)
+        page.draw_line(
+            (left.x0, left.y0),
+            (right.x1, left.y0),
+            color=color,
+            width=width,
+            overlay=True,
+        )
+
+
+def _technical_data_row_slots(page: fitz.Page) -> list[TechnicalDataRowSlot]:
+    spans = _extract_page_spans(page)
+    region = _technical_data_region(page, spans)
+    if region is None:
+        return []
+    top_y, bottom_y = region
+    separators, detected_table_right = _technical_table_separators(page, top_y, bottom_y)
+    labels = [
+        span
+        for span in spans
+        if top_y < span.bbox.y0 < bottom_y
+        and 25.0 <= span.bbox.x0 <= 125.0
+        and span.bbox.x1 <= 138.0
+    ]
+    labels.sort(key=lambda span: (span.bbox.y0, span.bbox.x0))
+    if not labels:
+        return []
+
+    value_x = 140.0
+    table_right = min(page.rect.x1 - 20.0, detected_table_right)
+    slots: list[TechnicalDataRowSlot] = []
+    for index, label_span in enumerate(labels):
+        next_separator = next((y for y in separators if y > label_span.bbox.y1 + 0.3), None)
+        previous_separator = max((y for y in separators if y < label_span.bbox.y0 - 0.3), default=None)
+        if previous_separator is not None:
+            row_top = max(top_y, previous_separator + 0.5)
+        else:
+            row_top = max(top_y, label_span.bbox.y0 - 1.0)
+        if next_separator is not None:
+            row_bottom = next_separator
+        else:
+            next_y = labels[index + 1].bbox.y0 if index + 1 < len(labels) else min(bottom_y - 6.0, label_span.bbox.y0 + 13.0)
+            row_bottom = max(label_span.bbox.y1 + 2.0, min(bottom_y - 4.0, next_y - 1.0))
+        value_spans = [
+            span
+            for span in spans
+            if value_x - 3.0 <= span.bbox.x0 <= table_right + 2.0
+            and row_top - 1.0 <= span.bbox.y0 < row_bottom + 1.0
+        ]
+        value_origin_span = value_spans[0] if value_spans else label_span
+        value_style_span = value_origin_span
+        if (
+            label_span.text == "Temperature"
+            and len(value_spans) > 1
+            and value_origin_span.text.strip() in {"-", "+"}
+        ):
+            value_style_span = value_spans[1]
+        slots.append(
+            TechnicalDataRowSlot(
+                label=label_span.text,
+                label_rect=fitz.Rect(label_span.bbox),
+                value_rect=fitz.Rect(value_x, row_top, table_right, row_bottom),
+                erase_rect=fitz.Rect(value_x - 2.0, row_top, table_right + 2.0, row_bottom + 1.0),
+                label_font_name=label_span.font,
+                label_font_size=float(label_span.size),
+                label_color=_int_color_to_rgb(label_span.color),
+                value_font_name=value_style_span.font,
+                value_font_size=float(value_style_span.size),
+                value_origin=value_origin_span.origin,
+                value_color=_int_color_to_rgb(value_style_span.color),
+                row_bottom=row_bottom,
+                table_right=table_right,
+            )
+        )
+    return slots
+
+
+def _draw_technical_data_row(
+    page: fitz.Page,
+    label: str,
+    value: str,
+    rect: fitz.Rect,
+    *,
+    label_font_name: str,
+    value_font_name: str,
+    font_size: float,
+    label_color: tuple[float, float, float],
+    value_color: tuple[float, float, float],
+    table_right: float,
+    registered_fonts: set[str],
+) -> None:
+    label_rect = fitz.Rect(38.0, rect.y0, 136.0, rect.y1)
+    value_rect = fitz.Rect(140.0, rect.y0, table_right, rect.y1)
+    _insert_wrapped_text(
+        page,
+        label_rect,
+        label,
+        origin=None,
+        font_name=label_font_name,
+        font_size=font_size,
+        color=label_color,
+        registered_fonts=registered_fonts,
+    )
+    text, is_missing = _text_or_placeholder(value)
+    _insert_wrapped_text(
+        page,
+        value_rect,
+        text,
+        origin=None,
+        font_name=value_font_name,
+        font_size=font_size,
+        color=MISSING_VALUE_COLOR if is_missing else value_color,
+        registered_fonts=registered_fonts,
+    )
+    page.draw_line(
+        (36.638, rect.y1),
+        (table_right, rect.y1),
+        color=(0.13669031858444214, 0.12195010483264923, 0.1252918243408203),
+        width=0.25,
+        overlay=True,
+    )
+
+
+def _technical_data_row_step(slots: list[TechnicalDataRowSlot]) -> float:
+    deltas = [
+        slots[index].row_bottom - slots[index - 1].row_bottom
+        for index in range(1, len(slots))
+        if 9.0 <= slots[index].row_bottom - slots[index - 1].row_bottom <= 18.0
+    ]
+    if not deltas:
+        return 12.0
+    rounded = [round(delta * 2.0) / 2.0 for delta in deltas]
+    return Counter(rounded).most_common(1)[0][0]
+
+
+def _replace_technical_table(
+    doc: fitz.Document,
+    entries: list[TechnicalDataEntry],
+    *,
+    registered_fonts: set[str],
+) -> None:
+    page = doc[0]
+    slots = _technical_data_row_slots(page)
+    if not slots:
+        return
+    data_by_key = _technical_data_by_key(entries)
+    used_keys: set[str] = set()
+    for slot in slots:
+        page.add_redact_annot(slot.erase_rect, fill=None)
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0)
+
+    for slot in slots:
+        key = _normalize_technical_key(slot.label)
+        entry = data_by_key.get(key)
+        if entry is not None:
+            used_keys.add(key)
+        text, is_missing = _text_or_placeholder(entry.value if entry is not None else "")
+        _insert_wrapped_text(
+            page,
+            slot.value_rect,
+            text,
+            origin=slot.value_origin,
+            font_name=slot.value_font_name,
+            font_size=slot.value_font_size,
+            color=MISSING_VALUE_COLOR if is_missing else slot.value_color,
+            registered_fonts=registered_fonts,
+        )
+        page.draw_line(
+            (36.638, slot.row_bottom),
+            (slot.table_right, slot.row_bottom),
+            color=(0.13669031858444214, 0.12195010483264923, 0.1252918243408203),
+            width=0.25,
+            overlay=True,
+        )
+
+    extra_entries = [
+        entry
+        for entry in entries
+        if _normalize_technical_key(entry.label) not in used_keys
+        and _normalize_technical_key(entry.label) not in TECHNICAL_DATA_RESERVED_KEYS
+    ]
+    if not extra_entries:
+        return
+
+    row_top_offset = 0.5
+    row_step = _technical_data_row_step(slots)
+    row_height = max(1.0, row_step - row_top_offset)
+    region = _technical_data_region(page)
+    bottom_limit = (region[1] - 8.0) if region else page.rect.y1 - 72.0
+    y = slots[-1].row_bottom + row_top_offset
+    prototype = slots[-1]
+    remaining: list[TechnicalDataEntry] = []
+    for entry in extra_entries:
+        if y + row_height <= bottom_limit:
+            _draw_technical_data_row(
+                page,
+                entry.label,
+                entry.value,
+                fitz.Rect(38.0, y, prototype.table_right, y + row_height),
+                label_font_name=prototype.label_font_name,
+                value_font_name=prototype.value_font_name,
+                font_size=prototype.value_font_size,
+                label_color=prototype.label_color,
+                value_color=prototype.value_color,
+                table_right=prototype.table_right,
+                registered_fonts=registered_fonts,
+            )
+            y += row_step
+        else:
+            remaining.append(entry)
+
+    if remaining:
+        _insert_technical_continuation_page(doc, remaining, prototype, registered_fonts=registered_fonts)
+
+
+def _insert_technical_continuation_page(
+    doc: fitz.Document,
+    entries: list[TechnicalDataEntry],
+    prototype: TechnicalDataRowSlot,
+    *,
+    registered_fonts: set[str],
+) -> None:
+    source_page = doc[0]
+    page = doc.new_page(pno=1, width=source_page.rect.width, height=source_page.rect.height)
+    heading_font = "MyriadPro-Semibold" if MYRIAD_FONT_FILES["MyriadPro-Semibold"].exists() else "helv"
+    pdf_font_name, fontfile, _font_path = _register_pdf_font(page, heading_font, registered_fonts, required_text="TECHNICAL DATA")
+    page.insert_text((38.0, 58.0), "TECHNICAL DATA", fontsize=10.0, fontname=pdf_font_name, fontfile=fontfile, color=(0.237, 0.237, 0.237))
+    y = 78.0
+    row_height = 16.0
+    for entry in entries:
+        if y + row_height > page.rect.y1 - 58.0:
+            break
+        _draw_technical_data_row(
+            page,
+            entry.label,
+            entry.value,
+            fitz.Rect(38.0, y, prototype.table_right, y + row_height),
+            label_font_name=prototype.label_font_name,
+            value_font_name=prototype.value_font_name,
+            font_size=prototype.value_font_size,
+            label_color=prototype.label_color,
+            value_color=prototype.value_color,
+            table_right=prototype.table_right,
+            registered_fonts=registered_fonts,
+        )
+        y += row_height
+
+
+def _replace_exact_span_text(
+    page: fitz.Page,
+    span: TextSpan,
+    text: str,
+    *,
+    registered_fonts: set[str],
+    color: tuple[float, float, float] | None = None,
+) -> None:
+    rect = fitz.Rect(span.bbox)
+    _remove_white_placeholder_backgrounds(page, rect)
+    page.add_redact_annot(
+        fitz.Rect(rect.x0 - 1.0, rect.y0 - 1.0, rect.x1 + 1.0, rect.y1 + 1.0),
+        fill=None,
+    )
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0)
+    font_name, fontfile, _font_path = _register_pdf_font(page, span.font, registered_fonts, required_text=text)
+    page.insert_text(
+        span.origin,
+        text,
+        fontsize=span.size,
+        fontname=font_name,
+        fontfile=fontfile,
+        color=color or _int_color_to_rgb(span.color),
+    )
+
+
+def _is_white(color: tuple[float, ...] | None) -> bool:
+    return color is not None and len(color) >= 3 and all(component >= 0.98 for component in color[:3])
+
+
+def _remove_white_placeholder_backgrounds(page: fitz.Page, text_rect: fitz.Rect) -> None:
+    background_rects: list[fitz.Rect] = []
+    artifact_rects: list[fitz.Rect] = []
+    expanded_text_rect = fitz.Rect(text_rect.x0 - 1.0, text_rect.y0 - 1.0, text_rect.x1 + 1.0, text_rect.y1 + 1.0)
+    drawings = page.get_drawings()
+    for drawing in drawings:
+        rect = drawing.get("rect")
+        items = drawing.get("items") or []
+        fill = drawing.get("fill")
+        if rect is None or fill is None:
+            continue
+        drawing_rect = fitz.Rect(rect)
+        is_placeholder_background = (
+            _is_white(fill)
+            and items
+            and items[0][0] == "re"
+            and drawing_rect.width <= 350.0
+            and drawing_rect.height <= 45.0
+            and drawing_rect.intersects(text_rect)
+        )
+        is_placeholder_artifact = (
+            not _is_white(fill)
+            and drawing_rect.width <= 350.0
+            and drawing_rect.height <= 18.0
+            and drawing_rect.intersects(expanded_text_rect)
+        )
+        if is_placeholder_background:
+            background_rects.append(drawing_rect)
+        elif is_placeholder_artifact:
+            artifact_rects.append(drawing_rect)
+
+    _remove_matching_fill_commands(page, background_rects + artifact_rects)
+
+
+_NUMBER_RE = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)")
+_FILL_RECT_BLOCK_RE = re.compile(
+    r"q\b(?:(?!\bQ\b).){0,500}?"
+    r"(?P<x>[-+]?(?:\d+\.\d*|\.\d+|\d+))\s+"
+    r"(?P<y>[-+]?(?:\d+\.\d*|\.\d+|\d+))\s+"
+    r"(?P<w>[-+]?(?:\d+\.\d*|\.\d+|\d+))\s+"
+    r"(?P<h>[-+]?(?:\d+\.\d*|\.\d+|\d+))\s+re\s+"
+    r"(?:(?!\bQ\b).){0,250}?\b[Bf]\s*Q",
+    re.DOTALL,
+)
+_INK_BLOCK_RE = re.compile(r"/GOOG:INKIsInker\s+BMC\s+q\b.*?\bf\s+Q\s+EMC", re.DOTALL)
+
+
+def _remove_matching_fill_commands(page: fitz.Page, target_rects: list[fitz.Rect]) -> None:
+    if not target_rects:
+        return
+    doc = page.parent
+    page_height = float(page.rect.height)
+    targets = [fitz.Rect(rect) for rect in target_rects]
+    for xref in page.get_contents():
+        original = doc.xref_stream(xref)
+        try:
+            text = original.decode("latin1")
+        except UnicodeDecodeError:
+            continue
+        updated = _remove_matching_fill_rect_blocks(text, targets, page_height)
+        updated = _remove_matching_ink_blocks(updated, targets, page_height)
+        if updated != text:
+            doc.update_stream(xref, updated.encode("latin1"))
+
+
+def _remove_matching_fill_rect_blocks(content: str, target_rects: list[fitz.Rect], page_height: float) -> str:
+    def replace(match: re.Match[str]) -> str:
+        x = float(match.group("x"))
+        y = float(match.group("y"))
+        width = float(match.group("w"))
+        height = float(match.group("h"))
+        rect = _pdf_rect_to_page_rect(x, y, width, height, page_height)
+        if any(_rects_close(rect, target, tolerance=1.2) for target in target_rects):
+            return ""
+        return match.group(0)
+
+    return _FILL_RECT_BLOCK_RE.sub(replace, content)
+
+
+def _remove_matching_ink_blocks(content: str, target_rects: list[fitz.Rect], page_height: float) -> str:
+    def replace(match: re.Match[str]) -> str:
+        rect = _ink_block_page_rect(match.group(0), page_height)
+        if rect is not None and any(_rects_close(rect, target, tolerance=1.5) for target in target_rects):
+            return ""
+        return match.group(0)
+
+    return _INK_BLOCK_RE.sub(replace, content)
+
+
+def _pdf_rect_to_page_rect(x: float, y: float, width: float, height: float, page_height: float) -> fitz.Rect:
+    x0 = min(x, x + width)
+    x1 = max(x, x + width)
+    y0 = min(y, y + height)
+    y1 = max(y, y + height)
+    return fitz.Rect(x0, page_height - y1, x1, page_height - y0)
+
+
+def _rects_close(first: fitz.Rect, second: fitz.Rect, *, tolerance: float) -> bool:
+    return (
+        abs(first.x0 - second.x0) <= tolerance
+        and abs(first.y0 - second.y0) <= tolerance
+        and abs(first.x1 - second.x1) <= tolerance
+        and abs(first.y1 - second.y1) <= tolerance
+    )
+
+
+def _ink_block_page_rect(block: str, page_height: float) -> fitz.Rect | None:
+    match = re.search(r"/[A-Za-z0-9_.:-]+\s+gs\s+(?P<path>.*?)\s+f\s+Q", block, re.DOTALL)
+    if match is None:
+        return None
+    path = match.group("path")
+    tokens = re.findall(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)|re|m|l|c|h", path)
+    points: list[tuple[float, float]] = []
+    stack: list[float] = []
+    for token in tokens:
+        if _NUMBER_RE.fullmatch(token):
+            stack.append(float(token))
+            continue
+        if token in {"m", "l"} and len(stack) >= 2:
+            points.append((stack[-2], stack[-1]))
+        elif token == "c" and len(stack) >= 6:
+            points.extend([(stack[-6], stack[-5]), (stack[-4], stack[-3]), (stack[-2], stack[-1])])
+        elif token == "re" and len(stack) >= 4:
+            x, y, width, height = stack[-4], stack[-3], stack[-2], stack[-1]
+            x0 = min(x, x + width)
+            x1 = max(x, x + width)
+            y0 = min(y, y + height)
+            y1 = max(y, y + height)
+            points.extend([(x0, y0), (x1, y1)])
+        stack.clear()
+    if not points:
+        return None
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return fitz.Rect(min(xs), page_height - max(ys), max(xs), page_height - min(ys))
+
+
+def _replace_header_placeholders(
+    doc: fitz.Document,
+    entries: list[TechnicalDataEntry],
+    *,
+    registered_fonts: set[str],
+) -> dict[str, str]:
+    data_by_key = _technical_data_by_key(entries)
+    replacements: dict[str, str] = {}
+    for key, placeholder in (("antenna name", "ANTENNA NAME"), ("product id", "PRODUCT_ID_PLACEHOLDER")):
+        entry = data_by_key.get(key)
+        text, is_missing = _text_or_placeholder(entry.value if entry is not None else "")
+        replacements[key] = text
+        for page in doc:
+            spans = [span for span in _extract_page_spans(page) if span.text == placeholder]
+            for span in spans:
+                _replace_exact_span_text(
+                    page,
+                    span,
+                    text,
+                    registered_fonts=registered_fonts,
+                    color=MISSING_VALUE_COLOR if is_missing else None,
+                )
+    return replacements
+
+
+def _update_footer_page_numbers(
+    doc: fitz.Document,
+    antenna_name: str,
+    generated_at: datetime,
+    *,
+    registered_fonts: set[str],
+) -> None:
+    pattern = re.compile(r"^(\d+)/(\d+)\s+(.+?)\s+Rev\s+(.+)$")
+    total = doc.page_count
+    revision = generated_at.strftime("%m-%Y")
+    for page_index, page in enumerate(doc, start=1):
+        for span in _extract_page_spans(page):
+            match = pattern.match(span.text)
+            if not match:
+                continue
+            replacement = f"{page_index}/{total} {antenna_name} Rev {revision}"
+            _replace_exact_span_text(page, span, replacement, registered_fonts=registered_fonts)
+
+
+def _apply_technical_data(
+    doc: fitz.Document,
+    technical_data_workbook: Path,
+    generated_at: datetime,
+    *,
+    registered_fonts: set[str],
+) -> dict[str, str]:
+    entries = load_technical_data_workbook(technical_data_workbook)
+    header_values = _replace_header_placeholders(doc, entries, registered_fonts=registered_fonts)
+    _replace_technical_table(doc, entries, registered_fonts=registered_fonts)
+    antenna_name = header_values.get("antenna name") or TECHNICAL_DATA_PLACEHOLDER
+    _update_footer_page_numbers(doc, antenna_name, generated_at, registered_fonts=registered_fonts)
+    return {
+        "Antenna Name": header_values.get("antenna name", ""),
+        "Product ID": header_values.get("product id", ""),
+    }
+
+
 def _extract_page_spans(page: fitz.Page) -> list[TextSpan]:
     spans: list[TextSpan] = []
-    for block in page.get_text("dict").get("blocks", []):
+    for block in page.get_text("dict", flags=fitz.TEXTFLAGS_TEXT).get("blocks", []):
         for line in block.get("lines", []):
             for span in line.get("spans", []):
                 text = str(span.get("text", "")).strip()
@@ -305,11 +1169,40 @@ def _font_path_for_display_font(display_font: str) -> Path | None:
     return None
 
 
+def _font_supports_text(font: fitz.Font, text: str) -> bool:
+    if not text or not hasattr(font, "valid_codepoints"):
+        return True
+    valid_codepoints = set(font.valid_codepoints())
+    return all(char.isspace() or ord(char) in valid_codepoints for char in text)
+
+
+def _embedded_font_supports_text(page: fitz.Page, display_font: str, text: str) -> bool:
+    if not hasattr(page, "get_fonts") or not hasattr(page, "parent"):
+        return True
+    matched_font = False
+    for font in page.get_fonts(full=True):
+        xref = int(font[0])
+        base_font = str(font[3] or "")
+        if base_font != display_font and not base_font.endswith(f"+{display_font}"):
+            continue
+        matched_font = True
+        try:
+            _name, _ext, _font_type, font_buffer = page.parent.extract_font(xref)
+            if font_buffer and _font_supports_text(fitz.Font(fontbuffer=font_buffer), text):
+                return True
+        except Exception:
+            continue
+    return not matched_font
+
+
 @lru_cache(maxsize=None)
 def _measurement_font(font_name: str, font_path_text: str | None) -> fitz.Font:
     if font_path_text:
         return fitz.Font(fontfile=font_path_text)
-    return fitz.Font(fontname=font_name)
+    try:
+        return fitz.Font(fontname=font_name)
+    except Exception:
+        return fitz.Font(fontname="helv")
 
 
 def _int_color_to_rgb(color: int) -> tuple[float, float, float]:
@@ -351,8 +1244,101 @@ def _rgb_to_hex(color: tuple[float, float, float]) -> str:
     )
 
 
-def _find_replacement_slot(page: fitz.Page, label: str) -> ReplacementSlot:
-    spans = _extract_page_spans(page)
+def _normalize_template_label(value: object) -> str:
+    text = str(value or "").replace("\u200b", " ").replace("\xa0", " ").lower()
+    text = re.sub(r"[\u2010-\u2015\u2212]", "-", text)
+    text = re.sub(r"[^a-z0-9]+", " ", text).strip()
+    text = re.sub(r"\bbeam\s+width\b", "beamwidth", text)
+    return re.sub(r"\s+", " ", text)
+
+
+FIELD_LABEL_ALIAS_KEYS = {
+    _normalize_template_label(alias): label
+    for label, aliases in FIELD_LABEL_ALIASES.items()
+    for alias in aliases
+}
+
+
+def _infer_field_label_from_template_text(text: str) -> str | None:
+    key = _normalize_template_label(text)
+    if not key:
+        return None
+    if key in FIELD_LABEL_ALIAS_KEYS:
+        return FIELD_LABEL_ALIAS_KEYS[key]
+    if "beamwidth" in key:
+        if "azimuth" in key or "h plane" in key or "horizontal" in key:
+            return "Azimuth Beam Width -3 dB/-6dB"
+        if "elevation" in key or "e plane" in key or "vertical" in key:
+            return "Elevation Beam Width -3 dB/-6dB"
+    if "frequency" in key:
+        return "Frequency Range"
+    if key in {"gain", "nominal gain", "antenna gain"}:
+        return "Gain"
+    if "beam" in key and "efficiency" in key:
+        return "Beam Efficiency"
+    if "front" in key and "back" in key:
+        return "Front-to-Back Ratio"
+    if "vswr" in key:
+        return "VSWR"
+    if "polarization" in key or "polarisation" in key:
+        return "Polarization"
+    if "impedance" in key:
+        return "Impedance"
+    return None
+
+
+def _replacement_slot_with_label(slot: ReplacementSlot, label: str) -> ReplacementSlot:
+    return ReplacementSlot(
+        label=label,
+        erase_rect=slot.erase_rect,
+        origin=slot.origin,
+        max_width=slot.max_width,
+        font_name=slot.font_name,
+        font_size=slot.font_size,
+        color=slot.color,
+    )
+
+
+def _template_label_candidates(label: str, spans: list[TextSpan]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+
+    def add(candidate: str) -> None:
+        key = _normalize_template_label(candidate)
+        if key and key not in seen:
+            labels.append(candidate)
+            seen.add(key)
+
+    for alias in FIELD_LABEL_ALIASES.get(label, (label,)):
+        add(alias)
+    for span in spans:
+        if _infer_field_label_from_template_text(span.text) == label:
+            add(span.text)
+    return labels
+
+
+def _find_replacement_slots(page: fitz.Page, labels: list[str], spans: list[TextSpan]) -> dict[str, ReplacementSlot]:
+    slots: dict[str, ReplacementSlot] = {}
+    used_template_keys: set[str] = set()
+    for label in labels:
+        for template_label in _template_label_candidates(label, spans):
+            template_key = _normalize_template_label(template_label)
+            if template_key in used_template_keys:
+                continue
+            try:
+                slot = _find_replacement_slot(page, template_label, spans)
+            except ValueError:
+                continue
+            slots[label] = _replacement_slot_with_label(slot, label)
+            used_template_keys.add(template_key)
+            break
+    if not slots:
+        raise ValueError("Datasheet template page 1 does not contain any recognizable performance data labels.")
+    return slots
+
+
+def _find_replacement_slot(page: fitz.Page, label: str, spans: list[TextSpan] | None = None) -> ReplacementSlot:
+    spans = spans if spans is not None else _extract_page_spans(page)
     label_span = next((span for span in spans if span.text == label), None)
     if label_span is None:
         raise ValueError(f"Could not find datasheet label '{label}' in the template.")
@@ -407,6 +1393,116 @@ def _stem_without_suffix(stem: str, suffix: str) -> str:
     return stem[: -len(suffix)] if stem.endswith(suffix) else stem
 
 
+def _stem_without_any_suffix(stem: str, suffixes: tuple[str, ...]) -> str:
+    for suffix in suffixes:
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+    return stem
+
+
+def _pdf_timestamp(value: datetime) -> str:
+    local_value = value.astimezone()
+    offset = local_value.utcoffset()
+    if offset is None:
+        suffix = "Z"
+    else:
+        total_minutes = int(offset.total_seconds() // 60)
+        sign = "+" if total_minutes >= 0 else "-"
+        hours, minutes = divmod(abs(total_minutes), 60)
+        suffix = f"{sign}{hours:02d}'{minutes:02d}'"
+    return local_value.strftime(f"D:%Y%m%d%H%M%S{suffix}")
+
+
+def _xmp_timestamp(value: datetime) -> str:
+    return value.astimezone().isoformat(timespec="seconds")
+
+
+def _derive_datasheet_title(output: Path) -> str:
+    stem = _stem_without_any_suffix(output.stem, ("-datasheet", "_datasheet"))
+    base_name = re.sub(r"[_\-]+", " ", stem).strip() or output.stem
+    if base_name.lower().endswith(" datasheet"):
+        return base_name
+    return f"{base_name} Datasheet"
+
+
+def _merge_keywords(existing: str, *extra_values: str) -> str:
+    seen: set[str] = set()
+    merged: list[str] = []
+    for value in (existing, *extra_values):
+        for item in str(value or "").split(","):
+            keyword = item.strip()
+            lowered = keyword.lower()
+            if not keyword or lowered in seen:
+                continue
+            seen.add(lowered)
+            merged.append(keyword)
+    return ", ".join(merged)
+
+
+def _build_pdf_metadata(
+    template_metadata: dict[str, str],
+    output: Path,
+    now: datetime,
+    metadata_author: str | None = None,
+) -> dict[str, str]:
+    title = _derive_datasheet_title(output)
+    product_name = re.sub(r"\s+Datasheet$", "", title, flags=re.IGNORECASE).strip()
+    metadata = {key: str(template_metadata.get(key) or "") for key in PDF_METADATA_KEYS}
+    metadata.update(
+        {
+            "title": title,
+            "subject": title,
+            "keywords": _merge_keywords(metadata["keywords"], product_name, "datasheet"),
+            "creator": PDF_CREATOR,
+            "producer": PDF_PRODUCER,
+            "creationDate": metadata["creationDate"] or _pdf_timestamp(now),
+            "modDate": _pdf_timestamp(now),
+        }
+    )
+    if metadata_author is not None:
+        metadata["author"] = metadata_author
+    return metadata
+
+
+def _build_xmp_metadata(metadata: dict[str, str], created_at: datetime, modified_at: datetime) -> str:
+    title = xml_escape(metadata.get("title", ""))
+    author = xml_escape(metadata.get("author", ""))
+    subject = xml_escape(metadata.get("subject", ""))
+    keywords = xml_escape(metadata.get("keywords", ""))
+    creator = xml_escape(metadata.get("creator", ""))
+    producer = xml_escape(metadata.get("producer", ""))
+    creation_date = xml_escape(_xmp_timestamp(created_at))
+    mod_date = xml_escape(_xmp_timestamp(modified_at))
+    return (
+        '<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
+        '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+        '    <rdf:Description rdf:about=""\n'
+        '      xmlns:dc="http://purl.org/dc/elements/1.1/"\n'
+        '      xmlns:pdf="http://ns.adobe.com/pdf/1.3/"\n'
+        '      xmlns:xmp="http://ns.adobe.com/xap/1.0/">\n'
+        '      <dc:title><rdf:Alt><rdf:li xml:lang="x-default">'
+        f"{title}"
+        '</rdf:li></rdf:Alt></dc:title>\n'
+        '      <dc:creator><rdf:Seq><rdf:li>'
+        f"{author}"
+        '</rdf:li></rdf:Seq></dc:creator>\n'
+        '      <dc:subject><rdf:Bag><rdf:li>'
+        f"{subject}"
+        '</rdf:li></rdf:Bag></dc:subject>\n'
+        f"      <pdf:Keywords>{keywords}</pdf:Keywords>\n"
+        f"      <pdf:Producer>{producer}</pdf:Producer>\n"
+        f"      <xmp:CreatorTool>{creator}</xmp:CreatorTool>\n"
+        f"      <xmp:CreateDate>{creation_date}</xmp:CreateDate>\n"
+        f"      <xmp:ModifyDate>{mod_date}</xmp:ModifyDate>\n"
+        f"      <xmp:MetadataDate>{mod_date}</xmp:MetadataDate>\n"
+        "    </rdf:Description>\n"
+        "  </rdf:RDF>\n"
+        "</x:xmpmeta>\n"
+        '<?xpacket end="w"?>'
+    )
+
+
 def _find_plot_asset(output: Path, extract_workbook: Path, suffix: str) -> Path:
     candidate_dirs: list[Path] = []
     for path in [output.parent.resolve(), extract_workbook.parent.resolve()]:
@@ -415,27 +1511,38 @@ def _find_plot_asset(output: Path, extract_workbook: Path, suffix: str) -> Path:
 
     candidate_prefixes: list[str] = []
     for stem in [
-        _stem_without_suffix(extract_workbook.stem, "_extracted_data"),
-        _stem_without_suffix(output.stem, "_datasheet"),
+        _stem_without_any_suffix(extract_workbook.stem, ("-extracted-data", "_extracted_data")),
+        _stem_without_any_suffix(output.stem, ("-datasheet", "_datasheet")),
         extract_workbook.stem,
         output.stem,
     ]:
         if stem and stem not in candidate_prefixes:
             candidate_prefixes.append(stem)
 
+    suffixes = [suffix]
+    if suffix.startswith("-"):
+        suffixes.append(suffix.replace("-", "_"))
+    elif suffix.startswith("_"):
+        suffixes.append(suffix.replace("_", "-"))
+
     checked: list[Path] = []
     for directory in candidate_dirs:
         for prefix in candidate_prefixes:
-            candidate = directory / f"{prefix}{suffix}"
-            checked.append(candidate)
-            if candidate.exists():
-                return candidate
+            for candidate_suffix in suffixes:
+                candidate = directory / f"{prefix}{candidate_suffix}"
+                checked.append(candidate)
+                if candidate.exists():
+                    return candidate
     checked_list = ", ".join(str(path) for path in checked)
     raise ValueError(f"Missing required plot asset '{suffix}'. Checked: {checked_list}")
 
 
 def _legend_asset_path(path: Path) -> Path:
-    return path.with_name(f"{path.stem}_legend{path.suffix}")
+    preferred = path.with_name(f"{path.stem}-legend{path.suffix}")
+    legacy = path.with_name(f"{path.stem}_legend{path.suffix}")
+    if preferred.exists() or not legacy.exists():
+        return preferred
+    return legacy
 
 
 def _extract_frequency_ghz(text: str) -> float | None:
@@ -446,7 +1553,7 @@ def _extract_frequency_ghz(text: str) -> float | None:
 
 
 def _parse_frequency_from_polar_asset(path: Path, plane: str) -> float | None:
-    pattern = rf"_polar_{re.escape(plane)}_(\d+(?:\.\d+)?)_GHz\.svg$"
+    pattern = rf"[-_]polar[-_]{re.escape(plane)}[-_](\d+(?:\.\d+)?)[-_]GHz\.svg$"
     match = re.search(pattern, path.name, re.IGNORECASE)
     if not match:
         return None
@@ -464,8 +1571,8 @@ def _candidate_dirs(output: Path, extract_workbook: Path) -> list[Path]:
 def _candidate_prefixes(output: Path, extract_workbook: Path) -> list[str]:
     candidate_prefixes: list[str] = []
     for stem in [
-        _stem_without_suffix(extract_workbook.stem, "_extracted_data"),
-        _stem_without_suffix(output.stem, "_datasheet"),
+        _stem_without_any_suffix(extract_workbook.stem, ("-extracted-data", "_extracted_data")),
+        _stem_without_any_suffix(output.stem, ("-datasheet", "_datasheet")),
         extract_workbook.stem,
         output.stem,
     ]:
@@ -474,10 +1581,11 @@ def _candidate_prefixes(output: Path, extract_workbook: Path) -> list[str]:
     return candidate_prefixes
 
 
-def _find_template_polar_frequency(page: fitz.Page) -> float | None:
+def _find_template_polar_frequency(page: fitz.Page, spans: list[TextSpan] | None = None) -> float | None:
+    page_spans = spans if spans is not None else _extract_page_spans(page)
     values = [
         _extract_frequency_ghz(span.text)
-        for span in _extract_page_spans(page)
+        for span in page_spans
         if "Port Pattern" in span.text
     ]
     values = [value for value in values if value is not None]
@@ -487,26 +1595,34 @@ def _find_template_polar_frequency(page: fitz.Page) -> float | None:
     return float(Counter(rounded).most_common(1)[0][0])
 
 
-def _find_polar_plot_assets(page: fitz.Page, output: Path, extract_workbook: Path) -> tuple[Path, Path]:
+def _find_polar_plot_assets(
+    page: fitz.Page,
+    output: Path,
+    extract_workbook: Path,
+    spans: list[TextSpan] | None = None,
+) -> tuple[Path, Path]:
     plane_assets: dict[str, dict[float, Path]] = {"azimuth": {}, "elevation": {}}
     checked: list[Path] = []
     for directory in _candidate_dirs(output, extract_workbook):
         for prefix in _candidate_prefixes(output, extract_workbook):
             for plane in plane_assets:
                 base_dir = directory / "polar_single" / plane
-                pattern = f"{prefix}_polar_{plane}_*_GHz.svg"
-                for candidate in sorted(base_dir.glob(pattern)):
-                    checked.append(candidate)
-                    frequency = _parse_frequency_from_polar_asset(candidate, plane)
-                    if frequency is not None:
-                        plane_assets[plane].setdefault(frequency, candidate)
+                for pattern in (
+                    f"{prefix}-polar-{plane}-*-GHz.svg",
+                    f"{prefix}_polar_{plane}_*_GHz.svg",
+                ):
+                    for candidate in sorted(base_dir.glob(pattern)):
+                        checked.append(candidate)
+                        frequency = _parse_frequency_from_polar_asset(candidate, plane)
+                        if frequency is not None:
+                            plane_assets[plane].setdefault(frequency, candidate)
 
     common_frequencies = sorted(set(plane_assets["azimuth"]).intersection(plane_assets["elevation"]))
     if not common_frequencies:
         checked_list = ", ".join(str(path) for path in checked) if checked else "none"
         raise ValueError(f"Missing required polar plot assets. Checked: {checked_list}")
 
-    template_frequency = _find_template_polar_frequency(page)
+    template_frequency = _find_template_polar_frequency(page, spans)
     if template_frequency is None:
         template_frequency = sum(common_frequencies) / len(common_frequencies)
     selected_frequency = min(common_frequencies, key=lambda value: (abs(value - template_frequency), value))
@@ -670,11 +1786,12 @@ def _build_chart_replacements(page: fitz.Page, output: Path, extract_workbook: P
 
     ordered_slots = sorted(slots, key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
     replacements: list[ChartReplacement] = [
-        ChartReplacement("gain", fitz.Rect(ordered_slots[0].rect), _find_plot_asset(output, extract_workbook, "_gain.svg")),
-        ChartReplacement("beamwidth", fitz.Rect(ordered_slots[1].rect), _find_plot_asset(output, extract_workbook, "_beamwidth.svg")),
+        ChartReplacement("gain", fitz.Rect(ordered_slots[0].rect), _find_plot_asset(output, extract_workbook, "-gain.svg")),
+        ChartReplacement("beamwidth", fitz.Rect(ordered_slots[1].rect), _find_plot_asset(output, extract_workbook, "-beamwidth.svg")),
     ]
+    spans = _extract_page_spans(page)
     if len(ordered_slots) >= 4:
-        azimuth_asset, elevation_asset = _find_polar_plot_assets(page, output, extract_workbook)
+        azimuth_asset, elevation_asset = _find_polar_plot_assets(page, output, extract_workbook, spans)
         polar_slots = sorted(ordered_slots[2:4], key=lambda slot: (slot.rect.x0, slot.rect.y0, slot.rect.y1, slot.rect.x1))
         replacements.extend(
             [
@@ -684,7 +1801,6 @@ def _build_chart_replacements(page: fitz.Page, output: Path, extract_workbook: P
         )
 
     index_by_kind = {replacement.kind: idx for idx, replacement in enumerate(replacements)}
-    spans = _extract_page_spans(page)
     polar_centers = {
         "azimuth": _center_y(replacements[index_by_kind["azimuth"]].rect) if "azimuth" in index_by_kind else None,
         "elevation": _center_y(replacements[index_by_kind["elevation"]].rect) if "elevation" in index_by_kind else None,
@@ -822,7 +1938,9 @@ def _replace_chart_images(doc: fitz.Document, output: Path, extract_workbook: Pa
     if doc.page_count < 2:
         return
 
-    page = doc[1]
+    page = next((candidate for candidate in doc[1:] if len(_collect_chart_slots(candidate)) >= 2), None)
+    if page is None:
+        raise ValueError("Datasheet template does not contain the expected chart image slots.")
     replacements = _build_chart_replacements(page, output, extract_workbook)
     for replacement in replacements:
         page.add_redact_annot(replacement.rect, fill=(1.0, 1.0, 1.0))
@@ -836,45 +1954,57 @@ def _replace_chart_images(doc: fitz.Document, output: Path, extract_workbook: Pa
             _place_svg_as_vector(page, _legend_target_rect(replacement, shared_side_scale), replacement.legend_asset_path)
 
 
-def build_datasheet_pdf(output: Path, template: Path, extract_workbook: Path) -> dict[str, str]:
+def build_datasheet_pdf(
+    output: Path,
+    template: Path,
+    extract_workbook: Path,
+    technical_data_workbook: Path | None = None,
+    metadata_author: str | None = None,
+) -> dict[str, str]:
+    total_steps = 4 if technical_data_workbook else 3
+    emit_progress("datasheet", 1, total_steps, f"Loading {extract_workbook.name}")
     replacements = build_replacements_from_workbook(extract_workbook)
     template = template.resolve()
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
 
     with fitz.open(template) as doc:
+        now = datetime.now().astimezone()
+        output_metadata = _build_pdf_metadata(doc.metadata, output, now, metadata_author=metadata_author)
         page = doc[0]
-        slots = {label: _find_replacement_slot(page, label) for label in FIELD_LABELS}
+        page_spans = _extract_page_spans(page)
+        slots = _find_replacement_slots(page, FIELD_LABELS, page_spans)
         registered_fonts: set[str] = set()
         for slot in slots.values():
-            page.add_redact_annot(slot.erase_rect, fill=(1.0, 1.0, 1.0))
+            page.add_redact_annot(slot.erase_rect, fill=None)
         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
         for label in FIELD_LABELS:
+            if label not in slots:
+                continue
             slot = slots[label]
             text = replacements[label]
-            font_path = _font_path_for_display_font(slot.font_name)
-            pdf_font_name = slot.font_name
-            fontfile = None
-            if font_path is not None:
-                fontfile = str(font_path)
-                if pdf_font_name not in registered_fonts:
-                    page.insert_font(fontname=pdf_font_name, fontfile=fontfile)
-                    registered_fonts.add(pdf_font_name)
-            else:
-                pdf_font_name = _resolve_font_name(page, slot.font_name)
-            fontsize = _fit_font_size(text, slot, font_path)
-            result = page.insert_text(
-                slot.origin,
-                text,
-                fontsize=fontsize,
-                fontname=pdf_font_name,
-                fontfile=fontfile,
-                color=slot.color,
-            )
-            if result <= 0:
-                raise ValueError(f"Replacement text for '{label}' could not be inserted.")
+            _insert_replacement_slot_text(page, slot, text, registered_fonts=registered_fonts)
 
+        next_step = 2
+        if technical_data_workbook:
+            emit_progress("datasheet", next_step, total_steps, f"Loading {technical_data_workbook.name}")
+            replacements.update(
+                _apply_technical_data(
+                    doc,
+                    technical_data_workbook,
+                    now,
+                    registered_fonts=registered_fonts,
+                )
+            )
+            next_step += 1
+
+        _redraw_split_table_separators(doc[0])
+        emit_progress("datasheet", next_step, total_steps, "Embedding chart assets")
         _replace_chart_images(doc, output, extract_workbook)
+        doc.set_metadata(output_metadata)
+        if hasattr(doc, "set_xml_metadata"):
+            doc.set_xml_metadata(_build_xmp_metadata(output_metadata, now, now))
+        emit_progress("datasheet", total_steps, total_steps, f"Saving {output.name}")
         doc.save(output, garbage=3, deflate=True)
 
     return replacements
@@ -885,6 +2015,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("output", type=Path, help="Output PDF path.")
     parser.add_argument("--template", type=Path, required=True, help="Template PDF path.")
     parser.add_argument("--extract-workbook", type=Path, required=True, help="Extracted workbook path.")
+    parser.add_argument("--technical-data-workbook", type=Path, help="Technical Data Excel workbook path.")
+    parser.add_argument("--metadata-author", help="Author value to write into the PDF metadata.")
     return parser.parse_args()
 
 
@@ -895,6 +2027,8 @@ def main() -> int:
             output=args.output,
             template=args.template,
             extract_workbook=args.extract_workbook,
+            technical_data_workbook=args.technical_data_workbook,
+            metadata_author=args.metadata_author,
         )
     except Exception as exc:
         print(f"ERROR: {exc}")

@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
 
-import antenna_toolkit_qt as qt_module
+import studio_support as qt_module
 import antenna_toolkit_studio as studio_module
 from antenna_toolkit_studio import ModernMainWindow, StepperField
 from project_store import ProjectRecord, ProjectStore
@@ -27,7 +27,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.window = ModernMainWindow()
         self.window.project_store = ProjectStore(Path(self.temp_dir.name))
-        self.window.store.set("ui_presets", {})
+        self.window.preset_store = qt_module.PresetFileStore(Path(self.temp_dir.name) / "Presets")
+        self.window.store.delete("ui_presets")
         self.window.store.set("active_preset", "")
         self.window.global_presets = {}
         self.window.global_active_preset = ""
@@ -78,7 +79,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assertTrue(self.window.has_unsaved_project_changes())
-        self.assertIn("Preset A", self.window.store.get("ui_presets", {}))
+        self.assertIn("Preset A", self.window.preset_store.load_presets())
         loaded_before_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_before_save.presets, {})
         self.assertEqual(loaded_before_save.active_preset, "")
@@ -95,11 +96,32 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.assertFalse(self.window.has_unsaved_project_changes())
 
+        self.window.cartesian_grid_line_width.setValue(1.4)
+        self.window.polar_grid_line_width.setValue(1.1)
+        self.window.cartesian_line_width.setValue(3.4)
+        self.window.polar_line_width.setValue(2.8)
+        self.window.cartesian_font_size.setValue(12.5)
+        self.window.polar_font_size.setValue(11.5)
+        self.window.cartesian_legend_font_size.setValue(14.0)
+        self.window.polar_legend_font_size.setValue(13.0)
+        self.window.pdf_metadata_author.setText("Custom Datasheet Author")
+        self.app.processEvents()
+
         self.window.save_preset()
         self.app.processEvents()
 
         self.assertFalse(self.window.has_unsaved_project_changes())
-        self.assertEqual(self.window.store.get("ui_presets", {})["Preset A"]["smooth"], self.window.beam_smooth.value())
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["smooth"], self.window.beam_smooth.value())
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_grid_line_width"], 1.4)
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_grid_line_width"], 1.1)
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_line_width"], 3.4)
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_line_width"], 2.8)
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_font_size"], 12.5)
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_font_size"], 11.5)
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_legend_font_size"], 14.0)
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_legend_font_size"], 13.0)
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["datasheet_template"], "Datasheet.pdf")
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["pdf_metadata_author"], "Custom Datasheet Author")
         loaded_before_second_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_before_second_save.presets, {})
         self.assertEqual(loaded_before_second_save.settings, {})
@@ -111,6 +133,43 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(loaded_after_second_save.presets, {})
         self.assertEqual(loaded_after_second_save.active_preset, "Preset A")
         self.assertEqual(loaded_after_second_save.settings, {})
+
+    def test_document_tab_contains_preset_backed_author_field(self) -> None:
+        tabs = [self.window.workflow_tabs.tabText(index) for index in range(self.window.workflow_tabs.count())]
+
+        self.assertEqual(tabs, ["Inputs", "Processing", "Style", "Document", "Run"])
+        self.assertGreaterEqual(self.window.datasheet_template_combo.findData("Datasheet.pdf"), 0)
+        self.assertEqual(self.window.collect_preset_values()["datasheet_template"], "Datasheet.pdf")
+        self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "RF elements")
+        self.window.pdf_metadata_author.setText("Preset Author")
+        self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "Preset Author")
+
+    def test_datasheet_template_selection_is_preset_backed_and_marks_snapshot_stale(self) -> None:
+        default_template = Path(self.temp_dir.name) / "Datasheet.pdf"
+        alternate_template = Path(self.temp_dir.name) / "Alternate Style.pdf"
+        default_template.write_text("default", encoding="utf-8")
+        alternate_template.write_text("alternate", encoding="utf-8")
+        options = [
+            ("Datasheet.pdf", default_template),
+            ("Alternate Style.pdf", alternate_template),
+        ]
+        with mock.patch.object(self.window, "_datasheet_template_options", return_value=options):
+            self.window.refresh_datasheet_template_options("Datasheet.pdf")
+            initial_snapshot = self.window._current_stage_snapshot("datasheet")
+            self.window.refresh_datasheet_template_options("Alternate Style.pdf")
+            changed_snapshot = self.window._current_stage_snapshot("datasheet")
+
+        self.assertEqual(self.window.collect_preset_values()["datasheet_template"], "Alternate Style.pdf")
+        self.assertNotEqual(initial_snapshot["settings"]["datasheet_template"], changed_snapshot["settings"]["datasheet_template"])
+        self.assertNotEqual(initial_snapshot["template_pdf"]["path"], changed_snapshot["template_pdf"]["path"])
+
+    def test_missing_datasheet_template_is_reported(self) -> None:
+        self.window.apply_preset_values({"datasheet_template": "Missing Style.pdf"})
+        self.app.processEvents()
+
+        messages = self.window._validation_messages()
+
+        self.assertTrue(any("Selected datasheet template is missing" in message for message in messages))
 
     def test_global_presets_remain_available_without_or_across_projects(self) -> None:
         self.window.global_presets["Preset A"] = self.window.collect_preset_values()
@@ -247,8 +306,16 @@ class StudioDirtyStateTests(unittest.TestCase):
             state_path = qt_module.resolve_state_file(".nova_qt_studio_state.json", legacy_path)
 
         self.assertTrue(state_path.exists())
-        payload = json.loads(state_path.read_text(encoding="utf-8"))
-        self.assertEqual(payload["ui_presets"]["Preset A"]["smooth"], 7)
+        store = qt_module.Persist(state_path)
+        with mock.patch.object(qt_module, "THIS_DIR", Path(temp_root.name)):
+            preset_store = qt_module.PresetFileStore(
+                qt_module.preset_storage_dir(state_path),
+                qt_module.legacy_preset_storage_dirs(state_path),
+            )
+            migrated = preset_store.migrate_from_state(store)
+
+        self.assertEqual(migrated["Preset A"]["smooth"], 7)
+        self.assertEqual(store.get("ui_presets", {}), {})
 
         temp_root.cleanup()
         appdata_root.cleanup()
@@ -300,41 +367,212 @@ class StudioDirtyStateTests(unittest.TestCase):
     def test_pipeline_buttons_show_only_full_and_cancel(self) -> None:
         labels = [button.text() for button in self.window.hero_actions._buttons]
 
-        self.assertEqual(labels, ["Run Full Pipeline", "Cancel Run", "Manual runs"])
-        run_actions = [action.text() for action in self.window.run_more_menu.actions()]
-        self.assertEqual(
-            run_actions,
-            [
-                "Workbook only",
-                "Extract data",
-                "Generate datasheet PDF",
-                "Plots only",
-                "VSWR only",
-            ],
-        )
+        self.assertEqual(labels, ["Run Full Pipeline", "Clear Generated Files"])
+
+    def test_pipeline_stage_list_gates_actions_by_output_state(self) -> None:
+        self.assertEqual(set(self.window.stage_open_buttons.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
+        self.assertEqual(set(self.window.stage_timestamp_labels.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
+        self.assertEqual(set(self.window.stage_chip_labels.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
+        self.assertEqual(set(self.window.stage_more_buttons.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
+
+        with (
+            mock.patch.object(self.window, "_stage_output_exists", return_value=False),
+            mock.patch.object(self.window, "_stage_output_any_exists", return_value=False),
+            mock.patch.object(self.window, "_stage_is_applicable", return_value=True),
+        ):
+            self.window.refresh_derived_paths()
+            self.app.processEvents()
+            self.assertTrue(all(button.isHidden() for button in self.window.stage_open_buttons.values()))
+            self.assertTrue(all(button.isEnabled() for button in self.window.stage_rerun_buttons.values()))
+            self.assertTrue(all(not button.isHidden() for button in self.window.stage_rerun_buttons.values()))
+            self.assertTrue(all(not button.isHidden() for button in self.window.stage_more_buttons.values()))
+            self.assertTrue(all(not button.isEnabled() for button in self.window.stage_more_buttons.values()))
+            self.assertTrue(all(not action.isEnabled() for action in self.window.stage_reveal_actions.values()))
+            self.assertTrue(all(not action.isEnabled() for action in self.window.stage_delete_actions.values()))
+
+        with (
+            mock.patch.object(self.window, "_stage_output_exists", side_effect=lambda stage_key: stage_key == "beam"),
+            mock.patch.object(self.window, "_stage_output_any_exists", side_effect=lambda stage_key: stage_key == "beam"),
+            mock.patch.object(self.window, "_stage_is_applicable", return_value=True),
+        ):
+            self.window.refresh_derived_paths()
+            self.app.processEvents()
+            self.assertFalse(self.window.stage_open_buttons["beam"].isHidden())
+            self.assertTrue(self.window.stage_open_buttons["beam"].isEnabled())
+            self.assertTrue(self.window.stage_more_buttons["beam"].isEnabled())
+            self.assertTrue(self.window.stage_reveal_actions["beam"].isEnabled())
+            self.assertTrue(self.window.stage_delete_actions["beam"].isEnabled())
+            self.assertTrue(self.window.stage_open_buttons["extract"].isHidden())
+            self.assertFalse(self.window.stage_more_buttons["extract"].isEnabled())
+            self.assertFalse(self.window.stage_reveal_actions["extract"].isEnabled())
+            self.assertFalse(self.window.stage_delete_actions["extract"].isEnabled())
+            self.assertTrue(self.window.stage_open_buttons["datasheet"].isHidden())
+            self.assertTrue(self.window.stage_open_buttons["plot"].isHidden())
+            self.assertTrue(self.window.stage_open_buttons["vswr"].isHidden())
+
+        with (
+            mock.patch.object(self.window, "_stage_output_exists", return_value=False),
+            mock.patch.object(self.window, "_stage_output_any_exists", return_value=False),
+            mock.patch.object(self.window, "_stage_is_applicable", side_effect=lambda stage_key: stage_key != "vswr"),
+        ):
+            self.window.refresh_derived_paths()
+            self.app.processEvents()
+            self.assertTrue(self.window.stage_rerun_buttons["vswr"].isHidden())
+            self.assertTrue(self.window.stage_more_buttons["vswr"].isHidden())
+            self.assertEqual(self.window.stage_status_labels["vswr"].text(), "Not configured for this project.")
+            self.assertEqual(self.window.stage_timestamp_labels["vswr"].text(), "Generated: not applicable")
+            self.assertEqual(self.window.stage_chip_labels["vswr"].text(), "Off")
 
     def test_run_full_queues_datasheet_stage(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "sample.ffs"
         s2p_path = Path(self.temp_dir.name) / "sample.s2p"
+        technical_data_path = Path(self.temp_dir.name) / "technical.xlsx"
         ffs_path.write_text("ffs", encoding="utf-8")
         s2p_path.write_text("s2p", encoding="utf-8")
+        technical_data_path.write_text("xlsx", encoding="utf-8")
         self.window._add_ffs_files([str(ffs_path)])
         self.window._set_touchstone(str(s2p_path))
+        self.window._set_technical_data(str(technical_data_path))
+        self.window.pdf_metadata_author.setText("Pipeline Author")
         self.app.processEvents()
 
         queued: list[str] = []
+        queued_args: dict[str, list[str]] = {}
 
         with (
             mock.patch.object(self.window, "_save_project_if_dirty"),
-            mock.patch.object(self.window, "_enqueue_stage", side_effect=lambda stage_key, args: queued.append(stage_key)),
+            mock.patch.object(
+                self.window,
+                "_enqueue_stage",
+                side_effect=lambda stage_key, args: (queued.append(stage_key), queued_args.setdefault(stage_key, args)),
+            ),
         ):
             self.window.run_full()
 
-        self.assertEqual(queued, ["beam", "extract", "plot", "datasheet", "vswr"])
+        self.assertEqual(queued, ["beam", "extract", "plot", "vswr", "datasheet"])
+        self.assertIn("--template", queued_args["datasheet"])
+        self.assertEqual(Path(queued_args["datasheet"][queued_args["datasheet"].index("--template") + 1]).name, "Datasheet.pdf")
+        self.assertIn("--metadata-author", queued_args["datasheet"])
+        self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--metadata-author") + 1], "Pipeline Author")
+
+    def test_running_progress_updates_summary_and_stage_rows(self) -> None:
+        with mock.patch.object(self.window.proc, "enqueue"):
+            self.window._enqueue_stage("beam", ["python", "beamwidth_xlsx.py"])
+            self.window._enqueue_stage("extract", ["python", "extract_data_xlsx.py"])
+
+        self.window.on_proc_step_started(["beamwidth_xlsx.py"], "python beamwidth_xlsx.py")
+        self.window.on_proc_progress(
+            {"stage": "beam", "current": 2, "total": 5, "label": "Processing sample.ffs"}
+        )
+        self.app.processEvents()
+
+        self.assertEqual(self.window.stage_status_labels["beam"].text(), "Running (2/5 | Processing sample.ffs)")
+        self.assertEqual(self.window.stage_timestamp_labels["beam"].text(), "Generated: in progress")
+        self.assertEqual(self.window.stage_chip_labels["beam"].text(), "Running")
+        self.assertEqual(self.window.busy.maximum(), 100)
+        self.assertEqual(self.window.busy.value(), 20)
+        self.assertFalse(self.window.btn_cancel.isHidden())
+        self.assertFalse(self.window.readiness_action.isVisible())
+
+    def test_stage_chip_styles_use_distinct_semantic_colors(self) -> None:
+        ready_style = self.window._stage_chip_style("ready")
+        running_style = self.window._stage_chip_style("running")
+        failed_style = self.window._stage_chip_style("failed")
+        muted_style = self.window._stage_chip_style("muted")
+
+        self.assertIn("rgba(47, 158, 91", ready_style)
+        self.assertIn("rgba(47, 128, 237", running_style)
+        self.assertIn("rgba(214, 69, 69", failed_style)
+        self.assertIn("rgba(102, 117, 138", muted_style)
+        self.assertNotEqual(ready_style, running_style)
+
+    def test_delete_all_outputs_action_only_clears_generated_artifacts(self) -> None:
+        beam_output = self.window.deduced_beam_output()
+        extract_output = self.window.deduced_extract_output()
+        datasheet_output = self.window.deduced_datasheet_output()
+        vswr_output = self.window.deduced_vswr_output()
+        project_dir = self.window.project_results_dir()
+        project_file = self.window.current_project().project_file(Path(self.temp_dir.name))
+        ant_output = project_dir / "ant_files" / f"{beam_output.stem}-5_8GHz.ant"
+        polar_combined_output = project_dir / "polar_combined" / f"{beam_output.stem}-polar-5_8ghz-combined.svg"
+        polar_combined_legend = project_dir / "polar_combined" / f"{beam_output.stem}-polar-5_8ghz-combined-legend.svg"
+        polar_az_output = project_dir / "polar_single" / "azimuth" / f"{beam_output.stem}-polar-azimuth-5_8ghz.svg"
+        polar_el_output = project_dir / "polar_single" / "elevation" / f"{beam_output.stem}-polar-elevation-5_8ghz.svg"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        for path in (
+            beam_output,
+            extract_output,
+            datasheet_output,
+            vswr_output,
+            vswr_output.with_name(f"{vswr_output.stem}-legend{vswr_output.suffix}"),
+            project_dir / f"{beam_output.stem}-gain.svg",
+            project_dir / f"{beam_output.stem}-gain-legend.svg",
+            project_dir / f"{beam_output.stem}-beamwidth.svg",
+            project_dir / f"{beam_output.stem}-beamwidth-legend.svg",
+            project_dir / f"{beam_output.stem}-beam-efficiency.svg",
+            project_dir / f"{beam_output.stem}-beam-efficiency-legend.svg",
+            ant_output,
+            polar_combined_output,
+            polar_combined_legend,
+            polar_az_output,
+            polar_el_output,
+        ):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("generated", encoding="utf-8")
+        untouched = project_dir / "notes.txt"
+        untouched.write_text("keep", encoding="utf-8")
+
+        self.window.refresh_derived_paths()
+        self.app.processEvents()
+        self.assertTrue(self.window.project_delete_outputs_action.isEnabled())
+        self.assertTrue(self.window.btn_clear_outputs.isEnabled())
+
+        with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Yes):
+            self.window.delete_all_outputs()
+        self.app.processEvents()
+
+        self.assertFalse(beam_output.exists())
+        self.assertFalse(extract_output.exists())
+        self.assertFalse(datasheet_output.exists())
+        self.assertFalse(vswr_output.exists())
+        self.assertFalse(ant_output.exists())
+        self.assertFalse(polar_combined_output.exists())
+        self.assertFalse(polar_combined_legend.exists())
+        self.assertFalse(polar_az_output.exists())
+        self.assertFalse(polar_el_output.exists())
+        self.assertFalse((project_dir / "ant_files").exists())
+        self.assertFalse((project_dir / "polar_combined").exists())
+        self.assertFalse((project_dir / "polar_single").exists())
+        self.assertTrue(project_file.exists())
+        self.assertTrue(untouched.exists())
+        self.assertEqual(self.window._stage_state("beam").get("status"), "waiting")
+        self.assertFalse(self.window.project_delete_outputs_action.isEnabled())
+        self.assertFalse(self.window.btn_clear_outputs.isEnabled())
+
+    def test_cancel_run_clears_live_progress(self) -> None:
+        with mock.patch.object(self.window.proc, "enqueue"):
+            self.window._enqueue_stage("beam", ["python", "beamwidth_xlsx.py"])
+
+        self.window.proc.running_cmd = ["python", "beamwidth_xlsx.py"]
+        self.window.on_proc_step_started(["beamwidth_xlsx.py"], "python beamwidth_xlsx.py")
+        self.window.on_proc_progress(
+            {"stage": "beam", "current": 1, "total": 2, "label": "Processing sample.ffs"}
+        )
+
+        with mock.patch.object(self.window.proc, "stop"):
+            self.window.cancel_run()
+        self.app.processEvents()
+
+        self.assertEqual(self.window._live_run_total_stages, 0)
+        self.assertEqual(self.window._live_run_completed_stages, 0)
+        self.assertEqual(self.window._stage_state("beam").get("status"), "cancelled")
+        self.assertNotIn("running", self.window.stage_status_labels["beam"].text().lower())
+        self.assertTrue(self.window.btn_cancel.isHidden())
 
     def test_create_project_starts_blank_until_user_saves_inputs(self) -> None:
         self.window._add_ffs_files(["Input data/a.ffs"])
         self.window._set_touchstone("Input data/a.s2p")
+        self.window._set_technical_data("Input data/tech.xlsx")
         self.window.beam_smooth.setValue(11)
         self.window.save_project_changes()
         self.app.processEvents()
@@ -351,8 +589,10 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.active_project_slug, "Fresh_Project")
         self.assertEqual(self.window.ffs_list.count(), 0)
         self.assertEqual(self.window.s2p_field.text(), "")
+        self.assertEqual(self.window.technical_data_field.text(), "")
         self.assertEqual(loaded.ffs_items, [])
         self.assertEqual(loaded.touchstone_file, "")
+        self.assertEqual(loaded.technical_data_file, "")
         self.assertEqual(loaded.presets, {})
         self.assertEqual(loaded.active_preset, "")
         self.assertEqual(loaded.settings, {})
@@ -360,6 +600,7 @@ class StudioDirtyStateTests(unittest.TestCase):
     def test_edit_project_renames_project_and_keeps_saved_inputs(self) -> None:
         self.window._add_ffs_files(["Input data/a.ffs"])
         self.window._set_touchstone("Input data/a.s2p")
+        self.window._set_technical_data("Input data/tech.xlsx")
         self.window.save_project_changes()
         project_dir = self.window.project_store.projects_dir / self.project.slug
         (project_dir / "dirty_project.xlsx").write_text("workbook", encoding="utf-8")
@@ -377,6 +618,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.active_project_slug, "Renamed_Project")
         self.assertEqual(loaded.ffs_items, [{"path": "Input data/a.ffs", "enabled": True}])
         self.assertEqual(loaded.touchstone_file, "Input data/a.s2p")
+        self.assertEqual(loaded.technical_data_file, "Input data/tech.xlsx")
         self.assertTrue((self.window.project_store.projects_dir / "Renamed_Project" / "Renamed_Project.xlsx").exists())
 
 

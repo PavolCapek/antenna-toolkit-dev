@@ -18,7 +18,7 @@ Beamwidth extractor with XLSX output, principal-cut radiation diagrams, and .ant
     with a contiguous 1° step sequence: **+90, +89, …, -180, +179, …, +91** (360 total samples).
     (This satisfies the requirement that elevation description starts at +90° and wraps through ±180°.)
   • Values written are **relative gain in dB** (0 dB = cut maximum at that frequency).
-  • Files are stored in **ant_files/** next to the XLSX output, named `<stem>_<freqGHz>.ant`.
+  • Files are stored in **ant_files/** next to the XLSX output, named `<stem>-<freqGHz>.ant`.
 
 Usage:
   python3 beamwidth_xlsx.py out.xlsx file1.ffs file2.ffs [--smooth 1 --theta-window 8]
@@ -29,6 +29,7 @@ Examples:
 from __future__ import annotations
 import argparse
 import csv
+import json
 import math
 import re
 from pathlib import Path
@@ -37,6 +38,13 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 Row = Tuple[float, float, complex, complex]  # (phi_deg, theta_deg, Etheta, Ephi)
+
+
+def emit_progress(stage: str, current: int, total: int, label: str) -> None:
+    print(
+        f"AT_PROGRESS {json.dumps({'stage': stage, 'current': int(current), 'total': int(total), 'label': label})}",
+        flush=True,
+    )
 
 # ---------------------------
 # Helpers
@@ -522,7 +530,7 @@ def write_ant_files(ant_dir: Path,
                     freq_labels: list[str]) -> None:
     """Write .ant files (V3, 720 lines) for each frequency column of patterns.
 
-    - One file per frequency: `<stem>_<freqGHz>.ant` placed in `ant_dir`.
+    - One file per frequency: `<stem>-<freqGHz>.ant` placed in `ant_dir`.
     - First 360 lines: azimuth φ≈0° cut, 0..359° order.
     - Next 360 lines: elevation φ≈90° cut, starting at +90° per _build_ant_sequences.
     """
@@ -541,7 +549,7 @@ def write_ant_files(ant_dir: Path,
         return lbl.replace(' ', '')
 
     for j in range(nfreq):
-        fname = f"{stem}_{label_to_suffix(freq_labels[j])}.ant"
+        fname = f"{stem}-{label_to_suffix(freq_labels[j])}.ant"
         out_path = ant_dir / fname
         with out_path.open('w', encoding='utf-8') as f:
             # Azimuth (first 360 lines): angles 0..359 mapped to θ indices
@@ -602,8 +610,10 @@ def main() -> int:
 
         # Prepare ant directory (next to output XLSX)
         ant_dir = args.output.parent / 'ant_files'
+        progress_total = len(args.ffs) + 1
 
-        for fpath in args.ffs:
+        for index, fpath in enumerate(args.ffs, start=1):
+            emit_progress("beam", index, progress_total, f"Processing {fpath.name}")
             rows, theta_grid, pat0, pat90, labels = compute_for_file(fpath, args.smooth, args.theta_window)
 
             # Data sheet
@@ -653,6 +663,7 @@ def main() -> int:
         for r in summary_rows_all:
             ws_sum.append(r)
 
+        emit_progress("beam", progress_total, progress_total, f"Saving {args.output.name}")
         wb.save(args.output)
         print(f"Wrote XLSX: {args.output} with {len(args.ffs)} file sheets + radiation diagrams + summary.")
         print(f".ant files written to: {ant_dir}")
@@ -662,9 +673,11 @@ def main() -> int:
         base.parent.mkdir(parents=True, exist_ok=True)
         # Still create ant_files next to the provided base path for consistency
         ant_dir = base.parent / 'ant_files'
-        for fpath in args.ffs:
+        progress_total = len(args.ffs) + 1
+        for index, fpath in enumerate(args.ffs, start=1):
+            emit_progress("beam", index, progress_total, f"Processing {fpath.name}")
             rows, theta_grid, pat0, pat90, labels = compute_for_file(fpath, args.smooth, args.theta_window)
-            out_csv = base.with_name(f"{base.stem}_{fpath.stem}.csv")
+            out_csv = base.with_name(f"{base.stem}-{fpath.stem}.csv")
             with out_csv.open('w', newline='') as f:
                 w = csv.writer(f)
                 w.writerow(header)
@@ -685,6 +698,7 @@ def main() -> int:
                     patterns_phi90=pat90,
                     freq_labels=labels,
                 )
+        emit_progress("beam", progress_total, progress_total, f"Finalizing {base.name}")
         print(f".ant files written to: {ant_dir}")
 
     return 0

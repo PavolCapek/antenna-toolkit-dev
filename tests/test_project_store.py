@@ -28,6 +28,7 @@ class ProjectStoreTests(unittest.TestCase):
             "slug": "legacy_dish",
             "ffs_files": ["Input data/a.ffs", "Input data/b.ffs"],
             "touchstone_file": "Input data/a.s2p",
+            "technical_data_file": "Input data/tech.xlsx",
             "settings": {"smooth": 5},
             "presets": {"Default": {"smooth": 5}},
             "active_preset": "Default",
@@ -45,6 +46,7 @@ class ProjectStoreTests(unittest.TestCase):
             ],
         )
         self.assertEqual(project.run_state["history"][0]["action"], "imported")
+        self.assertEqual(project.technical_data_file, "Input data/tech.xlsx")
 
     def test_save_and_load_preserves_active_preset_and_run_state(self) -> None:
         project = ProjectRecord(
@@ -52,6 +54,7 @@ class ProjectStoreTests(unittest.TestCase):
             slug="dish_a",
             ffs_items=[{"path": "Input data/a.ffs", "enabled": True}],
             touchstone_file="Input data/a.s2p",
+            technical_data_file="Input data/tech.xlsx",
             settings={"smooth": 7, "grid_color": "#4b5563"},
             presets={"Tight": {"smooth": 7, "grid_color": "#4b5563"}},
             active_preset="Tight",
@@ -63,6 +66,7 @@ class ProjectStoreTests(unittest.TestCase):
 
         self.assertEqual(loaded.schema_version, CURRENT_PROJECT_SCHEMA_VERSION)
         self.assertEqual(loaded.active_preset, "Tight")
+        self.assertEqual(loaded.technical_data_file, "Input data/tech.xlsx")
         self.assertEqual(loaded.settings, {})
         self.assertEqual(loaded.presets, {})
         self.assertEqual(loaded.run_state["stages"]["beam"]["status"], "success")
@@ -73,6 +77,7 @@ class ProjectStoreTests(unittest.TestCase):
             slug="dish_b",
             ffs_items=[{"path": "Input data/b.ffs", "enabled": False}],
             touchstone_file="Input data/b.s2p",
+            technical_data_file="Input data/b-tech.xlsx",
             settings={"smooth": 3},
             presets={"Loose": {"smooth": 3}},
             active_preset="Loose",
@@ -83,6 +88,7 @@ class ProjectStoreTests(unittest.TestCase):
 
         duplicate = self.store.duplicate_project("dish_b", "Dish B Copy")
         self.assertEqual(duplicate.slug, "Dish_B_Copy")
+        self.assertEqual(duplicate.technical_data_file, "Input data/b-tech.xlsx")
         self.assertEqual(duplicate.run_state["history"][0]["action"], "duplicated")
         self.assertTrue((duplicate.project_dir(self.root) / "Dish_B_Copy.xlsx").exists())
 
@@ -100,9 +106,9 @@ class ProjectStoreTests(unittest.TestCase):
 
         self.assertEqual(project.project_file(self.root), self.root / "Projects" / "dish_c" / PROJECT_FILE_NAME)
         self.assertEqual(project.workbook_path(self.root), self.root / "Projects" / "dish_c" / "dish_c.xlsx")
-        self.assertEqual(project.extract_path(self.root), self.root / "Projects" / "dish_c" / "dish_c_extracted_data.xlsx")
-        self.assertEqual(project.datasheet_path(self.root), self.root / "Projects" / "dish_c" / "dish_c_datasheet.pdf")
-        self.assertEqual(project.vswr_path(self.root), self.root / "Projects" / "dish_c" / "dish_c_vswr.svg")
+        self.assertEqual(project.extract_path(self.root), self.root / "Projects" / "dish_c" / "dish_c-extracted-data.xlsx")
+        self.assertEqual(project.datasheet_path(self.root), self.root / "Projects" / "dish_c" / "dish_c-datasheet.pdf")
+        self.assertEqual(project.vswr_path(self.root), self.root / "Projects" / "dish_c" / "dish_c-vswr.svg")
 
     def test_project_json_written_with_current_schema(self) -> None:
         project = ProjectRecord(name="Dish D", slug="dish_d")
@@ -111,6 +117,7 @@ class ProjectStoreTests(unittest.TestCase):
         payload = json.loads((project_dir / PROJECT_FILE_NAME).read_text(encoding="utf-8"))
 
         self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA_VERSION)
+        self.assertIn("technical_data_file", payload)
         self.assertNotIn("settings", payload)
         self.assertNotIn("presets", payload)
 

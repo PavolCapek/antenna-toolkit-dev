@@ -19,10 +19,10 @@ It generates:
 
 - [antenna_toolkit_studio.py](/C:/Users/capek/OneDrive/Documents/Git/antenna-toolkit-dev/antenna_toolkit_studio.py)
   Main PySide6 Studio GUI with project management
+- [studio_support.py](/C:/Users/capek/OneDrive/Documents/Git/antenna-toolkit-dev/studio_support.py)
+  Shared Studio runtime helpers for state, presets, path handling, and subprocess execution
 - [project_store.py](/C:/Users/capek/OneDrive/Documents/Git/antenna-toolkit-dev/project_store.py)
   Persistent project storage and project-scoped output paths
-- [antenna_toolkit_qt.py](/C:/Users/capek/OneDrive/Documents/Git/antenna-toolkit-dev/antenna_toolkit_qt.py)
-  Legacy PySide6 GUI
 - [beamwidth_xlsx.py](/C:/Users/capek/OneDrive/Documents/Git/antenna-toolkit-dev/beamwidth_xlsx.py)
   Reads `.ffs` files and generates the workbook and `.ant` files
 - [plot.py](/C:/Users/capek/OneDrive/Documents/Git/antenna-toolkit-dev/plot.py)

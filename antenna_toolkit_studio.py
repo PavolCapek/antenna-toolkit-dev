@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import time
 from datetime import datetime
@@ -20,9 +21,9 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QScrollArea, QGridLayout, QTabWidget, QMenu, QToolButton
 )
 
-from antenna_toolkit_qt import (
+from studio_support import (
     THIS_DIR, SCRIPT_BEAM, SCRIPT_EXTRACT, SCRIPT_DATASHEET, SCRIPT_PLOT, SCRIPT_VSWR,
-    suggest_preset_name, normalize_preset_payload,
+    suggest_preset_name, normalize_preset_payload, PresetFileStore, preset_storage_dir, legacy_preset_storage_dirs,
     DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, Persist, Proc, resolve_state_file,
     which_python, open_in_file_manager, resolve_workspace_path,
     display_workspace_path, deduce_project_name, normalized_project_stem,
@@ -46,12 +47,15 @@ GREY_COLOR_OPTIONS = [
 STAGE_DEFINITIONS = [
     ("beam", "Workbook"),
     ("extract", "Extract"),
-    ("datasheet", "Datasheet"),
     ("plot", "Plots"),
     ("vswr", "VSWR"),
+    ("datasheet", "Datasheet"),
 ]
 STAGE_LABELS = dict(STAGE_DEFINITIONS)
 DATASHEET_TEMPLATE = THIS_DIR / "Datasheet.pdf"
+DATASHEET_TEMPLATE_DIR = THIS_DIR / "Templates"
+DEFAULT_DATASHEET_TEMPLATE_NAME = DATASHEET_TEMPLATE.name
+DEFAULT_PDF_METADATA_AUTHOR = "RF elements"
 THEME_OPTIONS = [
     ("light", "Canvas"),
     ("dark", "Midnight"),
@@ -60,7 +64,6 @@ THEME_OPTIONS = [
     ("sepia", "Sepia"),
 ]
 THEME_LABELS = {key: label for key, label in THEME_OPTIONS}
-PRESET_STORE_KEY = "ui_presets"
 ACTIVE_PRESET_KEY = "active_preset"
 THEME_STYLES = {
     "light": {
@@ -366,10 +369,6 @@ class Card(QFrame):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 16, 16, 16)
         outer.setSpacing(8)
-        if eyebrow:
-            brow = QLabel(eyebrow.upper())
-            brow.setObjectName("eyebrow")
-            outer.addWidget(brow)
         ttl = QLabel(title)
         ttl.setObjectName("cardTitle")
         outer.addWidget(ttl)
@@ -830,12 +829,19 @@ class ModernMainWindow(QMainWindow):
         self._run_cancelled = False
         self._current_stage_key = ""
         self._pending_stage_keys: list[str] = []
+        self._live_run_total_stages = 0
+        self._live_run_completed_stages = 0
+        self._live_stage_progress_key = ""
+        self._live_stage_progress_current = 0
+        self._live_stage_progress_total = 0
+        self._live_stage_progress_label = ""
         self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
         self._saved_project_signature = ""
         self._reverting_project_selection = False
         self.active_project_slug = ""
         self.active_project_name = ""
-        self.global_presets: dict[str, dict[str, object]] = normalize_preset_payload(self.store.get(PRESET_STORE_KEY, {}))
+        self.preset_store = PresetFileStore(preset_storage_dir(STATE_FILE), legacy_preset_storage_dirs(STATE_FILE))
+        self.global_presets: dict[str, dict[str, object]] = self.preset_store.migrate_from_state(self.store)
         self.global_active_preset = str(self.store.get(ACTIVE_PRESET_KEY, "")).strip()
         if self.global_active_preset and self.global_active_preset not in self.global_presets:
             self.global_active_preset = ""
@@ -850,7 +856,7 @@ class ModernMainWindow(QMainWindow):
         self._build_ui()
         self._apply_style()
         self._reset_to_default_state(clear_persisted_project=False)
-        self.refresh_project_list(select_slug="")
+        self.refresh_project_list(select_slug=str(self.store.get("active_project", "")).strip())
         self._restore_geometry()
         self._update_layout_mode(force=True)
         self.store.set("theme", self.theme)
@@ -915,7 +921,7 @@ class ModernMainWindow(QMainWindow):
         quick_actions = Card("Pipeline", "Run")
         self.quick_actions_card = quick_actions
         quick_actions.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        run_help = QLabel("Use Full Pipeline for the usual workflow. Manual reruns for individual stages are available from the Manual runs menu.")
+        run_help = QLabel("Use Full Pipeline for the usual workflow. Clear generated files without removing the project, or rerun individual stages from each stage row or the Project workspace menu.")
         run_help.setObjectName("helper")
         run_help.setWordWrap(True)
         self.run_help_label = run_help
@@ -923,27 +929,19 @@ class ModernMainWindow(QMainWindow):
         self.btn_full = QPushButton("Run Full Pipeline")
         self.btn_full.setObjectName("primaryButton")
         self.btn_full.clicked.connect(self.run_full)
+        self.btn_clear_outputs = QPushButton("Clear Generated Files")
+        self.btn_clear_outputs.setObjectName("ghostButton")
+        self.btn_clear_outputs.clicked.connect(self.delete_all_outputs)
         self.btn_cancel = QPushButton("Cancel Run")
         self.btn_cancel.setObjectName("ghostButton")
         self.btn_cancel.clicked.connect(self.cancel_run)
-        self.run_more_button = QToolButton()
-        self.run_more_button.setText("Manual runs")
-        self.run_more_button.setPopupMode(QToolButton.InstantPopup)
-        self.run_more_button.setToolTip("Run a single stage without running the full pipeline.")
-        self.run_more_menu = QMenu(self.run_more_button)
-        self.run_more_beam_action = self.run_more_menu.addAction("Workbook only", self.run_beam)
-        self.run_more_extract_action = self.run_more_menu.addAction("Extract data", self.run_extract)
-        self.run_more_datasheet_action = self.run_more_menu.addAction("Generate datasheet PDF", self.run_datasheet)
-        self.run_more_plot_action = self.run_more_menu.addAction("Plots only", self.run_plot)
-        self.run_more_vswr_action = self.run_more_menu.addAction("VSWR only", self.run_vswr)
-        self.run_more_button.setMenu(self.run_more_menu)
         self.btn_full.setToolTip("Run workbook generation, extract generation, plot generation, datasheet generation, and VSWR generation in sequence.")
+        self.btn_clear_outputs.setToolTip("Delete generated output files for the active project while keeping the project file and settings.")
         self.btn_cancel.setToolTip("Stop the current run and clear any queued stages.")
         self.hero_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=150)
         self.hero_actions.set_buttons([
             self.btn_full,
-            self.btn_cancel,
-            self.run_more_button,
+            self.btn_clear_outputs,
         ])
         quick_actions.body.addWidget(self.hero_actions)
         self.run_info = QLabel("Idle")
@@ -962,40 +960,98 @@ class ModernMainWindow(QMainWindow):
         self.artifact_summary_label = QLabel("Artifacts will appear here after the first run.")
         self.artifact_summary_label.setObjectName("helper")
         self.artifact_summary_label.setWordWrap(True)
-        self.workbook_field = QLineEdit(); self.workbook_field.setReadOnly(True)
-        self.extract_field = QLineEdit(); self.extract_field.setReadOnly(True)
-        self.datasheet_field = QLineEdit(); self.datasheet_field.setReadOnly(True)
-        self.results_field = QLineEdit(); self.results_field.setReadOnly(True)
-        self.vswr_field = QLineEdit(); self.vswr_field.setReadOnly(True)
-        self.workbook_field.setToolTip("Workbook stored inside the selected project directory.")
-        self.extract_field.setToolTip("Extracted-data workbook stored inside the selected project directory.")
-        self.datasheet_field.setToolTip("Generated datasheet PDF stored inside the selected project directory.")
-        self.results_field.setToolTip("Project directory containing metadata and generated outputs.")
-        self.vswr_field.setToolTip("VSWR plot stored inside the selected project directory.")
         self.busy = QProgressBar()
         self.busy.setVisible(False)
         self.busy.setRange(0, 0)
         self.busy.setTextVisible(False)
-        quick_actions.body.addWidget(self.run_info)
-        quick_actions.body.addWidget(self.run_summary)
         quick_actions.body.addWidget(self.pipeline_details_toggle)
         self.pipeline_details = QWidget()
         self.pipeline_details_layout = QVBoxLayout(self.pipeline_details)
         self.pipeline_details_layout.setContentsMargins(0, 0, 0, 0)
         self.pipeline_details_layout.setSpacing(8)
-        self.pipeline_details_layout.addWidget(self.project_stats_label)
-        self.pipeline_details_layout.addWidget(self.artifact_summary_label)
-        pipeline_outputs = QFormLayout()
-        pipeline_outputs.addRow("Project folder", self._path_row(self.results_field))
-        pipeline_outputs.addRow("Workbook", self._path_row(self.workbook_field))
-        pipeline_outputs.addRow("Extract workbook", self._path_row(self.extract_field))
-        pipeline_outputs.addRow("Datasheet PDF", self._path_row(self.datasheet_field))
-        pipeline_outputs.addRow("VSWR output", self._path_row(self.vswr_field))
-        self.pipeline_details_layout.addLayout(pipeline_outputs)
-        quick_actions.body.addWidget(self.pipeline_details)
-        quick_actions.body.addWidget(self.busy)
         self.stage_status_labels: dict[str, QLabel] = {}
+        self.stage_timestamp_labels: dict[str, QLabel] = {}
+        self.stage_chip_labels: dict[str, QLabel] = {}
         self.stage_open_buttons: dict[str, QPushButton] = {}
+        self.stage_rerun_buttons: dict[str, QPushButton] = {}
+        self.stage_more_buttons: dict[str, QPushButton] = {}
+        self.stage_reveal_actions: dict[str, object] = {}
+        self.stage_delete_actions: dict[str, object] = {}
+        self.stage_rows = QWidget()
+        self.stage_rows_layout = QVBoxLayout(self.stage_rows)
+        self.stage_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.stage_rows_layout.setSpacing(0)
+        for index, (stage_key, stage_label) in enumerate(STAGE_DEFINITIONS):
+            if index:
+                divider = QFrame()
+                divider.setFrameShape(QFrame.HLine)
+                divider.setFrameShadow(QFrame.Plain)
+                divider.setObjectName("stageDivider")
+                self.stage_rows_layout.addWidget(divider)
+            row = QFrame()
+            row.setObjectName("stageRow")
+            row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 10, 0, 10)
+            row_layout.setSpacing(10)
+            info = QWidget()
+            info_layout = QVBoxLayout(info)
+            info_layout.setContentsMargins(0, 0, 0, 0)
+            info_layout.setSpacing(2)
+            name_label = QLabel(stage_label)
+            name_label.setObjectName("stageTitle")
+            status_label = QLabel("Waiting for the first run.")
+            status_label.setObjectName("stageStatus")
+            status_label.setWordWrap(True)
+            timestamp_label = QLabel("Generated: not yet")
+            timestamp_label.setObjectName("helper")
+            timestamp_label.setWordWrap(True)
+            info_layout.addWidget(name_label)
+            info_layout.addWidget(status_label)
+            info_layout.addWidget(timestamp_label)
+            row_layout.addWidget(info, 1)
+            chip_label = QLabel("Waiting")
+            chip_label.setObjectName("stageChip")
+            chip_label.setAlignment(Qt.AlignCenter)
+            row_layout.addWidget(chip_label, 0, Qt.AlignVCenter)
+            actions = QWidget()
+            actions_layout = QHBoxLayout(actions)
+            actions_layout.setContentsMargins(0, 0, 0, 0)
+            actions_layout.setSpacing(8)
+            open_button = QPushButton("Open")
+            open_button.setToolTip(f"Open the {stage_label.lower()} output.")
+            open_button.clicked.connect(lambda _checked=False, key=stage_key: self.open_stage_output(key))
+            rerun_button = QPushButton("Rerun")
+            rerun_button.setToolTip(f"Run the {stage_label.lower()} stage again.")
+            rerun_button.clicked.connect(lambda _checked=False, key=stage_key: self.rerun_stage(key))
+            more_button = QPushButton("More")
+            more_button.setToolTip(f"More actions for the {stage_label.lower()} output.")
+            more_menu = QMenu(more_button)
+            reveal_action = more_menu.addAction("Reveal in folder", lambda key=stage_key: self.reveal_stage_output(key))
+            delete_action = more_menu.addAction("Delete output", lambda key=stage_key: self.delete_stage_output(key))
+            more_button.setMenu(more_menu)
+            actions_layout.addWidget(open_button)
+            actions_layout.addWidget(rerun_button)
+            actions_layout.addWidget(more_button)
+            row_layout.addWidget(actions, 0, Qt.AlignVCenter)
+            self.stage_rows_layout.addWidget(row)
+            self.stage_status_labels[stage_key] = status_label
+            self.stage_timestamp_labels[stage_key] = timestamp_label
+            self.stage_chip_labels[stage_key] = chip_label
+            self.stage_open_buttons[stage_key] = open_button
+            self.stage_rerun_buttons[stage_key] = rerun_button
+            self.stage_more_buttons[stage_key] = more_button
+            self.stage_reveal_actions[stage_key] = reveal_action
+            self.stage_delete_actions[stage_key] = delete_action
+        self.pipeline_details_layout.addWidget(self.stage_rows)
+        quick_actions.body.addWidget(self.pipeline_details)
+        progress_row = QHBoxLayout()
+        progress_row.setContentsMargins(0, 0, 0, 0)
+        progress_row.setSpacing(10)
+        progress_row.addWidget(self.busy, 1)
+        self.btn_cancel.setVisible(False)
+        progress_row.addWidget(self.btn_cancel, 0, Qt.AlignRight)
+        quick_actions.body.addLayout(progress_row)
         project_card = Card("Project workspace", "Command center")
         self.project_card = project_card
         project_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -1035,6 +1091,7 @@ class ModernMainWindow(QMainWindow):
         self.project_import_action = self.project_more_menu.addAction("Import bundle", self.import_project_bundle)
         self.project_export_action = self.project_more_menu.addAction("Export bundle", self.export_project_bundle)
         self.project_more_menu.addSeparator()
+        self.project_delete_outputs_action = self.project_more_menu.addAction("Clear generated files", self.delete_all_outputs)
         self.project_open_folder_action = self.project_more_menu.addAction("Open project folder", lambda: open_in_file_manager(self.project_results_dir()))
         self.project_more_button.setMenu(self.project_more_menu)
         project_row.addWidget(self.project_combo)
@@ -1138,6 +1195,7 @@ class ModernMainWindow(QMainWindow):
         inputs_scroll, _inputs_page, inputs_lay = self._make_scroll_page()
         processing_scroll, _processing_page, processing_lay = self._make_scroll_page()
         style_scroll, _style_page, style_lay = self._make_scroll_page()
+        document_scroll, _document_page, document_lay = self._make_scroll_page()
         run_lay.addWidget(readiness_card)
         run_lay.addWidget(quick_actions)
         run_lay.addStretch(1)
@@ -1228,18 +1286,6 @@ class ModernMainWindow(QMainWindow):
         ])
         ffs_card.body.addWidget(ffs_actions)
 
-        inputs_help_card = Card("Input guide", "Flow")
-        inputs_help_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        inputs_help = QLabel(
-            "The far-field list is the main input for workbook generation.\n"
-            "Touchstone is optional unless you need the VSWR plot.\n"
-            "Input and preset changes are kept as pending project edits until you save."
-        )
-        inputs_help.setWordWrap(True)
-        inputs_help.setObjectName("helper")
-        self.inputs_help_label = inputs_help
-        inputs_help_card.body.addWidget(inputs_help)
-
         s2p_card = Card("Touchstone file", "VSWR")
         s2p_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.s2p_field = QLineEdit("")
@@ -1256,13 +1302,30 @@ class ModernMainWindow(QMainWindow):
         self.s2p_actions = s2p_actions
         s2p_actions.set_buttons([self.select_s2p_button, self.clear_s2p_button, self.open_s2p_button])
         s2p_card.body.addWidget(s2p_actions)
+
+        technical_data_card = Card("Technical Data Excel", "Datasheet")
+        technical_data_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.technical_data_field = QLineEdit("")
+        self.technical_data_field.setReadOnly(True)
+        self.technical_data_field.setToolTip("Technical Data workbook used to populate datasheet placeholders and the Technical Data table.")
+        technical_data_card.body.addWidget(self.technical_data_field)
+        self.select_technical_data_button = QPushButton("Select Technical Data"); self.select_technical_data_button.clicked.connect(self.browse_technical_data)
+        self.clear_technical_data_button = QPushButton("Clear"); self.clear_technical_data_button.clicked.connect(self.clear_technical_data)
+        self.open_technical_data_button = QPushButton("Open"); self.open_technical_data_button.clicked.connect(lambda: open_in_file_manager(resolve_workspace_path(self.technical_data_field.text())))
+        self.select_technical_data_button.setToolTip("Choose the Excel workbook containing Antenna Name, Product ID, and Technical Data rows.")
+        self.clear_technical_data_button.setToolTip("Clear the current Technical Data workbook selection.")
+        self.open_technical_data_button.setToolTip("Open the selected Technical Data workbook in File Explorer.")
+        technical_data_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=145)
+        self.technical_data_actions = technical_data_actions
+        technical_data_actions.set_buttons([self.select_technical_data_button, self.clear_technical_data_button, self.open_technical_data_button])
+        technical_data_card.body.addWidget(technical_data_actions)
         inputs_left = QWidget()
         inputs_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         inputs_left_layout = QVBoxLayout(inputs_left)
         inputs_left_layout.setContentsMargins(0, 0, 0, 0)
         inputs_left_layout.setSpacing(12)
-        inputs_left_layout.addWidget(inputs_help_card)
         inputs_left_layout.addWidget(s2p_card)
+        inputs_left_layout.addWidget(technical_data_card)
         inputs_panel = ResponsiveCardPanel(max_columns=1, min_card_width=360)
         self.inputs_panel = inputs_panel
         inputs_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -1379,12 +1442,20 @@ class ModernMainWindow(QMainWindow):
         add_form_row(vswr_range_form, "VSWR y tick", StepperField(self.vswr_ystep), "Spacing between VSWR y-axis tick labels.")
         vswr_range_card.body.addLayout(vswr_range_form)
 
-        polar_card = Card("Polar plot", "Polar")
+        polar_card = Card("Polar settings")
         polar_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         polar_card.setMinimumWidth(320)
         self.plot_grid = StudioColorSelector(self.store, "grid_color", DEFAULT_GRID_COLOR, presets=GREY_COLOR_OPTIONS)
+        self.cartesian_grid_line_width = TrimmedDoubleSpinBox(); self.cartesian_grid_line_width.setRange(0.1, 10.0); self.cartesian_grid_line_width.setDecimals(2); self.cartesian_grid_line_width.setSingleStep(0.1); self.cartesian_grid_line_width.setValue(float(self.store.get("cartesian_grid_line_width", self.store.get("plot_grid_line_width", 0.9)))); self.cartesian_grid_line_width.valueChanged.connect(lambda v: self.store.set("cartesian_grid_line_width", float(v)))
+        self.polar_grid_line_width = TrimmedDoubleSpinBox(); self.polar_grid_line_width.setRange(0.1, 10.0); self.polar_grid_line_width.setDecimals(2); self.polar_grid_line_width.setSingleStep(0.1); self.polar_grid_line_width.setValue(float(self.store.get("polar_grid_line_width", self.store.get("plot_grid_line_width", 0.9)))); self.polar_grid_line_width.valueChanged.connect(lambda v: self.store.set("polar_grid_line_width", float(v)))
         self.plot_line1 = StudioColorSelector(self.store, "plot_line_1", DEFAULT_LINE_COLORS[0][1])
         self.plot_line2 = StudioColorSelector(self.store, "plot_line_2", DEFAULT_LINE_COLORS[1][1])
+        self.cartesian_line_width = TrimmedDoubleSpinBox(); self.cartesian_line_width.setRange(0.1, 20.0); self.cartesian_line_width.setDecimals(2); self.cartesian_line_width.setSingleStep(0.1); self.cartesian_line_width.setValue(float(self.store.get("cartesian_line_width", self.store.get("plot_line_width", 2.0)))); self.cartesian_line_width.valueChanged.connect(lambda v: self.store.set("cartesian_line_width", float(v)))
+        self.polar_line_width = TrimmedDoubleSpinBox(); self.polar_line_width.setRange(0.1, 20.0); self.polar_line_width.setDecimals(2); self.polar_line_width.setSingleStep(0.1); self.polar_line_width.setValue(float(self.store.get("polar_line_width", self.store.get("plot_line_width", 2.0)))); self.polar_line_width.valueChanged.connect(lambda v: self.store.set("polar_line_width", float(v)))
+        self.cartesian_font_size = TrimmedDoubleSpinBox(); self.cartesian_font_size.setRange(1.0, 72.0); self.cartesian_font_size.setDecimals(1); self.cartesian_font_size.setSingleStep(0.5); self.cartesian_font_size.setValue(float(self.store.get("cartesian_font_size", self.store.get("plot_font_size", 10.5)))); self.cartesian_font_size.valueChanged.connect(lambda v: self.store.set("cartesian_font_size", float(v)))
+        self.polar_font_size = TrimmedDoubleSpinBox(); self.polar_font_size.setRange(1.0, 72.0); self.polar_font_size.setDecimals(1); self.polar_font_size.setSingleStep(0.5); self.polar_font_size.setValue(float(self.store.get("polar_font_size", self.store.get("plot_font_size", 10.5)))); self.polar_font_size.valueChanged.connect(lambda v: self.store.set("polar_font_size", float(v)))
+        self.cartesian_legend_font_size = TrimmedDoubleSpinBox(); self.cartesian_legend_font_size.setRange(1.0, 72.0); self.cartesian_legend_font_size.setDecimals(1); self.cartesian_legend_font_size.setSingleStep(0.5); self.cartesian_legend_font_size.setValue(float(self.store.get("cartesian_legend_font_size", self.store.get("plot_legend_font_size", 10.5)))); self.cartesian_legend_font_size.valueChanged.connect(lambda v: self.store.set("cartesian_legend_font_size", float(v)))
+        self.polar_legend_font_size = TrimmedDoubleSpinBox(); self.polar_legend_font_size.setRange(1.0, 72.0); self.polar_legend_font_size.setDecimals(1); self.polar_legend_font_size.setSingleStep(0.5); self.polar_legend_font_size.setValue(float(self.store.get("polar_legend_font_size", self.store.get("plot_legend_font_size", 10.5)))); self.polar_legend_font_size.valueChanged.connect(lambda v: self.store.set("polar_legend_font_size", float(v)))
         self.rings = QLineEdit(self.store.get("rings", "0,-7.5,-15,-22.5,-30")); self.rings.textChanged.connect(lambda v: self.store.set("rings", v))
         self.angle_step = NoWheelSpinBox(); self.angle_step.setRange(5, 90); self.angle_step.setSingleStep(5); self.angle_step.setValue(int(self.store.get("angle", 30))); self.angle_step.valueChanged.connect(lambda v: self.store.set("angle", int(v)))
         self.clip_db = TrimmedDoubleSpinBox(); self.clip_db.setRange(-120.0, 0.0); self.clip_db.setDecimals(6); self.clip_db.setSingleStep(0.5); self.clip_db.setValue(float(self.store.get("clip", -30.0))); self.clip_db.valueChanged.connect(lambda v: self.store.set("clip", float(v)))
@@ -1400,7 +1471,7 @@ class ModernMainWindow(QMainWindow):
         add_form_row(polar_form, "Polar clip below", StepperField(self.clip_db), "Clip polar-plot values below this dB level to keep the chart readable.")
         polar_card.body.addLayout(polar_form)
 
-        plot_color_card = Card("Plot colors", "Style")
+        plot_color_card = Card("Plot colors")
         plot_color_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         plot_color_card.setMinimumWidth(320)
         plot_color_form = QFormLayout()
@@ -1409,12 +1480,42 @@ class ModernMainWindow(QMainWindow):
         plot_color_form.setVerticalSpacing(8)
         plot_color_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         plot_color_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        add_form_row(plot_color_form, "Grid color", self.plot_grid, "Grid and axis color used by both the workbook plots and the VSWR plot. Presets are neutral greys, with a custom color option.")
-        add_form_row(plot_color_form, "Line color 1", self.plot_line1, "Primary line color used by both the workbook plots and the VSWR plot.")
-        add_form_row(plot_color_form, "Line color 2", self.plot_line2, "Secondary line color used by both the workbook plots and the VSWR plot.")
+        add_form_row(plot_color_form, "Grid color", self.plot_grid, "Grid and axis color used across the cartesian, polar, and VSWR plots. Presets are neutral greys, with a custom color option.")
+        add_form_row(plot_color_form, "Line color 1", self.plot_line1, "Primary line color used across the cartesian, polar, and VSWR plots.")
+        add_form_row(plot_color_form, "Line color 2", self.plot_line2, "Secondary line color used across the cartesian, polar, and VSWR plots.")
         plot_color_card.body.addLayout(plot_color_form)
 
-        legend_card = Card("Legend labels", "Style")
+        cartesian_metrics_card = Card("Cartesian styling")
+        cartesian_metrics_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        cartesian_metrics_card.setMinimumWidth(320)
+        cartesian_metrics_form = QFormLayout()
+        cartesian_metrics_form.setContentsMargins(0, 0, 0, 0)
+        cartesian_metrics_form.setHorizontalSpacing(10)
+        cartesian_metrics_form.setVerticalSpacing(8)
+        cartesian_metrics_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        cartesian_metrics_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(cartesian_metrics_form, "Grid width", StepperField(self.cartesian_grid_line_width), "Line width used by cartesian grid lines, axes, and tick marks.")
+        add_form_row(cartesian_metrics_form, "Line width", StepperField(self.cartesian_line_width), "Trace thickness used by the workbook cartesian plots and the VSWR plot.")
+        add_form_row(cartesian_metrics_form, "Font size", StepperField(self.cartesian_font_size), "Base font size used by cartesian plot labels and tick labels.")
+        add_form_row(cartesian_metrics_form, "Legend font", StepperField(self.cartesian_legend_font_size), "Font size used by exported cartesian and VSWR legends.")
+        cartesian_metrics_card.body.addLayout(cartesian_metrics_form)
+
+        polar_metrics_card = Card("Polar styling")
+        polar_metrics_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        polar_metrics_card.setMinimumWidth(320)
+        polar_metrics_form = QFormLayout()
+        polar_metrics_form.setContentsMargins(0, 0, 0, 0)
+        polar_metrics_form.setHorizontalSpacing(10)
+        polar_metrics_form.setVerticalSpacing(8)
+        polar_metrics_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        polar_metrics_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(polar_metrics_form, "Grid width", StepperField(self.polar_grid_line_width), "Line width used by polar grid lines and tick marks.")
+        add_form_row(polar_metrics_form, "Line width", StepperField(self.polar_line_width), "Trace thickness used by the polar plots.")
+        add_form_row(polar_metrics_form, "Font size", StepperField(self.polar_font_size), "Base font size used by polar plot labels and tick labels.")
+        add_form_row(polar_metrics_form, "Legend font", StepperField(self.polar_legend_font_size), "Font size used by exported polar legends.")
+        polar_metrics_card.body.addLayout(polar_metrics_form)
+
+        legend_card = Card("Legend labels")
         legend_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         legend_card.setMinimumWidth(320)
         self.gain_legend_labels = QLineEdit(self.store.get("gain_legend_labels", ""))
@@ -1437,6 +1538,25 @@ class ModernMainWindow(QMainWindow):
         add_form_row(legend_form, "VSWR legends", self.vswr_legend_labels, "Optional comma-separated legend labels for the VSWR plot, in trace order.")
         legend_card.body.addLayout(legend_form)
 
+        metadata_card = Card("PDF metadata", "Document")
+        metadata_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        metadata_card.setMinimumWidth(320)
+        self.datasheet_template_combo = QComboBox()
+        self.datasheet_template_combo.setToolTip("PDF template used as the datasheet export style.")
+        self.refresh_datasheet_template_options(str(self.store.get("datasheet_template", DEFAULT_DATASHEET_TEMPLATE_NAME)))
+        self.datasheet_template_combo.currentIndexChanged.connect(self.on_datasheet_template_selected)
+        self.pdf_metadata_author = QLineEdit(str(self.store.get("pdf_metadata_author", DEFAULT_PDF_METADATA_AUTHOR)))
+        self.pdf_metadata_author.textChanged.connect(lambda v: self.store.set("pdf_metadata_author", v))
+        metadata_form = QFormLayout()
+        metadata_form.setContentsMargins(0, 0, 0, 0)
+        metadata_form.setHorizontalSpacing(10)
+        metadata_form.setVerticalSpacing(8)
+        metadata_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        metadata_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(metadata_form, "Export style", self.datasheet_template_combo, "PDF template used as the datasheet export style.")
+        add_form_row(metadata_form, "Author", self.pdf_metadata_author, "Author value written into the exported PDF metadata.")
+        metadata_card.body.addLayout(metadata_form)
+
         processing_panel = ResponsiveCardPanel(max_columns=2, min_card_width=320)
         self.processing_panel = processing_panel
         processing_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -1455,20 +1575,25 @@ class ModernMainWindow(QMainWindow):
         colors_panel = ResponsiveCardPanel(max_columns=2, min_card_width=320)
         self.colors_panel = colors_panel
         colors_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        colors_panel.set_cards([plot_color_card, polar_card])
+        colors_panel.set_cards([plot_color_card, cartesian_metrics_card, polar_metrics_card, polar_card])
         style_lay.addWidget(colors_panel, 1)
 
         style_lay.addWidget(legend_card, 1)
         style_lay.addStretch(1)
 
+        document_lay.addWidget(metadata_card)
+        document_lay.addStretch(1)
+
         self.workflow_tabs.addTab(inputs_scroll, "Inputs")
         self.workflow_tabs.addTab(processing_scroll, "Processing")
         self.workflow_tabs.addTab(style_scroll, "Style")
+        self.workflow_tabs.addTab(document_scroll, "Document")
         self.workflow_tabs.addTab(run_scroll, "Run")
-        self.workflow_tabs.setTabToolTip(0, "Far-field and Touchstone inputs.")
+        self.workflow_tabs.setTabToolTip(0, "Far-field, Touchstone, and Technical Data inputs.")
         self.workflow_tabs.setTabToolTip(1, "Beam, workbook, VSWR, and axis-range controls.")
         self.workflow_tabs.setTabToolTip(2, "Plot colors, polar presentation, and legend labels.")
-        self.workflow_tabs.setTabToolTip(3, "Run the pipeline, inspect readiness, and review generated output paths.")
+        self.workflow_tabs.setTabToolTip(3, "Document-wide fields used by exported files.")
+        self.workflow_tabs.setTabToolTip(4, "Run the pipeline, inspect readiness, and manage generated artifacts.")
         self.setCentralWidget(root)
 
         self.console_window = ConsoleWindow(self, self.store)
@@ -1511,9 +1636,64 @@ class ModernMainWindow(QMainWindow):
     def _show_processing_tab(self) -> None:
         self._select_workflow_tab("Processing")
 
-    def _open_manual_runs_menu(self) -> None:
-        if self.run_more_button.isEnabled():
-            self.run_more_button.showMenu()
+    def _show_document_tab(self) -> None:
+        self._select_workflow_tab("Document")
+
+    def _open_project_actions_menu(self) -> None:
+        if self.project_more_button.isEnabled():
+            self.project_more_button.showMenu()
+
+    def _datasheet_template_label(self, filename: str) -> str:
+        stem = Path(str(filename or "")).stem.strip()
+        label = stem.replace("_", " ").replace("-", " ").strip()
+        return " ".join(label.split()) or str(filename or "Template")
+
+    def _datasheet_template_options(self) -> list[tuple[str, Path]]:
+        templates: list[Path] = []
+        if DATASHEET_TEMPLATE_DIR.exists():
+            templates = sorted(
+                (path for path in DATASHEET_TEMPLATE_DIR.glob("*.pdf") if path.is_file()),
+                key=lambda path: path.stem.lower(),
+            )
+        if not templates and DATASHEET_TEMPLATE.exists():
+            templates = [DATASHEET_TEMPLATE]
+        return [(path.name, path.resolve()) for path in templates]
+
+    def refresh_datasheet_template_options(self, select_name: str | None = None) -> None:
+        if not hasattr(self, "datasheet_template_combo"):
+            return
+        current_name = str(select_name or self.selected_datasheet_template_name() or DEFAULT_DATASHEET_TEMPLATE_NAME)
+        options = self._datasheet_template_options()
+        self.datasheet_template_combo.blockSignals(True)
+        self.datasheet_template_combo.clear()
+        for filename, _path in options:
+            self.datasheet_template_combo.addItem(self._datasheet_template_label(filename), filename)
+        index = self.datasheet_template_combo.findData(current_name)
+        if index < 0 and current_name:
+            self.datasheet_template_combo.addItem(f"{self._datasheet_template_label(current_name)} (missing)", current_name)
+            index = self.datasheet_template_combo.count() - 1
+        elif index < 0 and self.datasheet_template_combo.count():
+            index = 0
+        if index >= 0:
+            self.datasheet_template_combo.setCurrentIndex(index)
+        self.datasheet_template_combo.blockSignals(False)
+
+    def selected_datasheet_template_name(self) -> str:
+        if not hasattr(self, "datasheet_template_combo"):
+            return DEFAULT_DATASHEET_TEMPLATE_NAME
+        value = self.datasheet_template_combo.currentData()
+        return str(value or "").strip() or DEFAULT_DATASHEET_TEMPLATE_NAME
+
+    def selected_datasheet_template_path(self) -> Path:
+        selected_name = self.selected_datasheet_template_name()
+        for filename, path in self._datasheet_template_options():
+            if filename == selected_name:
+                return path
+        return (DATASHEET_TEMPLATE_DIR / selected_name).resolve()
+
+    def on_datasheet_template_selected(self, *_args) -> None:
+        self.store.set("datasheet_template", self.selected_datasheet_template_name())
+        self._mark_project_dirty()
 
     def _set_readiness_action(self, text: str, callback, enabled: bool = True, tooltip: str = "") -> None:
         previous = getattr(self, "_readiness_action_callback", None)
@@ -1552,9 +1732,11 @@ class ModernMainWindow(QMainWindow):
         self._saved_project_signature = ""
         self._pending_stage_keys = []
         self._current_stage_key = ""
+        self._clear_live_run_progress()
         self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
         self.ffs_list.clear()
         self.s2p_field.clear()
+        self.technical_data_field.clear()
         self.beam_smooth.setValue(5)
         self.theta_window.setValue(8.0)
         self.plot_smooth.setValue(5)
@@ -1576,12 +1758,23 @@ class ModernMainWindow(QMainWindow):
         self.vswr_ystep.setValue(1.0)
         self.vswr_smooth.setValue(5)
         self.plot_grid.set_color(DEFAULT_GRID_COLOR, persist=False)
+        self.cartesian_grid_line_width.setValue(0.9)
+        self.polar_grid_line_width.setValue(0.9)
+        self.cartesian_line_width.setValue(2.0)
+        self.polar_line_width.setValue(2.0)
+        self.cartesian_font_size.setValue(10.5)
+        self.polar_font_size.setValue(10.5)
+        self.cartesian_legend_font_size.setValue(10.5)
+        self.polar_legend_font_size.setValue(10.5)
         self.plot_line1.set_color(DEFAULT_LINE_COLORS[0][1], persist=False)
         self.plot_line2.set_color(DEFAULT_LINE_COLORS[1][1], persist=False)
         self.gain_legend_labels.clear()
         self.beamwidth_legend_labels.clear()
         self.beam_eff_legend_labels.clear()
         self.vswr_legend_labels.clear()
+        self.refresh_datasheet_template_options(DEFAULT_DATASHEET_TEMPLATE_NAME)
+        self.store.set("datasheet_template", self.selected_datasheet_template_name())
+        self.pdf_metadata_author.setText(DEFAULT_PDF_METADATA_AUTHOR)
         self.rings.setText("0,-7.5,-15,-22.5,-30")
         self.angle_step.setValue(30)
         self.clip_db.setValue(-30.0)
@@ -1618,12 +1811,22 @@ class ModernMainWindow(QMainWindow):
             "vswr_ystep": 1.0,
             "vswr_smooth": 5,
             "grid_color": DEFAULT_GRID_COLOR,
+            "cartesian_grid_line_width": 0.9,
+            "polar_grid_line_width": 0.9,
+            "cartesian_line_width": 2.0,
+            "polar_line_width": 2.0,
+            "cartesian_font_size": 10.5,
+            "polar_font_size": 10.5,
+            "cartesian_legend_font_size": 10.5,
+            "polar_legend_font_size": 10.5,
             "plot_line_1": DEFAULT_LINE_COLORS[0][1],
             "plot_line_2": DEFAULT_LINE_COLORS[1][1],
             "gain_legend_labels": "",
             "beamwidth_legend_labels": "",
             "beam_eff_legend_labels": "",
             "vswr_legend_labels": "",
+            "datasheet_template": DEFAULT_DATASHEET_TEMPLATE_NAME,
+            "pdf_metadata_author": DEFAULT_PDF_METADATA_AUTHOR,
             "rings": "0,-7.5,-15,-22.5,-30",
             "angle": 30,
             "clip": -30.0,
@@ -1677,20 +1880,6 @@ class ModernMainWindow(QMainWindow):
             return
         self.save_active_project()
         self.status("Project saved")
-
-    def _path_row(self, field: QLineEdit) -> QWidget:
-        row = QWidget()
-        lay = QHBoxLayout(row)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(8)
-        lay.addWidget(field, 1)
-        btn = QPushButton("Open")
-        btn.setToolTip("Open this location in File Explorer.")
-        btn.clicked.connect(lambda: open_in_file_manager(resolve_workspace_path(field.text())))
-        field.textChanged.connect(lambda text: btn.setEnabled(bool(str(text).strip())))
-        btn.setEnabled(bool(field.text().strip()))
-        lay.addWidget(btn)
-        return row
 
     def _screen_available_height(self) -> int:
         screen = self.screen()
@@ -1890,7 +2079,6 @@ class ModernMainWindow(QMainWindow):
         self.project_help_label.setVisible(not compact)
         self.preset_help_label.setVisible(not compact)
         self.ffs_help_label.setVisible(not compact)
-        self.inputs_help_label.setVisible(not compact)
         self.pipeline_details_toggle.setVisible(compact)
         if compact:
             self._set_pipeline_details_visible(False)
@@ -1944,10 +2132,14 @@ class ModernMainWindow(QMainWindow):
                 #projectMeta { color: %(helper_color)s; font-size: %(helper_size)gpt; }
                 #summaryBadge { background: %(badge_bg)s; color: %(badge_text)s; border: 1px solid %(badge_border)s; border-radius: 12px; padding: %(badge_padding_v)spx %(badge_padding_h)spx; font-size: %(badge_font_size)gpt; font-weight: 700; }
                 #helper { color: %(helper_color)s; font-size: %(helper_size)gpt; }
+                #stageTitle { color: %(title_color)s; font-size: %(helper_size)gpt; font-weight: 700; }
+                #stageStatus { color: %(text_color)s; font-size: %(helper_size)gpt; font-weight: 600; }
+                #stageChip { border-radius: 12px; padding: 4px 10px; font-size: %(badge_font_size)gpt; font-weight: 700; min-width: 74px; }
+                #stageDivider { color: %(card_border)s; background: %(card_border)s; min-height: 1px; max-height: 1px; border: none; }
                 QTabWidget::pane { border: none; background: transparent; margin-top: %(tab_margin_top)spx; }
                 QTabBar::tab { background: %(tab_bg)s; border: 1px solid %(shell_border)s; border-bottom: none; border-top-left-radius: 14px; border-top-right-radius: 14px; padding: %(tab_padding_v)spx %(tab_padding_h)spx; margin-right: 6px; min-width: %(tab_min_width)spx; color: %(helper_color)s; font-weight: 700; }
                 QTabBar::tab:hover { background: %(tab_hover)s; color: %(title_color)s; }
-                QTabBar::tab:selected { background: %(tab_selected)s; color: %(title_color)s; }
+                QTabBar::tab:selected { background: %(tab_selected)s; color: %(primary_bg)s; font-weight: 800; }
                 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget, QPlainTextEdit { background: %(input_bg)s; border: 1px solid %(input_border)s; border-radius: 14px; padding: %(input_padding_v)spx %(input_padding_h)spx; color: %(title_color)s; }
                 QComboBox::drop-down { border: none; width: 28px; }
                 QComboBox QAbstractItemView { background: %(card_bg)s; border: 1px solid %(card_border)s; color: %(title_color)s; selection-background-color: %(list_selected)s; selection-color: %(title_color)s; }
@@ -2067,6 +2259,7 @@ class ModernMainWindow(QMainWindow):
         self.store.set("theme", self.theme)
         self._sync_theme_selector()
         self._apply_style()
+        self._refresh_stage_labels()
 
     def toggle_console(self, checked: bool = False):
         self._set_console_visible(checked)
@@ -2097,12 +2290,22 @@ class ModernMainWindow(QMainWindow):
             self.vswr_ystep.valueChanged,
             self.vswr_smooth.valueChanged,
             self.plot_grid.colorChanged,
+            self.cartesian_grid_line_width.valueChanged,
+            self.polar_grid_line_width.valueChanged,
+            self.cartesian_line_width.valueChanged,
+            self.polar_line_width.valueChanged,
+            self.cartesian_font_size.valueChanged,
+            self.polar_font_size.valueChanged,
+            self.cartesian_legend_font_size.valueChanged,
+            self.polar_legend_font_size.valueChanged,
             self.plot_line1.colorChanged,
             self.plot_line2.colorChanged,
             self.gain_legend_labels.textChanged,
             self.beamwidth_legend_labels.textChanged,
             self.beam_eff_legend_labels.textChanged,
             self.vswr_legend_labels.textChanged,
+            self.datasheet_template_combo.currentIndexChanged,
+            self.pdf_metadata_author.textChanged,
             self.rings.textChanged,
             self.angle_step.valueChanged,
             self.clip_db.valueChanged,
@@ -2147,20 +2350,27 @@ class ModernMainWindow(QMainWindow):
         setting_keys = {
             "beam": ["smooth", "theta"],
             "extract": ["smooth", "theta", "shared_fmin", "shared_fmax"],
-            "datasheet": ["smooth", "theta", "shared_fmin", "shared_fmax"],
+            "datasheet": ["smooth", "theta", "shared_fmin", "shared_fmax", "datasheet_template", "pdf_metadata_author"],
             "plot": [
                 "smooth2", "shared_xstep", "shared_fmin", "shared_fmax", "shared_xlog",
                 "gain_ymin", "gain_ymax", "gain_y_step",
                 "beamwidth_ymin", "beamwidth_ymax", "beamwidth_y_step",
                 "beam_eff_ymin", "beam_eff_ymax", "beam_eff_y_step",
-                "grid_color", "plot_line_1", "plot_line_2",
+                "grid_color",
+                "cartesian_grid_line_width", "polar_grid_line_width",
+                "cartesian_line_width", "polar_line_width",
+                "cartesian_font_size", "polar_font_size",
+                "cartesian_legend_font_size", "polar_legend_font_size",
+                "plot_line_1", "plot_line_2",
                 "gain_legend_labels", "beamwidth_legend_labels", "beam_eff_legend_labels",
                 "rings", "angle", "clip",
             ],
             "vswr": [
                 "shared_xstep", "shared_fmin", "shared_fmax", "shared_xlog",
                 "vswr_ymin", "vswr_ymax", "vswr_ystep", "vswr_smooth",
-                "grid_color", "plot_line_1", "plot_line_2", "vswr_legend_labels",
+                "grid_color",
+                "cartesian_grid_line_width", "cartesian_line_width", "cartesian_font_size", "cartesian_legend_font_size",
+                "plot_line_1", "plot_line_2", "vswr_legend_labels",
             ],
         }
         return {key: values[key] for key in setting_keys.get(stage_key, []) if key in values}
@@ -2181,11 +2391,13 @@ class ModernMainWindow(QMainWindow):
             ]
         if stage_key in {"extract", "vswr", "datasheet"}:
             snapshot["touchstone"] = self._path_fingerprint(self.selected_s2p())
+        if stage_key == "datasheet":
+            snapshot["technical_data"] = self._path_fingerprint(self.selected_technical_data())
         if stage_key in {"extract", "plot", "datasheet"}:
             snapshot["beam_workbook"] = self._path_fingerprint(self.deduced_beam_output())
         if stage_key == "datasheet":
             snapshot["extract_workbook"] = self._path_fingerprint(self.deduced_extract_output())
-            snapshot["template_pdf"] = self._path_fingerprint(DATASHEET_TEMPLATE)
+            snapshot["template_pdf"] = self._path_fingerprint(self.selected_datasheet_template_path())
             snapshot["plot_outputs"] = [
                 self._path_fingerprint(path)
                 for path in self._stage_output_files("plot")
@@ -2194,7 +2406,11 @@ class ModernMainWindow(QMainWindow):
 
     def _stage_output_files(self, stage_key: str) -> list[Path]:
         if stage_key == "beam":
-            return [self.deduced_beam_output()]
+            files = [self.deduced_beam_output()]
+            ant_dir = self.project_results_dir() / "ant_files"
+            if ant_dir.exists():
+                files.extend(path for path in ant_dir.rglob("*") if path.is_file())
+            return files
         if stage_key == "extract":
             return [self.deduced_extract_output()]
         if stage_key == "datasheet":
@@ -2203,19 +2419,32 @@ class ModernMainWindow(QMainWindow):
             vswr_output = self.deduced_vswr_output()
             return [
                 vswr_output,
-                vswr_output.with_name(f"{vswr_output.stem}_legend{vswr_output.suffix}"),
+                vswr_output.with_name(f"{vswr_output.stem}-legend{vswr_output.suffix}"),
             ]
         if stage_key == "plot":
             stem = self.deduced_beam_output().stem
             out_dir = self.project_results_dir()
-            return [
-                out_dir / f"{stem}_gain.svg",
-                out_dir / f"{stem}_gain_legend.svg",
-                out_dir / f"{stem}_beamwidth.svg",
-                out_dir / f"{stem}_beamwidth_legend.svg",
-                out_dir / f"{stem}_beam_efficiency.svg",
-                out_dir / f"{stem}_beam_efficiency_legend.svg",
+            files = [
+                out_dir / f"{stem}-gain.svg",
+                out_dir / f"{stem}-gain-legend.svg",
+                out_dir / f"{stem}-beamwidth.svg",
+                out_dir / f"{stem}-beamwidth-legend.svg",
+                out_dir / f"{stem}-beam-efficiency.svg",
+                out_dir / f"{stem}-beam-efficiency-legend.svg",
             ]
+            for folder_name in ("polar_combined", "polar_single"):
+                folder = out_dir / folder_name
+                if folder.exists():
+                    files.extend(path for path in folder.rglob("*") if path.is_file())
+            return files
+        return []
+
+    def _stage_generated_directories(self, stage_key: str) -> list[Path]:
+        out_dir = self.project_results_dir()
+        if stage_key == "beam":
+            return [out_dir / "ant_files"]
+        if stage_key == "plot":
+            return [out_dir / "polar_combined", out_dir / "polar_single"]
         return []
 
     def _stage_output_target(self, stage_key: str) -> Path:
@@ -2223,6 +2452,31 @@ class ModernMainWindow(QMainWindow):
             return self.project_results_dir()
         files = self._stage_output_files(stage_key)
         return files[0] if files else self.project_results_dir()
+
+    def _all_generated_output_files(self) -> list[Path]:
+        files: list[Path] = []
+        seen: set[Path] = set()
+        for stage_key, _label in STAGE_DEFINITIONS:
+            for path in self._stage_output_files(stage_key):
+                if path not in seen:
+                    seen.add(path)
+                    files.append(path)
+        return files
+
+    def _remove_generated_directories(self, stage_keys: list[str]) -> None:
+        seen: set[Path] = set()
+        for stage_key in stage_keys:
+            for path in self._stage_generated_directories(stage_key):
+                if path in seen or not path.exists():
+                    continue
+                seen.add(path)
+                shutil.rmtree(path, ignore_errors=False)
+
+    def _stage_output_any_exists(self, stage_key: str) -> bool:
+        files = self._stage_output_files(stage_key)
+        if not files:
+            return False
+        return any(path.exists() for path in files)
 
     def _stage_output_exists(self, stage_key: str) -> bool:
         files = self._stage_output_files(stage_key)
@@ -2266,12 +2520,13 @@ class ModernMainWindow(QMainWindow):
     def _stage_is_applicable(self, stage_key: str) -> bool:
         enabled_ffs = bool(self.selected_ffs())
         has_touchstone = bool(self.selected_s2p())
+        has_technical_data = bool(self.selected_technical_data())
         if stage_key == "beam":
             return enabled_ffs
         if stage_key == "extract":
             return enabled_ffs or has_touchstone
         if stage_key == "datasheet":
-            return enabled_ffs and has_touchstone
+            return enabled_ffs and has_touchstone and has_technical_data
         if stage_key == "plot":
             return enabled_ffs
         if stage_key == "vswr":
@@ -2325,8 +2580,14 @@ class ModernMainWindow(QMainWindow):
             messages.append(f"Selected Touchstone file is missing: {display_workspace_path(s2p)}")
         elif not s2p:
             messages.append("VSWR stage is unavailable until a Touchstone file is selected.")
-        if not DATASHEET_TEMPLATE.exists():
-            messages.append(f"Datasheet template is missing: {display_workspace_path(DATASHEET_TEMPLATE)}")
+        technical_data = self.selected_technical_data()
+        if technical_data and not Path(technical_data).exists():
+            messages.append(f"Selected Technical Data workbook is missing: {display_workspace_path(technical_data)}")
+        elif not technical_data:
+            messages.append("Datasheet stage is unavailable until a Technical Data workbook is selected.")
+        template_path = self.selected_datasheet_template_path()
+        if not template_path.exists():
+            messages.append(f"Selected datasheet template is missing: {display_workspace_path(template_path)}")
         fmin = float(self.shared_fmin.value())
         fmax = float(self.shared_fmax.value())
         if fmin > 0 and fmax <= fmin:
@@ -2373,38 +2634,115 @@ class ModernMainWindow(QMainWindow):
             "",
         )
 
+    def _chip_rgba(self, color: QColor, alpha: int) -> str:
+        return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
+
+    def _stage_chip_style(self, tone: str) -> str:
+        theme = THEME_STYLES.get(self.theme, THEME_STYLES["light"])
+        title = QColor(theme["title_color"])
+        helper = QColor(theme["helper_color"])
+        semantic_colors = {
+            "ready": QColor("#2f9e5b"),
+            "running": QColor("#2f80ed"),
+            "queued": QColor("#6b7a90"),
+            "stale": QColor("#d69e2e"),
+            "failed": QColor("#d64545"),
+            "cancelled": QColor("#8b94a7"),
+            "muted": QColor("#66758a"),
+        }
+        base = semantic_colors.get(tone, semantic_colors["muted"])
+        text = helper if tone == "muted" else title
+        background_alpha = 48 if tone in {"ready", "running", "stale", "failed"} else 36
+        border_alpha = 170 if tone in {"ready", "running", "stale", "failed"} else 120
+        return (
+            f"background: {self._chip_rgba(base, background_alpha)}; "
+            f"border: 1px solid {self._chip_rgba(base, border_alpha)}; "
+            f"color: {text.name()};"
+        )
+
     def _refresh_stage_labels(self) -> None:
         if not self.stage_status_labels or not self.stage_open_buttons:
             return
+        is_running = bool(self.proc.running_cmd or self.proc.queue or self._current_stage_key or self._pending_stage_keys)
         for stage_key, stage_label in STAGE_DEFINITIONS:
             stage_state = self._stage_state(stage_key)
             status = str(stage_state.get("status", "")).strip().lower()
             last_finished = str(stage_state.get("last_finished_at", "")).strip()
             last_success = str(stage_state.get("last_success_at", "")).strip()
-            button = self.stage_open_buttons[stage_key]
-            button.setEnabled(bool(self.active_project_slug) and self._stage_output_exists(stage_key))
+            applicable = self._stage_is_applicable(stage_key)
+            output_exists = self._stage_output_exists(stage_key)
+            any_output_exists = self._stage_output_any_exists(stage_key)
+            has_project = bool(self.active_project_slug)
+            self.stage_open_buttons[stage_key].setEnabled(bool(self.active_project_slug) and output_exists)
+            self.stage_reveal_actions[stage_key].setEnabled(bool(self.active_project_slug) and any_output_exists)
+            self.stage_delete_actions[stage_key].setEnabled(bool(self.active_project_slug) and any_output_exists)
+            self.stage_rerun_buttons[stage_key].setEnabled(
+                has_project
+                and applicable
+                and not is_running
+            )
+            self.stage_open_buttons[stage_key].setVisible(output_exists)
+            self.stage_rerun_buttons[stage_key].setVisible(has_project and applicable)
+            self.stage_more_buttons[stage_key].setVisible(has_project and (applicable or any_output_exists))
+            self.stage_more_buttons[stage_key].setEnabled(has_project and any_output_exists)
             if not self.active_project_slug:
-                text = f"{stage_label}: no project"
+                text = "No project selected."
+                timestamp_text = "Generated: not available"
+                chip_text = "None"
+                chip_tone = "muted"
             elif stage_key == self._current_stage_key:
-                text = f"{stage_label}: running"
+                progress = self._live_stage_progress_text(stage_key)
+                text = "Running"
+                if progress:
+                    text += f" ({progress})"
+                timestamp_text = "Generated: in progress"
+                chip_text = "Running"
+                chip_tone = "running"
             elif stage_key in self._pending_stage_keys:
-                text = f"{stage_label}: queued"
-            elif not self._stage_is_applicable(stage_key):
-                text = f"{stage_label}: not configured"
+                text = "Queued"
+                timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success and any_output_exists else "Generated: waiting"
+                chip_text = "Queued"
+                chip_tone = "queued"
+            elif not applicable:
+                text = "Not configured for this project."
+                timestamp_text = "Generated: not applicable"
+                chip_text = "Off"
+                chip_tone = "muted"
             elif status in {"failed", "cancelled"} and (not last_success or last_finished >= last_success):
-                text = f"{stage_label}: {status}"
+                text = status.capitalize()
+                timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success and any_output_exists else "Generated: not available"
+                chip_text = status.capitalize()
+                chip_tone = status
             elif self._stage_is_stale(stage_key):
-                text = f"{stage_label}: stale"
-            elif self._stage_output_exists(stage_key):
+                text = "Stale"
+                timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success else "Generated: unknown"
+                chip_text = "Stale"
+                chip_tone = "stale"
+            elif output_exists:
                 stamp = format_timestamp(str(stage_state.get("last_success_at", "")))
-                text = f"{stage_label}: ready ({stamp})"
+                text = "Ready"
+                timestamp_text = f"Generated: {stamp}"
+                chip_text = "Ready"
+                chip_tone = "ready"
             elif status == "failed":
-                text = f"{stage_label}: failed"
+                text = "Failed"
+                timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success and any_output_exists else "Generated: not available"
+                chip_text = "Failed"
+                chip_tone = "failed"
             elif status == "cancelled":
-                text = f"{stage_label}: cancelled"
+                text = "Cancelled"
+                timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success and any_output_exists else "Generated: not available"
+                chip_text = "Cancelled"
+                chip_tone = "cancelled"
             else:
-                text = f"{stage_label}: waiting"
+                text = "Waiting for the first run."
+                timestamp_text = "Generated: not yet"
+                chip_text = "Waiting"
+                chip_tone = "muted"
             self.stage_status_labels[stage_key].setText(text)
+            self.stage_timestamp_labels[stage_key].setText(timestamp_text)
+            self.stage_chip_labels[stage_key].setText(chip_text)
+            self.stage_chip_labels[stage_key].setStyleSheet(self._stage_chip_style(chip_tone))
 
     def _refresh_run_readiness(self) -> None:
         has_project = bool(self.active_project_slug)
@@ -2413,6 +2751,10 @@ class ModernMainWindow(QMainWindow):
         missing_enabled = self._missing_enabled_ffs() if has_project else []
         s2p = self.selected_s2p() if has_project else ""
         touchstone_ready = bool(s2p) and Path(s2p).exists()
+        technical_data = self.selected_technical_data() if has_project else ""
+        technical_data_ready = bool(technical_data) and Path(technical_data).exists()
+        template_path = self.selected_datasheet_template_path()
+        template_ready = template_path.exists()
         frequency_ready = self._frequency_window_is_valid()
         stale_stages = self._stale_stage_keys() if has_project else []
         latest_failed = self._latest_failed_stage_key() if has_project else ""
@@ -2430,7 +2772,8 @@ class ModernMainWindow(QMainWindow):
             and enabled_ffs > 0
             and not missing_enabled
             and touchstone_ready
-            and DATASHEET_TEMPLATE.exists()
+            and technical_data_ready
+            and template_ready
         )
         vswr_ready = has_project and frequency_ready and touchstone_ready
 
@@ -2475,11 +2818,13 @@ class ModernMainWindow(QMainWindow):
         if running:
             stage_label = STAGE_LABELS.get(self._current_stage_key, self._current_stage_key.title()) if self._current_stage_key else "Pipeline"
             queued = len(self._pending_stage_keys)
-            self.readiness_summary.setText(
-                f"{stage_label} is running."
-                + (f" {queued} stage(s) remain queued." if queued else " The queue is active.")
-            )
-            self._set_readiness_action("Cancel run", self.cancel_run, tooltip="Stop the current run and clear any queued stages.")
+            summary = f"{stage_label} is running."
+            progress = self._live_stage_progress_text()
+            if progress:
+                summary += f" {progress}."
+            summary += f" {queued} stage(s) remain queued." if queued else " The queue is active."
+            self.readiness_summary.setText(summary)
+            self._set_readiness_action("Run Full Pipeline", self.run_full, enabled=False, tooltip="")
             return
 
         if unsaved_changes:
@@ -2521,13 +2866,23 @@ class ModernMainWindow(QMainWindow):
             return
 
         if not s2p:
-            self.readiness_summary.setText("Far-field stages are ready, but Touchstone is still missing. Use Manual runs for workbook, extract, or plots, or add Touchstone for Full Pipeline.")
-            self._set_readiness_action("Manual runs", self._open_manual_runs_menu, tooltip="Open the single-stage run menu.")
+            self.readiness_summary.setText("Far-field stages are ready, but Touchstone is still missing. Use the Project workspace menu for workbook, extract, or plots, or add Touchstone for Full Pipeline.")
+            self._set_readiness_action("Project actions", self._open_project_actions_menu, tooltip="Open the Project workspace actions menu.")
             return
 
-        if not DATASHEET_TEMPLATE.exists():
-            self.readiness_summary.setText("Datasheet.pdf is missing from the project root, so Full Pipeline cannot complete. Use Manual runs until the template is restored.")
-            self._set_readiness_action("Manual runs", self._open_manual_runs_menu, tooltip="Open the single-stage run menu.")
+        if technical_data and not technical_data_ready:
+            self.readiness_summary.setText("The selected Technical Data workbook is missing. Full Pipeline and Datasheet stay unavailable until you fix that path.")
+            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to fix the Technical Data workbook path.")
+            return
+
+        if not technical_data:
+            self.readiness_summary.setText("Far-field and Touchstone inputs are ready, but Technical Data is still missing. Add it before running Datasheet or Full Pipeline.")
+            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to select a Technical Data workbook.")
+            return
+
+        if not template_ready:
+            self.readiness_summary.setText("The selected datasheet export style is missing. Choose an available style before running Datasheet or Full Pipeline.")
+            self._set_readiness_action("Open Document", self._show_document_tab, tooltip="Go to the Document tab to select a datasheet export style.")
             return
 
         if latest_failed:
@@ -2622,11 +2977,7 @@ class ModernMainWindow(QMainWindow):
         if unsaved_changes and not self._current_stage_key:
             pass
         elif self._current_stage_key:
-            queued = len(self._pending_stage_keys)
-            self.run_summary.setText(
-                f"Running {STAGE_LABELS.get(self._current_stage_key, self._current_stage_key.title())}"
-                + (f" | {queued} stage(s) queued" if queued else "")
-            )
+            self.run_summary.setText(self._running_summary_text())
         else:
             latest_failed = self._latest_failed_stage_key()
             if latest_failed:
@@ -2649,6 +3000,13 @@ class ModernMainWindow(QMainWindow):
         value = self.s2p_field.text().strip()
         return str(resolve_workspace_path(value)) if value else ""
 
+    def selected_technical_data(self) -> str:
+        value = self.technical_data_field.text().strip()
+        return str(resolve_workspace_path(value)) if value else ""
+
+    def selected_pdf_metadata_author(self) -> str:
+        return self.pdf_metadata_author.text().strip()
+
     def current_project(self) -> ProjectRecord | None:
         if not self.active_project_slug:
             return None
@@ -2664,6 +3022,7 @@ class ModernMainWindow(QMainWindow):
                 for item in self.collect_ffs_items()
             ],
             touchstone_file=serialize_workspace_path(THIS_DIR, self.selected_s2p()),
+            technical_data_file=serialize_workspace_path(THIS_DIR, self.selected_technical_data()),
             settings={},
             presets={},
             active_preset=self.project_active_preset,
@@ -2680,34 +3039,24 @@ class ModernMainWindow(QMainWindow):
 
     def deduced_extract_output(self) -> Path:
         project = self.current_project()
-        return project.extract_path(THIS_DIR) if project else (self.project_results_dir() / "project_extracted_data.xlsx")
+        return project.extract_path(THIS_DIR) if project else (self.project_results_dir() / "project-extracted-data.xlsx")
 
     def deduced_datasheet_output(self) -> Path:
         project = self.current_project()
-        return project.datasheet_path(THIS_DIR) if project else (self.project_results_dir() / "project_datasheet.pdf")
+        return project.datasheet_path(THIS_DIR) if project else (self.project_results_dir() / "project-datasheet.pdf")
 
     def deduced_vswr_output(self) -> Path:
         project = self.current_project()
-        return project.vswr_path(THIS_DIR) if project else (self.project_results_dir() / "project_vswr.svg")
+        return project.vswr_path(THIS_DIR) if project else (self.project_results_dir() / "project-vswr.svg")
 
     def refresh_derived_paths(self) -> None:
         if self.active_project_slug:
             project_label = self.active_project_name or self.active_project_slug
             self.project_name.setText(project_label)
             self.project_meta.setText(f"Folder: {display_workspace_path(self.project_results_dir())}")
-            self.workbook_field.setText(display_workspace_path(self.deduced_beam_output()))
-            self.extract_field.setText(display_workspace_path(self.deduced_extract_output()))
-            self.datasheet_field.setText(display_workspace_path(self.deduced_datasheet_output()))
-            self.results_field.setText(display_workspace_path(self.project_results_dir()))
-            self.vswr_field.setText(display_workspace_path(self.deduced_vswr_output()))
         else:
             self.project_name.setText("No project selected")
             self.project_meta.setText("Create a project to keep inputs, presets, and generated results together.")
-            self.workbook_field.clear()
-            self.extract_field.clear()
-            self.datasheet_field.clear()
-            self.results_field.clear()
-            self.vswr_field.clear()
         total_ffs = len(self.collect_ffs_items()) if self.active_project_slug else 0
         enabled_ffs = len(self.selected_ffs()) if self.active_project_slug else 0
         self.count_badge.setText(f"{enabled_ffs}/{total_ffs} far-field enabled" if total_ffs else "0 far-field files")
@@ -2715,13 +3064,14 @@ class ModernMainWindow(QMainWindow):
             suffix = " *" if self.has_unsaved_project_changes() else ""
             self.project_name.setText(f"{(self.active_project_name or self.active_project_slug)}{suffix}")
         self.open_s2p_button.setEnabled(bool(self.active_project_slug and self.selected_s2p()))
+        self.open_technical_data_button.setEnabled(bool(self.active_project_slug and self.selected_technical_data()))
         self._update_ffs_action_state()
         self._refresh_project_summary()
         self._update_project_action_state()
 
     def _update_project_action_state(self) -> None:
         has_project = bool(self.active_project_slug)
-        is_running = bool(self.proc.running_cmd or self.proc.queue)
+        is_running = bool(self.proc.running_cmd or self.proc.queue or self._current_stage_key or self._pending_stage_keys)
         is_dirty = self.has_unsaved_project_changes()
         self.project_save_button.setEnabled(has_project and is_dirty)
         self.project_more_button.setEnabled(True)
@@ -2734,29 +3084,95 @@ class ModernMainWindow(QMainWindow):
         self.project_run_datasheet_action.setEnabled(has_project)
         self.project_run_plot_action.setEnabled(has_project)
         self.project_run_vswr_action.setEnabled(has_project)
-        self.run_more_button.setEnabled(has_project)
-        self.run_more_beam_action.setEnabled(has_project)
-        self.run_more_extract_action.setEnabled(has_project)
-        self.run_more_datasheet_action.setEnabled(has_project)
-        self.run_more_plot_action.setEnabled(has_project)
-        self.run_more_vswr_action.setEnabled(has_project)
         self.project_import_action.setEnabled(True)
         self.project_export_action.setEnabled(has_project)
+        has_generated_outputs = any(path.exists() for path in self._all_generated_output_files()) if has_project else False
+        self.project_delete_outputs_action.setEnabled(has_project and not is_running and has_generated_outputs)
         self.project_open_folder_action.setEnabled(has_project)
         for widget in (
             self.btn_full,
+            self.btn_clear_outputs,
             self.ffs_list,
             self.s2p_field,
+            self.technical_data_field,
             self.add_ffs_button,
             self.remove_ffs_button,
             self.clear_ffs_button,
             self.select_s2p_button,
             self.clear_s2p_button,
             self.open_s2p_button,
+            self.select_technical_data_button,
+            self.clear_technical_data_button,
+            self.open_technical_data_button,
+            self.datasheet_template_combo,
+            self.pdf_metadata_author,
         ):
             widget.setEnabled(has_project)
+        self.btn_clear_outputs.setEnabled(has_project and not is_running and has_generated_outputs)
         self.btn_cancel.setEnabled(has_project and is_running)
+        self.btn_cancel.setVisible(has_project and is_running)
         self._update_preset_action_state()
+
+    def _clear_live_run_progress(self) -> None:
+        self._live_run_total_stages = 0
+        self._live_run_completed_stages = 0
+        self._live_stage_progress_key = ""
+        self._live_stage_progress_current = 0
+        self._live_stage_progress_total = 0
+        self._live_stage_progress_label = ""
+
+    def _reset_live_stage_progress(self, stage_key: str = "", label: str = "") -> None:
+        self._live_stage_progress_key = stage_key
+        self._live_stage_progress_current = 0
+        self._live_stage_progress_total = 0
+        self._live_stage_progress_label = label
+
+    def _live_stage_progress_fraction(self, stage_key: str | None = None) -> float | None:
+        key = stage_key or self._current_stage_key or self._live_stage_progress_key
+        if not key or key != self._live_stage_progress_key or self._live_stage_progress_total <= 0:
+            return None
+        return max(0.0, min(1.0, self._live_stage_progress_current / self._live_stage_progress_total))
+
+    def _live_stage_progress_text(self, stage_key: str | None = None) -> str:
+        key = stage_key or self._current_stage_key or self._live_stage_progress_key
+        if not key or key != self._live_stage_progress_key:
+            return ""
+        parts: list[str] = []
+        if self._live_stage_progress_total > 0:
+            parts.append(f"{self._live_stage_progress_current}/{self._live_stage_progress_total}")
+        if self._live_stage_progress_label:
+            parts.append(self._live_stage_progress_label)
+        return " | ".join(parts)
+
+    def _live_overall_progress_value(self) -> int | None:
+        if self._live_run_total_stages <= 0:
+            return None
+        fraction = self._live_stage_progress_fraction()
+        if self._current_stage_key and fraction is None:
+            return None
+        completed = float(self._live_run_completed_stages)
+        if fraction is not None:
+            completed += fraction
+        return int(round(max(0.0, min(1.0, completed / self._live_run_total_stages)) * 100))
+
+    def _sync_live_progress_bar(self) -> None:
+        self.set_progress(self._live_overall_progress_value())
+
+    def _running_stage_label(self) -> str:
+        stage_key = self._current_stage_key or self._live_stage_progress_key
+        if not stage_key:
+            return "Pipeline"
+        return STAGE_LABELS.get(stage_key, stage_key.title())
+
+    def _running_summary_text(self) -> str:
+        text = f"Running {self._running_stage_label()}"
+        progress = self._live_stage_progress_text()
+        if progress:
+            text += f" | {progress}"
+        queued = len(self._pending_stage_keys)
+        if queued:
+            text += f" | {queued} stage(s) queued"
+        return text
 
     def _update_preset_action_state(self) -> None:
         if not hasattr(self, "preset_combo"):
@@ -2826,6 +3242,7 @@ class ModernMainWindow(QMainWindow):
             self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
             self._pending_stage_keys = []
             self._current_stage_key = ""
+            self._clear_live_run_progress()
             self._loading_project = True
             self.ffs_list.clear()
             self.s2p_field.clear()
@@ -2838,7 +3255,7 @@ class ModernMainWindow(QMainWindow):
         self._apply_project(project)
 
     def _persist_global_presets(self) -> None:
-        self.store.set(PRESET_STORE_KEY, self.global_presets)
+        self.preset_store.replace_all(self.global_presets)
         active_name = self.global_active_preset if self.global_active_preset in self.global_presets else ""
         self.global_active_preset = active_name
         self.store.set(ACTIVE_PRESET_KEY, active_name)
@@ -2862,6 +3279,7 @@ class ModernMainWindow(QMainWindow):
         self._loaded_project_schema_version = int(project.schema_version or 1)
         self._pending_stage_keys = []
         self._current_stage_key = ""
+        self._clear_live_run_progress()
         self.store.set("active_project", project.slug)
         self.ffs_list.clear()
         self._add_ffs_files(project.ffs_items or [{"path": path, "enabled": True} for path in project.ffs_files], save=False)
@@ -2870,6 +3288,8 @@ class ModernMainWindow(QMainWindow):
             guessed = guess_touchstone_path(project.name, self.selected_ffs())
             touchstone = guessed
         self.s2p_field.setText(display_workspace_path(touchstone))
+        technical_data = resolve_project_path(THIS_DIR, project.technical_data_file)
+        self.technical_data_field.setText(display_workspace_path(technical_data))
         legacy_presets_migrated = self._migrate_legacy_project_presets(project.presets)
         self.project_active_preset = project.active_preset.strip()
         missing_preset = bool(self.project_active_preset and self.project_active_preset not in self.global_presets)
@@ -2883,6 +3303,7 @@ class ModernMainWindow(QMainWindow):
         self.refresh_preset_list(select_name=self.project_active_preset)
         self.store.set("beam_ffs", self.selected_ffs())
         self.store.set("vswr_s2p", touchstone)
+        self.store.set("technical_data_xlsx", technical_data)
         self._loading_project = False
         self._capture_saved_project_signature(self.current_project())
         if self._loaded_project_schema_version < CURRENT_PROJECT_SCHEMA_VERSION:
@@ -2905,6 +3326,7 @@ class ModernMainWindow(QMainWindow):
         self.store.set("active_project", project.slug)
         self.store.set("beam_ffs", self.selected_ffs())
         self.store.set("vswr_s2p", self.selected_s2p())
+        self.store.set("technical_data_xlsx", self.selected_technical_data())
         self.refresh_derived_paths()
 
     def create_project(self) -> None:
@@ -2931,6 +3353,7 @@ class ModernMainWindow(QMainWindow):
             slug=slug,
             ffs_items=[],
             touchstone_file="",
+            technical_data_file="",
             settings={},
             presets={},
             active_preset=self.current_preset_name(),
@@ -3033,6 +3456,12 @@ class ModernMainWindow(QMainWindow):
         self.store.set("vswr_s2p", resolved)
         self._mark_project_dirty()
 
+    def _set_technical_data(self, path: str) -> None:
+        resolved = str(resolve_workspace_path(path)) if path else ""
+        self.technical_data_field.setText(display_workspace_path(resolved))
+        self.store.set("technical_data_xlsx", resolved)
+        self._mark_project_dirty()
+
     def preset_names(self) -> list[str]:
         return sorted(str(name) for name in self.global_presets.keys())
 
@@ -3080,12 +3509,22 @@ class ModernMainWindow(QMainWindow):
             "vswr_ystep": float(self.vswr_ystep.value()),
             "vswr_smooth": int(self.vswr_smooth.value()),
             "grid_color": self.plot_grid.color(),
+            "cartesian_grid_line_width": float(self.cartesian_grid_line_width.value()),
+            "polar_grid_line_width": float(self.polar_grid_line_width.value()),
+            "cartesian_line_width": float(self.cartesian_line_width.value()),
+            "polar_line_width": float(self.polar_line_width.value()),
+            "cartesian_font_size": float(self.cartesian_font_size.value()),
+            "polar_font_size": float(self.polar_font_size.value()),
+            "cartesian_legend_font_size": float(self.cartesian_legend_font_size.value()),
+            "polar_legend_font_size": float(self.polar_legend_font_size.value()),
             "plot_line_1": self.plot_line1.color(),
             "plot_line_2": self.plot_line2.color(),
             "gain_legend_labels": self.gain_legend_labels.text().strip(),
             "beamwidth_legend_labels": self.beamwidth_legend_labels.text().strip(),
             "beam_eff_legend_labels": self.beam_eff_legend_labels.text().strip(),
             "vswr_legend_labels": self.vswr_legend_labels.text().strip(),
+            "datasheet_template": self.selected_datasheet_template_name(),
+            "pdf_metadata_author": self.selected_pdf_metadata_author(),
             "rings": self.rings.text().strip(),
             "angle": int(self.angle_step.value()),
             "clip": float(self.clip_db.value()),
@@ -3094,6 +3533,13 @@ class ModernMainWindow(QMainWindow):
     def apply_preset_values(self, values: dict[str, object]) -> None:
         if not values:
             return
+        def value_or_legacy(primary: str, legacy: str) -> object | None:
+            if primary in values:
+                return values[primary]
+            if legacy in values:
+                return values[legacy]
+            return None
+
         if "smooth" in values: self.beam_smooth.setValue(int(values["smooth"]))
         if "theta" in values: self.theta_window.setValue(float(values["theta"]))
         if "smooth2" in values: self.plot_smooth.setValue(int(values["smooth2"]))
@@ -3115,12 +3561,32 @@ class ModernMainWindow(QMainWindow):
         if "vswr_ystep" in values: self.vswr_ystep.setValue(float(values["vswr_ystep"]))
         if "vswr_smooth" in values: self.vswr_smooth.setValue(int(values["vswr_smooth"]))
         if "grid_color" in values: self.plot_grid.set_color(str(values["grid_color"]))
+        cartesian_grid_line_width = value_or_legacy("cartesian_grid_line_width", "plot_grid_line_width")
+        if cartesian_grid_line_width is not None: self.cartesian_grid_line_width.setValue(float(cartesian_grid_line_width))
+        polar_grid_line_width = value_or_legacy("polar_grid_line_width", "plot_grid_line_width")
+        if polar_grid_line_width is not None: self.polar_grid_line_width.setValue(float(polar_grid_line_width))
+        cartesian_line_width = value_or_legacy("cartesian_line_width", "plot_line_width")
+        if cartesian_line_width is not None: self.cartesian_line_width.setValue(float(cartesian_line_width))
+        polar_line_width = value_or_legacy("polar_line_width", "plot_line_width")
+        if polar_line_width is not None: self.polar_line_width.setValue(float(polar_line_width))
+        cartesian_font_size = value_or_legacy("cartesian_font_size", "plot_font_size")
+        if cartesian_font_size is not None: self.cartesian_font_size.setValue(float(cartesian_font_size))
+        polar_font_size = value_or_legacy("polar_font_size", "plot_font_size")
+        if polar_font_size is not None: self.polar_font_size.setValue(float(polar_font_size))
+        cartesian_legend_font_size = value_or_legacy("cartesian_legend_font_size", "plot_legend_font_size")
+        if cartesian_legend_font_size is not None: self.cartesian_legend_font_size.setValue(float(cartesian_legend_font_size))
+        polar_legend_font_size = value_or_legacy("polar_legend_font_size", "plot_legend_font_size")
+        if polar_legend_font_size is not None: self.polar_legend_font_size.setValue(float(polar_legend_font_size))
         if "plot_line_1" in values: self.plot_line1.set_color(str(values["plot_line_1"]))
         if "plot_line_2" in values: self.plot_line2.set_color(str(values["plot_line_2"]))
         if "gain_legend_labels" in values: self.gain_legend_labels.setText(str(values["gain_legend_labels"]))
         if "beamwidth_legend_labels" in values: self.beamwidth_legend_labels.setText(str(values["beamwidth_legend_labels"]))
         if "beam_eff_legend_labels" in values: self.beam_eff_legend_labels.setText(str(values["beam_eff_legend_labels"]))
         if "vswr_legend_labels" in values: self.vswr_legend_labels.setText(str(values["vswr_legend_labels"]))
+        if "datasheet_template" in values:
+            self.refresh_datasheet_template_options(str(values["datasheet_template"]))
+            self.store.set("datasheet_template", self.selected_datasheet_template_name())
+        if "pdf_metadata_author" in values: self.pdf_metadata_author.setText(str(values["pdf_metadata_author"]))
         if "rings" in values: self.rings.setText(str(values["rings"]))
         if "angle" in values: self.angle_step.setValue(int(values["angle"]))
         if "clip" in values: self.clip_db.setValue(float(values["clip"]))
@@ -3395,6 +3861,20 @@ class ModernMainWindow(QMainWindow):
             return
         self._set_touchstone("")
 
+    def browse_technical_data(self):
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
+        fn, _ = QFileDialog.getOpenFileName(self, "Select Technical Data", str(THIS_DIR), "Excel Workbooks (*.xlsx *.xlsm)")
+        if fn:
+            self._set_technical_data(fn)
+
+    def clear_technical_data(self):
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
+        self._set_technical_data("")
+
     def set_busy(self, on: bool):
         self.busy.setVisible(on)
         if on:
@@ -3410,6 +3890,38 @@ class ModernMainWindow(QMainWindow):
             if self.busy.maximum() != 100:
                 self.busy.setRange(0, 100)
             self.busy.setValue(value)
+
+    def on_proc_progress(self, payload: dict[str, object]) -> None:
+        stage_key = str(payload.get("stage", "")).strip().lower()
+        if not stage_key:
+            stage_key = self._current_stage_key
+        if self._current_stage_key and stage_key and stage_key != self._current_stage_key:
+            return
+        try:
+            current = int(payload.get("current", 0))
+            total = int(payload.get("total", 0))
+        except (TypeError, ValueError):
+            return
+        if total <= 0:
+            return
+        self._live_stage_progress_key = stage_key or self._current_stage_key
+        self._live_stage_progress_total = max(1, total)
+        self._live_stage_progress_current = max(0, min(self._live_stage_progress_total, current))
+        self._live_stage_progress_label = str(payload.get("label", "")).strip()
+        self._sync_live_progress_bar()
+        self.refresh_derived_paths()
+
+    def on_proc_progress_percent(self, pct: int) -> None:
+        if not self._current_stage_key:
+            self.set_progress(pct)
+            return
+        self._live_stage_progress_key = self._current_stage_key
+        self._live_stage_progress_total = 100
+        self._live_stage_progress_current = max(0, min(100, int(pct)))
+        if not self._live_stage_progress_label:
+            self._live_stage_progress_label = "Working"
+        self._sync_live_progress_bar()
+        self.refresh_derived_paths()
 
     def log(self, text: str, color: str | None = None, channel: str | None = None):
         if color:
@@ -3448,7 +3960,10 @@ class ModernMainWindow(QMainWindow):
         return ""
 
     def _enqueue_stage(self, stage_key: str, args: list[str]) -> None:
+        if not (self.proc.running_cmd or self.proc.queue or self._pending_stage_keys or self._current_stage_key):
+            self._clear_live_run_progress()
         self._pending_stage_keys.append(stage_key)
+        self._live_run_total_stages += 1
         self.proc.enqueue(args)
         self.refresh_derived_paths()
 
@@ -3464,6 +3979,9 @@ class ModernMainWindow(QMainWindow):
         self._pending_stage_keys = []
         self._current_stage_key = ""
         self._run_cancelled = True
+        self._clear_live_run_progress()
+        self.proc.running_cmd = None
+        self.proc.queue.clear()
         self.proc.stop()
         self.save_active_project()
         self.refresh_derived_paths()
@@ -3478,10 +3996,108 @@ class ModernMainWindow(QMainWindow):
             return
         open_in_file_manager(target)
 
+    def reveal_stage_output(self, stage_key: str) -> None:
+        if not self._stage_output_any_exists(stage_key):
+            self.status("Generate that output first")
+            return
+        target = self._stage_output_target(stage_key)
+        folder = target if stage_key == "plot" else target.parent
+        open_in_file_manager(folder)
+
+    def rerun_stage(self, stage_key: str) -> None:
+        callbacks = {
+            "beam": self.run_beam,
+            "extract": self.run_extract,
+            "datasheet": self.run_datasheet,
+            "plot": self.run_plot,
+            "vswr": self.run_vswr,
+        }
+        callback = callbacks.get(stage_key)
+        if callback is None:
+            self.status("That stage cannot be rerun")
+            return
+        callback()
+
+    def delete_stage_output(self, stage_key: str) -> None:
+        files = [path for path in self._stage_output_files(stage_key) if path.exists()]
+        stage_dirs = [path for path in self._stage_generated_directories(stage_key) if path.exists()]
+        if not files and not stage_dirs:
+            self.status("Generate that output first")
+            return
+        stage_label = STAGE_LABELS.get(stage_key, stage_key.title())
+        answer = QMessageBox.question(
+            self,
+            f"Delete {stage_label}",
+            f"Delete the generated {stage_label.lower()} output?",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        for path in files:
+            try:
+                path.unlink()
+            except OSError as exc:
+                QMessageBox.warning(self, "Delete Failed", f"Could not delete:\n{path}\n\n{exc}")
+                return
+        try:
+            self._remove_generated_directories([stage_key])
+        except OSError as exc:
+            QMessageBox.warning(self, "Delete Failed", f"Could not delete generated folder contents.\n\n{exc}")
+            return
+        stage_state = self._stage_state(stage_key)
+        stage_state["status"] = "waiting"
+        stage_state["last_finished_at"] = utc_now_iso()
+        self._append_history("deleted", stage_key)
+        self.save_active_project()
+        self.refresh_derived_paths()
+        self.status(f"Deleted {stage_label.lower()} output")
+
+    def delete_all_outputs(self) -> None:
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
+        files = [path for path in self._all_generated_output_files() if path.exists()]
+        stage_dirs = [path for stage_key, _label in STAGE_DEFINITIONS for path in self._stage_generated_directories(stage_key) if path.exists()]
+        if not files and not stage_dirs:
+            self.status("No generated outputs to delete")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Clear Generated Files",
+            "Delete all generated output files for the current project directory?\n\nThe project file and saved settings will be kept.",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        for path in files:
+            try:
+                path.unlink()
+            except OSError as exc:
+                QMessageBox.warning(self, "Delete Failed", f"Could not delete:\n{path}\n\n{exc}")
+                return
+        try:
+            self._remove_generated_directories([stage_key for stage_key, _label in STAGE_DEFINITIONS])
+        except OSError as exc:
+            QMessageBox.warning(self, "Delete Failed", f"Could not delete generated folder contents.\n\n{exc}")
+            return
+        deleted_stages: list[str] = []
+        for stage_key, _label in STAGE_DEFINITIONS:
+            stage_files = self._stage_output_files(stage_key)
+            if any(path in files for path in stage_files):
+                stage_state = self._stage_state(stage_key)
+                stage_state["status"] = "waiting"
+                stage_state["last_finished_at"] = utc_now_iso()
+                deleted_stages.append(stage_key)
+        for stage_key in deleted_stages:
+            self._append_history("deleted", stage_key)
+        self.save_active_project()
+        self.refresh_derived_paths()
+        self.status("Cleared generated files")
+
     def on_proc_step_started(self, args: list[str], cmd: str) -> None:
         stage_key = self._pending_stage_keys.pop(0) if self._pending_stage_keys else self._detect_stage_key(args)
         self._current_stage_key = stage_key
         self._run_cancelled = False
+        self._reset_live_stage_progress(stage_key, f"Starting {STAGE_LABELS.get(stage_key, stage_key.title())}" if stage_key else "")
+        self._sync_live_progress_bar()
         if not stage_key:
             self.refresh_derived_paths()
             return
@@ -3503,6 +4119,10 @@ class ModernMainWindow(QMainWindow):
         if self._run_cancelled:
             self.refresh_derived_paths()
             return
+        if self._live_run_completed_stages < self._live_run_total_stages:
+            self._live_run_completed_stages += 1
+        self._reset_live_stage_progress()
+        self._sync_live_progress_bar()
         stage_state = self._stage_state(stage_key)
         finished_at = utc_now_iso()
         stage_state["last_finished_at"] = finished_at
@@ -3531,13 +4151,27 @@ class ModernMainWindow(QMainWindow):
     def on_proc_finished(self):
         if hasattr(self, "_tick"):
             self._tick.stop()
-        self.run_info.setText("Advancing to next stage..." if self.proc.queue else "Idle")
+        if self.proc.queue:
+            self.run_info.setText("Advancing to next stage...")
+            return
+        self._clear_live_run_progress()
+        self.run_info.setText("Idle")
+        self.refresh_derived_paths()
 
     def _update_run_info(self):
+        if not (self._current_stage_key or self.proc.running_cmd or self.proc.queue):
+            return
         elapsed = int(time.time() - getattr(self, "_started_ts", time.time()))
         mm, ss = divmod(elapsed, 60)
         hh, mm = divmod(mm, 60)
-        self.run_info.setText(f"Running | {getattr(self, '_line_count', 0)} lines | {hh:02d}:{mm:02d}:{ss:02d}")
+        text = f"Running {self._running_stage_label()} | {hh:02d}:{mm:02d}:{ss:02d}"
+        if self._live_stage_progress_total > 0:
+            text = (
+                f"Running {self._running_stage_label()} | "
+                f"{self._live_stage_progress_current}/{self._live_stage_progress_total} | "
+                f"{hh:02d}:{mm:02d}:{ss:02d}"
+            )
+        self.run_info.setText(text)
 
     def run_beam(self):
         if not self.active_project_slug:
@@ -3600,8 +4234,9 @@ class ModernMainWindow(QMainWindow):
         if not self.active_project_slug:
             self.status("Create or select a project first")
             return
-        if not DATASHEET_TEMPLATE.exists():
-            self.status("Datasheet.pdf is missing from the project root")
+        template_path = self.selected_datasheet_template_path()
+        if not template_path.exists():
+            self.status("Selected datasheet export style is missing")
             return
         if self._missing_enabled_ffs():
             self.status("Remove or fix missing far-field files before generating the datasheet")
@@ -3612,6 +4247,13 @@ class ModernMainWindow(QMainWindow):
             return
         if not Path(s2p).exists():
             self.status("Selected Touchstone file is missing")
+            return
+        technical_data = self.selected_technical_data()
+        if not technical_data:
+            self.status("Select a Technical Data workbook before generating the datasheet")
+            return
+        if not Path(technical_data).exists():
+            self.status("Selected Technical Data workbook is missing")
             return
         extract_output = self.deduced_extract_output()
         if not extract_output.exists():
@@ -3632,9 +4274,13 @@ class ModernMainWindow(QMainWindow):
             SCRIPT_DATASHEET,
             str(self.deduced_datasheet_output()),
             "--template",
-            str(DATASHEET_TEMPLATE),
+            str(template_path),
             "--extract-workbook",
             str(extract_output),
+            "--technical-data-workbook",
+            technical_data,
+            "--metadata-author",
+            self.selected_pdf_metadata_author(),
         ]
         self._save_project_if_dirty()
         self._enqueue_stage("datasheet", args)
@@ -3653,7 +4299,15 @@ class ModernMainWindow(QMainWindow):
         args = [which_python(), "-u", SCRIPT_PLOT, str(xlsx),
                 "--out-dir", str(self.project_results_dir()),
                 "--grid-color", self.plot_grid.color(),
+                "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
+                "--polar-grid-line-width", str(self.polar_grid_line_width.value()),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
+                "--cartesian-line-width", str(self.cartesian_line_width.value()),
+                "--polar-line-width", str(self.polar_line_width.value()),
+                "--cartesian-font-size", str(self.cartesian_font_size.value()),
+                "--polar-font-size", str(self.polar_font_size.value()),
+                "--cartesian-legend-font-size", str(self.cartesian_legend_font_size.value()),
+                "--polar-legend-font-size", str(self.polar_legend_font_size.value()),
                 "--rings", self.rings.text().strip(),
                 "--angle-step", str(self.angle_step.value()),
                 "--clip-db", str(self.clip_db.value()),
@@ -3707,7 +4361,11 @@ class ModernMainWindow(QMainWindow):
         args = [which_python(), "-u", SCRIPT_VSWR, s2p,
                 "--output", str(self.deduced_vswr_output()),
                 "--grid-color", self.plot_grid.color(),
+                "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
+                "--cartesian-line-width", str(self.cartesian_line_width.value()),
+                "--cartesian-font-size", str(self.cartesian_font_size.value()),
+                "--cartesian-legend-font-size", str(self.cartesian_legend_font_size.value()),
                 "--x-step", str(self.shared_xstep.value()),
                 "--ymin", str(self.vswr_ymin.value()),
                 "--ymax", str(self.vswr_ymax.value()),
@@ -3738,8 +4396,9 @@ class ModernMainWindow(QMainWindow):
         if not ffs:
             self.status("Add at least one .ffs file")
             return
-        if not DATASHEET_TEMPLATE.exists():
-            self.status("Datasheet.pdf is missing from the project root")
+        template_path = self.selected_datasheet_template_path()
+        if not template_path.exists():
+            self.status("Selected datasheet export style is missing")
             return
         s2p = self.selected_s2p()
         if not s2p:
@@ -3747,6 +4406,13 @@ class ModernMainWindow(QMainWindow):
             return
         if not Path(s2p).exists():
             self.status("Selected Touchstone file is missing")
+            return
+        technical_data = self.selected_technical_data()
+        if not technical_data:
+            self.status("Select a Technical Data workbook before running the full pipeline")
+            return
+        if not Path(technical_data).exists():
+            self.status("Selected Technical Data workbook is missing")
             return
 
         args_beam = [which_python(), "-u", SCRIPT_BEAM, out] + ffs + [
@@ -3763,7 +4429,15 @@ class ModernMainWindow(QMainWindow):
         args_plot = [which_python(), "-u", SCRIPT_PLOT, out,
                 "--out-dir", str(self.project_results_dir()),
                 "--grid-color", self.plot_grid.color(),
+                "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
+                "--polar-grid-line-width", str(self.polar_grid_line_width.value()),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
+                "--cartesian-line-width", str(self.cartesian_line_width.value()),
+                "--polar-line-width", str(self.polar_line_width.value()),
+                "--cartesian-font-size", str(self.cartesian_font_size.value()),
+                "--polar-font-size", str(self.polar_font_size.value()),
+                "--cartesian-legend-font-size", str(self.cartesian_legend_font_size.value()),
+                "--polar-legend-font-size", str(self.polar_legend_font_size.value()),
                 "--rings", self.rings.text().strip(),
                 "--angle-step", str(self.angle_step.value()),
                 "--clip-db", str(self.clip_db.value()),
@@ -3798,25 +4472,15 @@ class ModernMainWindow(QMainWindow):
         if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
             args_plot += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
         self._enqueue_stage("plot", args_plot)
-        if args_extract:
-            self._enqueue_stage(
-                "datasheet",
-                [
-                    which_python(),
-                    "-u",
-                    SCRIPT_DATASHEET,
-                    str(self.deduced_datasheet_output()),
-                    "--template",
-                    str(DATASHEET_TEMPLATE),
-                    "--extract-workbook",
-                    str(self.deduced_extract_output()),
-                ],
-            )
 
         args_vswr = [which_python(), "-u", SCRIPT_VSWR, s2p,
                 "--output", str(self.deduced_vswr_output()),
                 "--grid-color", self.plot_grid.color(),
+                "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
+                "--cartesian-line-width", str(self.cartesian_line_width.value()),
+                "--cartesian-font-size", str(self.cartesian_font_size.value()),
+                "--cartesian-legend-font-size", str(self.cartesian_legend_font_size.value()),
                 "--x-step", str(self.shared_xstep.value()),
                 "--ymin", str(self.vswr_ymin.value()),
                 "--ymax", str(self.vswr_ymax.value()),
@@ -3829,6 +4493,24 @@ class ModernMainWindow(QMainWindow):
         if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
             args_vswr += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
         self._enqueue_stage("vswr", args_vswr)
+        if args_extract:
+            self._enqueue_stage(
+                "datasheet",
+                [
+                    which_python(),
+                    "-u",
+                    SCRIPT_DATASHEET,
+                    str(self.deduced_datasheet_output()),
+                    "--template",
+                    str(template_path),
+                    "--extract-workbook",
+                    str(self.deduced_extract_output()),
+                    "--technical-data-workbook",
+                    technical_data,
+                    "--metadata-author",
+                    self.selected_pdf_metadata_author(),
+                ],
+            )
 
     def _restore_geometry(self):
         width = self.store.get("window_width", None)

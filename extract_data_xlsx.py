@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import re
 from pathlib import Path
@@ -18,6 +19,13 @@ from beamwidth_xlsx import (
     read_ffs_broadband,
 )
 from plot_vswr import calc_vswr, pair_to_complex, read_touchstone
+
+
+def emit_progress(stage: str, current: int, total: int, label: str) -> None:
+    print(
+        f"AT_PROGRESS {json.dumps({'stage': stage, 'current': int(current), 'total': int(total), 'label': label})}",
+        flush=True,
+    )
 
 
 def infer_polarization_label(path: Path) -> str:
@@ -572,9 +580,13 @@ def main() -> int:
     ffs_summaries: list[dict[str, object]] = []
     ffs_details: list[dict[str, object]] = []
     use_beam_workbook = bool(args.beam_workbook and args.ffs and beam_workbook_is_fresh(args.beam_workbook, args.ffs))
+    progress_total = len(args.ffs) + (1 if args.touchstone else 0) + 1
+    progress_step = 0
     if use_beam_workbook:
         print(f"Reusing FFS metrics from beam workbook: {args.beam_workbook.name}")
     for ffs_path in args.ffs:
+        progress_step += 1
+        emit_progress("extract", progress_step, progress_total, f"Processing {ffs_path.name}")
         print(f"Processing FFS: {ffs_path.name}")
         all_rows = compute_ffs_rows_from_beam_workbook(args.beam_workbook, ffs_path) if use_beam_workbook else compute_ffs_rows(ffs_path, args.smooth, args.theta_window)
         selected_rows, used_fmin, used_fmax = filter_rows_by_range(all_rows, args.ffs_fmin, args.ffs_fmax)
@@ -589,6 +601,8 @@ def main() -> int:
     ts_summaries: list[dict[str, object]] = []
     ts_details: list[dict[str, object]] = []
     if args.touchstone:
+        progress_step += 1
+        emit_progress("extract", progress_step, progress_total, f"Processing {args.touchstone.name}")
         print(f"Processing Touchstone: {args.touchstone.name}")
         all_rows = compute_touchstone_rows(args.touchstone)
         for port in sorted({str(row["port"]) for row in all_rows}):
@@ -606,6 +620,7 @@ def main() -> int:
     if not ffs_summaries and not ts_summaries:
         raise SystemExit("No usable data could be extracted from the provided inputs.")
 
+    emit_progress("extract", progress_total, progress_total, f"Saving {args.output.name}")
     build_workbook(args.output, overview_rows, ffs_summaries, ffs_details, ts_summaries, ts_details)
     print(f"Wrote extracted workbook: {args.output}")
     return 0
