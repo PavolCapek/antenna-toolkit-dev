@@ -4066,11 +4066,12 @@ class ModernMainWindow(QMainWindow):
 
     def configure_google_sheet_credentials(self):
         client_path = self.google_sheets_oauth_client_path()
-        if not client_path.exists():
-            path, _ = QFileDialog.getOpenFileName(self, "Select Google OAuth Client JSON", str(THIS_DIR), "JSON (*.json)")
-            if not path:
-                return
+        start_dir = client_path.parent if client_path.exists() else THIS_DIR
+        path, _ = QFileDialog.getOpenFileName(self, "Select Google OAuth Client JSON", str(start_dir), "JSON (*.json)")
+        if path:
             self.store.set(GOOGLE_SHEETS_OAUTH_CLIENT_KEY, str(Path(path).resolve()))
+        elif not client_path.exists():
+            return
         try:
             self._ensure_google_sheets_credentials(interactive=True)
         except Exception as exc:

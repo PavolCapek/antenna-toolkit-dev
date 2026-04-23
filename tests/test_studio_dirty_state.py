@@ -225,6 +225,36 @@ class StudioDirtyStateTests(unittest.TestCase):
         download.assert_called_once_with(url)
         self.assertEqual(result, str(cached_xlsx))
 
+    def test_google_sign_in_always_allows_selecting_client_json(self) -> None:
+        old_client = Path(self.temp_dir.name) / "old_client.json"
+        new_client = Path(self.temp_dir.name) / "new_client.json"
+        old_client.write_text("old", encoding="utf-8")
+        new_client.write_text("new", encoding="utf-8")
+        self.window.store.set(studio_module.GOOGLE_SHEETS_OAUTH_CLIENT_KEY, str(old_client))
+
+        with (
+            mock.patch("antenna_toolkit_studio.QFileDialog.getOpenFileName", return_value=(str(new_client), "JSON (*.json)")),
+            mock.patch.object(self.window, "_ensure_google_sheets_credentials") as ensure_credentials,
+        ):
+            self.window.configure_google_sheet_credentials()
+
+        ensure_credentials.assert_called_once_with(interactive=True)
+        self.assertEqual(self.window.google_sheets_oauth_client_path(), new_client)
+
+    def test_google_sign_in_cancel_reuses_existing_client_json(self) -> None:
+        existing_client = Path(self.temp_dir.name) / "existing_client.json"
+        existing_client.write_text("client", encoding="utf-8")
+        self.window.store.set(studio_module.GOOGLE_SHEETS_OAUTH_CLIENT_KEY, str(existing_client))
+
+        with (
+            mock.patch("antenna_toolkit_studio.QFileDialog.getOpenFileName", return_value=("", "")),
+            mock.patch.object(self.window, "_ensure_google_sheets_credentials") as ensure_credentials,
+        ):
+            self.window.configure_google_sheet_credentials()
+
+        ensure_credentials.assert_called_once_with(interactive=True)
+        self.assertEqual(self.window.google_sheets_oauth_client_path(), existing_client)
+
     def test_global_presets_remain_available_without_or_across_projects(self) -> None:
         self.window.global_presets["Preset A"] = self.window.collect_preset_values()
         self.window.global_active_preset = "Preset A"

@@ -22,6 +22,7 @@ site/
 # Local tool/editor state
 .nova_qt_state.json
 .nova_qt_studio_state.json
+client_secret*.json
 .idea/
 .vscode/
 .python-version
