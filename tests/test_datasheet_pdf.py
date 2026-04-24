@@ -1093,6 +1093,24 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertLessEqual(beamwidth_target.width, by_kind["beamwidth"].legend_rect.width)
         self.assertLessEqual(beamwidth_target.height, by_kind["beamwidth"].legend_rect.height)
 
+    def test_polar_legends_use_same_scale_as_cartesian_legends(self) -> None:
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_chart_replacements(doc[1], self.output_pdf, self.extract_workbook)
+
+        by_kind = {replacement.kind: replacement for replacement in replacements}
+        shared_scale = _shared_side_legend_scale(replacements)
+
+        self.assertIsNotNone(shared_scale)
+        beamwidth_target = _legend_target_rect(by_kind["beamwidth"], shared_scale)
+        azimuth_target = _legend_target_rect(by_kind["azimuth"], shared_scale)
+
+        beamwidth_scale = min(beamwidth_target.width / 180.0, beamwidth_target.height / 110.0)
+        azimuth_scale = min(azimuth_target.width / 150.0, azimuth_target.height / 70.0)
+
+        self.assertAlmostEqual(beamwidth_scale, azimuth_scale, delta=0.01)
+        self.assertLessEqual(azimuth_target.width, by_kind["azimuth"].legend_rect.width)
+        self.assertLessEqual(azimuth_target.height, by_kind["azimuth"].legend_rect.height)
+
     def test_svg_to_pdf_bytes_preserves_dashed_strokes(self) -> None:
         dashed_svg = self.root / "dashed.svg"
         dashed_svg.write_text(

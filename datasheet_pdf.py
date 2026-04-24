@@ -2216,8 +2216,6 @@ def _center_rect_with_size(container_rect: fitz.Rect, width: float, height: floa
 def _shared_side_legend_scale(replacements: list[ChartReplacement]) -> float | None:
     scales: list[float] = []
     for replacement in replacements:
-        if replacement.kind not in {"gain", "beamwidth"}:
-            continue
         if replacement.legend_rect is None or replacement.legend_asset_path is None:
             continue
         native_width, native_height = _svg_drawing_size(str(replacement.legend_asset_path.resolve()))
@@ -2239,7 +2237,7 @@ def _legend_target_rect(replacement: ChartReplacement, shared_side_scale: float 
     native_width, native_height = _svg_drawing_size(str(replacement.legend_asset_path.resolve()))
     if native_width <= 0.0 or native_height <= 0.0:
         return container_rect
-    if replacement.kind in {"gain", "beamwidth"} and shared_side_scale is not None and shared_side_scale > 0.0:
+    if shared_side_scale is not None and shared_side_scale > 0.0:
         return _center_rect_with_size(container_rect, native_width * shared_side_scale, native_height * shared_side_scale)
     scale = min(container_rect.width / native_width, container_rect.height / native_height)
     return _center_rect_with_size(container_rect, native_width * scale, native_height * scale)
