@@ -28,6 +28,22 @@ DEFAULT_LINE_COLORS = [
     ("Pine", "#2f8f6b"),
     ("Slate", "#5b6c7d"),
 ]
+DEFAULT_BEAMWIDTH_DB_COLORS = [
+    ("Signal Red", "#ff0000"),
+    ("Bright Red", "#e60000"),
+    ("Deep Red", "#b00000"),
+    ("Dark Red", "#8b0000"),
+    ("Soft Red", "#ef4444"),
+    ("Neutral Gray", "#808080"),
+    ("Light Gray", "#a3a3a3"),
+    ("Cool Gray", "#737373"),
+    ("Dark Gray", "#525252"),
+    ("Graphite", "#404040"),
+    ("Jet Black", "#000000"),
+    ("Near Black", "#111111"),
+    ("Charcoal", "#1f1f1f"),
+    ("Soft Black", "#262626"),
+]
 PRESET_STORE_KEY = "ui_presets"
 PRESET_DIRECTORY_NAME = "Presets"
 PRESET_KEYS = [
@@ -66,6 +82,9 @@ PRESET_KEYS = [
     "plot_legend_font_size",
     "plot_line_1",
     "plot_line_2",
+    "beamwidth_3db_color",
+    "beamwidth_6db_color",
+    "beamwidth_10db_color",
     "datasheet_template",
     "pdf_metadata_author",
     "rings",

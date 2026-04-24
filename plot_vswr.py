@@ -35,6 +35,7 @@ from plot import (
     STACKED_LEGEND_ROW_SEP,
     export_stacked_line_legend,
 )
+from datasheet_artifacts import build_asset_record, update_artifact_manifest
 from legend_utils import apply_legend_labels, parse_legend_labels
 
 # ------------------ global color scheme (kept from gain plot) ------------------
@@ -417,6 +418,12 @@ def main():
         line_width=cartesian_line_width,
     )
     emit_progress("vswr", 2, 2, f"Saving {out_path.name}")
+    bookstem = out_path.stem[:-5] if out_path.stem.endswith("-vswr") else out_path.stem
+    update_artifact_manifest(
+        out_path.parent,
+        bookstem,
+        vswr=build_asset_record(out_path, legend_path=legend_path),
+    )
     print(f"Saved: {out_path}")
     if legend_path:
         print(f"Saved: {legend_path}")

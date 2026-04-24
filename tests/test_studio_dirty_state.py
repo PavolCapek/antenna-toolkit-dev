@@ -90,11 +90,13 @@ class StudioDirtyStateTests(unittest.TestCase):
         loaded_after_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_after_save.presets, {})
         self.assertEqual(loaded_after_save.active_preset, "Preset A")
+        first_saved_settings = dict(loaded_after_save.settings)
+        self.assertEqual(first_saved_settings["smooth"], self.window.beam_smooth.value())
 
         self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
         self.app.processEvents()
 
-        self.assertFalse(self.window.has_unsaved_project_changes())
+        self.assertTrue(self.window.has_unsaved_project_changes())
 
         self.window.cartesian_grid_line_width.setValue(1.4)
         self.window.polar_grid_line_width.setValue(1.1)
@@ -110,7 +112,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.window.save_preset()
         self.app.processEvents()
 
-        self.assertFalse(self.window.has_unsaved_project_changes())
+        self.assertTrue(self.window.has_unsaved_project_changes())
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["smooth"], self.window.beam_smooth.value())
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_grid_line_width"], 1.4)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_grid_line_width"], 1.1)
@@ -120,11 +122,11 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_font_size"], 11.5)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_legend_font_size"], 14.0)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_legend_font_size"], 13.0)
-        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["datasheet_template"], "Datasheet.pdf")
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["datasheet_template"], "Datasheet - RFE.pdf")
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["pdf_metadata_author"], "Custom Datasheet Author")
         loaded_before_second_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_before_second_save.presets, {})
-        self.assertEqual(loaded_before_second_save.settings, {})
+        self.assertEqual(loaded_before_second_save.settings, first_saved_settings)
 
         self.window.save_project_changes()
         self.app.processEvents()
@@ -132,29 +134,29 @@ class StudioDirtyStateTests(unittest.TestCase):
         loaded_after_second_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_after_second_save.presets, {})
         self.assertEqual(loaded_after_second_save.active_preset, "Preset A")
-        self.assertEqual(loaded_after_second_save.settings, {})
+        self.assertEqual(loaded_after_second_save.settings, self.window.collect_preset_values())
 
     def test_document_tab_contains_preset_backed_author_field(self) -> None:
         tabs = [self.window.workflow_tabs.tabText(index) for index in range(self.window.workflow_tabs.count())]
 
         self.assertEqual(tabs, ["Inputs", "Processing", "Style", "Document", "Run"])
-        self.assertGreaterEqual(self.window.datasheet_template_combo.findData("Datasheet.pdf"), 0)
-        self.assertEqual(self.window.collect_preset_values()["datasheet_template"], "Datasheet.pdf")
+        self.assertGreaterEqual(self.window.datasheet_template_combo.findData("Datasheet - RFE.pdf"), 0)
+        self.assertEqual(self.window.collect_preset_values()["datasheet_template"], "Datasheet - RFE.pdf")
         self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "RF elements")
         self.window.pdf_metadata_author.setText("Preset Author")
         self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "Preset Author")
 
     def test_datasheet_template_selection_is_preset_backed_and_marks_snapshot_stale(self) -> None:
-        default_template = Path(self.temp_dir.name) / "Datasheet.pdf"
+        default_template = Path(self.temp_dir.name) / "Datasheet - RFE.pdf"
         alternate_template = Path(self.temp_dir.name) / "Alternate Style.pdf"
         default_template.write_text("default", encoding="utf-8")
         alternate_template.write_text("alternate", encoding="utf-8")
         options = [
-            ("Datasheet.pdf", default_template),
+            ("Datasheet - RFE.pdf", default_template),
             ("Alternate Style.pdf", alternate_template),
         ]
         with mock.patch.object(self.window, "_datasheet_template_options", return_value=options):
-            self.window.refresh_datasheet_template_options("Datasheet.pdf")
+            self.window.refresh_datasheet_template_options("Datasheet - RFE.pdf")
             initial_snapshot = self.window._current_stage_snapshot("datasheet")
             self.window.refresh_datasheet_template_options("Alternate Style.pdf")
             changed_snapshot = self.window._current_stage_snapshot("datasheet")
@@ -534,10 +536,41 @@ class StudioDirtyStateTests(unittest.TestCase):
             self.window.run_full()
 
         self.assertEqual(queued, ["beam", "extract", "plot", "vswr", "datasheet"])
+        self.assertIn("--beamwidth-db-colors", queued_args["plot"])
         self.assertIn("--template", queued_args["datasheet"])
-        self.assertEqual(Path(queued_args["datasheet"][queued_args["datasheet"].index("--template") + 1]).name, "Datasheet.pdf")
+        self.assertEqual(Path(queued_args["datasheet"][queued_args["datasheet"].index("--template") + 1]).name, "Datasheet - RFE.pdf")
         self.assertIn("--metadata-author", queued_args["datasheet"])
         self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--metadata-author") + 1], "Pipeline Author")
+
+    def test_run_plot_passes_beamwidth_db_colors(self) -> None:
+        beam_output = self.window.deduced_beam_output()
+        beam_output.parent.mkdir(parents=True, exist_ok=True)
+        beam_output.write_text("xlsx", encoding="utf-8")
+        self.window.beamwidth_3db_color.set_color("#aa0000")
+        self.window.beamwidth_6db_color.set_color("#777777")
+        self.window.beamwidth_10db_color.set_color("#111111")
+        self.app.processEvents()
+
+        queued: list[str] = []
+        queued_args: dict[str, list[str]] = {}
+
+        with (
+            mock.patch.object(self.window, "_save_project_if_dirty"),
+            mock.patch.object(
+                self.window,
+                "_enqueue_stage",
+                side_effect=lambda stage_key, args: (queued.append(stage_key), queued_args.setdefault(stage_key, args)),
+            ),
+        ):
+            self.window.run_plot()
+
+        self.assertEqual(queued, ["plot"])
+        plot_args = queued_args["plot"]
+        self.assertIn("--beamwidth-db-colors", plot_args)
+        self.assertEqual(
+            plot_args[plot_args.index("--beamwidth-db-colors") + 1],
+            "#aa0000,#777777,#111111",
+        )
 
     def test_run_full_uses_cached_google_sheet_workbook_for_datasheet(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "sample.ffs"
@@ -648,6 +681,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         polar_combined_legend = project_dir / "polar_combined" / f"{beam_output.stem}-polar-5_8ghz-combined-legend.svg"
         polar_az_output = project_dir / "polar_single" / "azimuth" / f"{beam_output.stem}-polar-azimuth-5_8ghz.svg"
         polar_el_output = project_dir / "polar_single" / "elevation" / f"{beam_output.stem}-polar-elevation-5_8ghz.svg"
+        beamwidth_e_plane_output = project_dir / f"{beam_output.stem}-beamwidth-e-plane-h.svg"
+        beamwidth_e_plane_legend = project_dir / f"{beam_output.stem}-beamwidth-e-plane-h-legend.svg"
         project_dir.mkdir(parents=True, exist_ok=True)
         for path in (
             beam_output,
@@ -659,6 +694,8 @@ class StudioDirtyStateTests(unittest.TestCase):
             project_dir / f"{beam_output.stem}-gain-legend.svg",
             project_dir / f"{beam_output.stem}-beamwidth.svg",
             project_dir / f"{beam_output.stem}-beamwidth-legend.svg",
+            beamwidth_e_plane_output,
+            beamwidth_e_plane_legend,
             project_dir / f"{beam_output.stem}-beam-efficiency.svg",
             project_dir / f"{beam_output.stem}-beam-efficiency-legend.svg",
             ant_output,
@@ -690,6 +727,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertFalse(polar_combined_legend.exists())
         self.assertFalse(polar_az_output.exists())
         self.assertFalse(polar_el_output.exists())
+        self.assertFalse(beamwidth_e_plane_output.exists())
+        self.assertFalse(beamwidth_e_plane_legend.exists())
         self.assertFalse((project_dir / "ant_files").exists())
         self.assertFalse((project_dir / "polar_combined").exists())
         self.assertFalse((project_dir / "polar_single").exists())

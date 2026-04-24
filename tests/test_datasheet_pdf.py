@@ -8,6 +8,7 @@ from pathlib import Path
 import fitz
 import pandas as pd
 
+from datasheet_artifacts import build_asset_record, load_artifact_manifest, update_artifact_manifest
 from datasheet_pdf import (
     ChartReplacement,
     _build_chart_replacements,
@@ -23,6 +24,7 @@ from datasheet_pdf import (
     build_replacements_from_workbook,
     load_technical_data_workbook,
 )
+from datasheet_templates import NETQUI_TEMPLATE_ADAPTER, RFE_TEMPLATE_ADAPTER
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -52,8 +54,21 @@ class DatasheetPdfTests(unittest.TestCase):
         self.output_pdf = self.root / "output.pdf"
         self.gain_svg = self.root / "extract-gain.svg"
         self.gain_legend_svg = self.root / "extract-gain-legend.svg"
+        self.vswr_svg = self.root / "extract-vswr.svg"
         self.beamwidth_svg = self.root / "extract-beamwidth.svg"
         self.beamwidth_legend_svg = self.root / "extract-beamwidth-legend.svg"
+        self.beamwidth_e_plane_h_svg = self.root / "extract-beamwidth-e-plane-h.svg"
+        self.beamwidth_e_plane_h_legend_svg = self.root / "extract-beamwidth-e-plane-h-legend.svg"
+        self.beamwidth_h_plane_h_svg = self.root / "extract-beamwidth-h-plane-h.svg"
+        self.beamwidth_h_plane_h_legend_svg = self.root / "extract-beamwidth-h-plane-h-legend.svg"
+        self.manifest_gain_svg = self.root / "manifest-gain.svg"
+        self.manifest_gain_legend_svg = self.root / "manifest-gain-legend.svg"
+        self.manifest_beamwidth_svg = self.root / "manifest-beamwidth.svg"
+        self.manifest_beamwidth_legend_svg = self.root / "manifest-beamwidth-legend.svg"
+        self.manifest_azimuth_svg = self.root / "manifest-azimuth.svg"
+        self.manifest_azimuth_legend_svg = self.root / "manifest-azimuth-legend.svg"
+        self.manifest_elevation_svg = self.root / "manifest-elevation.svg"
+        self.manifest_elevation_legend_svg = self.root / "manifest-elevation-legend.svg"
         self.polar_azimuth_dir = self.root / "polar_single" / "azimuth"
         self.polar_elevation_dir = self.root / "polar_single" / "elevation"
         self.azimuth_svg = self.polar_azimuth_dir / "extract-polar-azimuth-5.500-GHz.svg"
@@ -66,8 +81,21 @@ class DatasheetPdfTests(unittest.TestCase):
         self.page2_elevation_rect = fitz.Rect(204.0, 460.0, 344.0, 600.0)
         self._write_svg(self.gain_svg, "#00ff00", width=300, height=120)
         self._write_svg(self.gain_legend_svg, "#ffffff", width=140, height=70)
+        self._write_svg(self.vswr_svg, "#ff8800", width=300, height=120)
         self._write_svg(self.beamwidth_svg, "#ffff00", width=300, height=120)
         self._write_svg(self.beamwidth_legend_svg, "#ffffff", width=180, height=110)
+        self._write_svg(self.beamwidth_e_plane_h_svg, "#990000", width=300, height=120)
+        self._write_svg(self.beamwidth_e_plane_h_legend_svg, "#ffffff", width=90, height=130)
+        self._write_svg(self.beamwidth_h_plane_h_svg, "#111111", width=300, height=120)
+        self._write_svg(self.beamwidth_h_plane_h_legend_svg, "#ffffff", width=90, height=130)
+        self._write_svg(self.manifest_gain_svg, "#228833", width=300, height=120)
+        self._write_svg(self.manifest_gain_legend_svg, "#ffffff", width=140, height=70)
+        self._write_svg(self.manifest_beamwidth_svg, "#ddcc33", width=300, height=120)
+        self._write_svg(self.manifest_beamwidth_legend_svg, "#ffffff", width=180, height=110)
+        self._write_svg(self.manifest_azimuth_svg, "#0099cc", width=140, height=140)
+        self._write_svg(self.manifest_azimuth_legend_svg, "#ffffff", width=150, height=70)
+        self._write_svg(self.manifest_elevation_svg, "#cc33aa", width=140, height=140)
+        self._write_svg(self.manifest_elevation_legend_svg, "#ffffff", width=150, height=70)
         self._write_svg(self.azimuth_svg, "#00ffff", width=140, height=140)
         self._write_svg(self.azimuth_legend_svg, "#ffffff", width=150, height=70)
         self._write_svg(self.elevation_svg, "#ff00ff", width=140, height=140)
@@ -167,6 +195,100 @@ class DatasheetPdfTests(unittest.TestCase):
                 doc.set_metadata(metadata)
             if xml_metadata is not None and hasattr(doc, "set_xml_metadata"):
                 doc.set_xml_metadata(xml_metadata)
+            doc.save(self.template_pdf)
+
+    def _write_netqui_chart_template_pdf(self) -> tuple[fitz.Rect, fitz.Rect, fitz.Rect, fitz.Rect]:
+        with fitz.open() as doc:
+            doc.new_page()
+            page = doc.new_page(width=596.0, height=842.0)
+            red_pix = self._svg_pixmap("#ff0000", 300, 120)
+            gray_pix = self._svg_pixmap("#808080", 300, 120)
+            black_pix = self._svg_pixmap("#000000", 300, 120)
+            polar_pix = self._svg_pixmap("#00ffff", 140, 140)
+            gain_rect = fitz.Rect(42.75, 51.50, 263.25, 218.00)
+            vswr_rect = fitz.Rect(266.25, 50.75, 486.75, 218.00)
+            e_plane_rect = fitz.Rect(42.75, 278.94, 293.25, 449.19)
+            h_plane_rect = fitz.Rect(296.25, 278.94, 549.00, 449.19)
+            polar_rects = [
+                fitz.Rect(42.75, 498.15, 209.25, 648.90),
+                fitz.Rect(212.25, 496.65, 378.00, 648.90),
+                fitz.Rect(381.00, 495.90, 543.75, 648.90),
+            ]
+            for rect, pixmap in [
+                (gain_rect, red_pix),
+                (vswr_rect, gray_pix),
+                (e_plane_rect, black_pix),
+                (h_plane_rect, black_pix),
+                *[(rect, polar_pix) for rect in polar_rects],
+            ]:
+                page.insert_image(rect, pixmap=pixmap, keep_proportion=True)
+            page.insert_text((36.0, 32.0), "ANTENNA GAIN", fontsize=8, fontname="helv")
+            page.insert_text((360.0, 32.0), "VSWR", fontsize=8, fontname="helv")
+            page.insert_text((36.0, 260.0), "ANTENNA BEAMWIDTH", fontsize=8, fontname="helv")
+            page.insert_text((36.0, 480.0), "RADIATION PATTERNS", fontsize=8, fontname="helv")
+            doc.save(self.template_pdf)
+        return gain_rect, vswr_rect, e_plane_rect, h_plane_rect
+
+    def _write_netqui_technical_template_pdf(self) -> None:
+        with fitz.open() as doc:
+            page = doc.new_page(width=596.0, height=842.0)
+            page.insert_text((42.8, 45.8), "RUGGED LOG-PERIODIC ANTENNA", fontsize=18.0, fontname="helv", color=(0.14, 0.12, 0.12))
+            page.insert_text((42.8, 89.7), "SKU: RLP-F-33-A", fontsize=12.0, fontname="helv", color=(0.14, 0.12, 0.12))
+            page.insert_text((41.2, 414.5), "ELECTRICAL DATA", fontsize=10.0, fontname="helv", color=(0.14, 0.12, 0.12))
+            page.insert_text((302.2, 414.5), "MECHANICAL DATA", fontsize=10.0, fontname="helv", color=(0.14, 0.12, 0.12))
+            left_rows = [
+                ("Antenna Type", "Log-periodic Antenna", 439.7),
+                ("Frequency Range", "300 - 3000 MHZ", 453.3),
+                ("Polarization", "Single linear, Vertical", 467.0),
+                ("Gain", "9.5 dBi", 480.6),
+                ("Beamwidth E plane.", "55/75/95 deg (-3/-6/-10 dB)", 494.2),
+                ("Beamwidth H plane.", "80/100/130 deg (-3/-6/-10 dB)", 507.8),
+                ("VSWR", "<1.5", 521.4),
+                ("Nominal Impedance", "50 ohm", 535.0),
+                ("Max Input Power", "150W", 548.7),
+            ]
+            for label, value, y in left_rows:
+                page.insert_text((41.2, y), label, fontsize=10.0, fontname="helv", color=(0.14, 0.12, 0.12))
+                page.insert_text((148.5, y), value, fontsize=10.0, fontname="helv", color=(0.25, 0.25, 0.25))
+            right_rows = [
+                ("Dimensions (LxWxD)", "1142 x 200 x 618 mm", 439.7),
+                ("Weight", "6.7 kg", 453.3),
+                ("RF Connection", "N female", 467.0),
+                ("Pole Mounting Diameter", "60 - 120 mm", 480.6),
+                ("Material", "Aluminium, ABS, ABS+PMMA", 494.2),
+                ("Wind Survival", "180 km/h", 521.4),
+            ]
+            for label, value, y in right_rows:
+                page.insert_text((302.2, y), label, fontsize=10.0, fontname="helv", color=(0.14, 0.12, 0.12))
+                page.insert_text((433.5, y), value, fontsize=10.0, fontname="helv", color=(0.25, 0.25, 0.25))
+            page.insert_text((35.0, 585.0), "DIMMENSIONS", fontsize=10.0, fontname="helv", color=(0.14, 0.12, 0.12))
+
+            charts_page = doc.new_page(width=596.0, height=842.0)
+            red_pix = self._svg_pixmap("#ff0000", 300, 120)
+            gray_pix = self._svg_pixmap("#808080", 300, 120)
+            black_pix = self._svg_pixmap("#000000", 300, 120)
+            polar_pix = self._svg_pixmap("#00ffff", 140, 140)
+            gain_rect = fitz.Rect(42.75, 51.50, 263.25, 218.00)
+            vswr_rect = fitz.Rect(266.25, 50.75, 486.75, 218.00)
+            e_plane_rect = fitz.Rect(42.75, 278.94, 293.25, 449.19)
+            h_plane_rect = fitz.Rect(296.25, 278.94, 549.00, 449.19)
+            polar_rects = [
+                fitz.Rect(42.75, 498.15, 209.25, 648.90),
+                fitz.Rect(212.25, 496.65, 378.00, 648.90),
+                fitz.Rect(381.00, 495.90, 543.75, 648.90),
+            ]
+            for rect, pixmap in [
+                (gain_rect, red_pix),
+                (vswr_rect, gray_pix),
+                (e_plane_rect, black_pix),
+                (h_plane_rect, black_pix),
+                *[(rect, polar_pix) for rect in polar_rects],
+            ]:
+                charts_page.insert_image(rect, pixmap=pixmap, keep_proportion=True)
+            charts_page.insert_text((36.0, 32.0), "ANTENNA GAIN", fontsize=8, fontname="helv")
+            charts_page.insert_text((360.0, 32.0), "VSWR", fontsize=8, fontname="helv")
+            charts_page.insert_text((36.0, 260.0), "ANTENNA BEAMWIDTH", fontsize=8, fontname="helv")
+            charts_page.insert_text((36.0, 480.0), "RADIATION PATTERNS", fontsize=8, fontname="helv")
             doc.save(self.template_pdf)
 
     def _write_svg(self, path: Path, fill: str, width: int, height: int) -> None:
@@ -537,6 +659,37 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertIn("50 Ohm", page_text)
         self.assertNotIn("Old gain", page_text)
 
+    def test_build_datasheet_pdf_netqui_template_marks_missing_technical_values(self) -> None:
+        self._write_netqui_technical_template_pdf()
+        self._write_technical_workbook(
+            [
+                ("Antenna Name", ""),
+                ("Product ID", ""),
+                ("Antenna Type", ""),
+                ("Dimensions (LxWxD)", ""),
+                ("Weight", ""),
+            ]
+        )
+
+        build_datasheet_pdf(
+            output=self.output_pdf,
+            template=self.template_pdf,
+            extract_workbook=self.extract_workbook,
+            technical_data_workbook=self.technical_workbook,
+        )
+
+        with fitz.open(self.output_pdf) as doc:
+            page_text = doc[0].get_text()
+
+        self.assertIn("text_placeholder", page_text)
+        self.assertIn("4900 - 7125 MHz", page_text)
+        self.assertIn("19.5 dBi", page_text)
+        self.assertIn("50 Ohm", page_text)
+        self.assertIn("Dual Linear H + V", page_text)
+        self.assertNotIn("Log-periodic Antenna", page_text)
+        self.assertNotIn("1142 x 200 x 618 mm", page_text)
+        self.assertNotIn("6.7 kg", page_text)
+
     def test_exact_span_replacement_does_not_paint_white_background(self) -> None:
         with fitz.open() as doc:
             page = doc.new_page(width=200.0, height=80.0)
@@ -808,6 +961,90 @@ class DatasheetPdfTests(unittest.TestCase):
             (by_kind["elevation"].legend_rect.x0 + by_kind["elevation"].legend_rect.x1) / 2.0,
             delta=0.5,
         )
+
+    def test_rfe_template_manifest_keeps_azimuth_left_and_elevation_right(self) -> None:
+        self._write_template_pdf(reverse_polar_slot_order=True)
+
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_chart_replacements(
+                doc[1],
+                self.output_pdf,
+                self.extract_workbook,
+                adapter=RFE_TEMPLATE_ADAPTER,
+            )
+
+        by_kind = {replacement.kind: replacement for replacement in replacements}
+        self.assertLess(by_kind["azimuth"].rect.x0, by_kind["elevation"].rect.x0)
+        self.assertEqual(by_kind["azimuth"].asset_path, self.azimuth_svg)
+        self.assertEqual(by_kind["elevation"].asset_path, self.elevation_svg)
+
+    def test_netqui_template_uses_e_and_h_plane_beamwidth_slots(self) -> None:
+        self._write_netqui_chart_template_pdf()
+
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_chart_replacements(doc[1], self.output_pdf, self.extract_workbook)
+
+        by_kind = {replacement.kind: replacement for replacement in replacements}
+        self.assertEqual(by_kind["gain"].asset_path, self.gain_svg)
+        self.assertEqual(by_kind["vswr"].asset_path, self.vswr_svg)
+        self.assertEqual(by_kind["beamwidth_e_plane"].asset_path, self.beamwidth_e_plane_h_svg)
+        self.assertEqual(by_kind["beamwidth_h_plane"].asset_path, self.beamwidth_h_plane_h_svg)
+        self.assertLess(by_kind["gain"].rect.x0, by_kind["vswr"].rect.x0)
+        self.assertLess(by_kind["beamwidth_e_plane"].erase_rect.x0, by_kind["beamwidth_h_plane"].erase_rect.x0)
+        self.assertLess(by_kind["beamwidth_e_plane"].rect.x1, by_kind["beamwidth_e_plane"].legend_rect.x0)
+        self.assertLess(by_kind["beamwidth_h_plane"].rect.x1, by_kind["beamwidth_h_plane"].legend_rect.x0)
+        self.assertEqual(by_kind["beamwidth_e_plane"].legend_asset_path, self.beamwidth_e_plane_h_legend_svg)
+        self.assertEqual(by_kind["beamwidth_h_plane"].legend_asset_path, self.beamwidth_h_plane_h_legend_svg)
+
+    def test_netqui_template_manifest_assigns_fixed_chart_slots(self) -> None:
+        gain_rect, vswr_rect, e_plane_rect, h_plane_rect = self._write_netqui_chart_template_pdf()
+
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_chart_replacements(
+                doc[1],
+                self.output_pdf,
+                self.extract_workbook,
+                adapter=NETQUI_TEMPLATE_ADAPTER,
+            )
+
+        by_kind = {replacement.kind: replacement for replacement in replacements}
+        self.assertEqual(by_kind["gain"].asset_path, self.gain_svg)
+        self.assertEqual(by_kind["vswr"].asset_path, self.vswr_svg)
+        self.assertEqual(by_kind["beamwidth_e_plane"].asset_path, self.beamwidth_e_plane_h_svg)
+        self.assertEqual(by_kind["beamwidth_h_plane"].asset_path, self.beamwidth_h_plane_h_svg)
+        self.assertAlmostEqual(by_kind["gain"].rect.x0, gain_rect.x0, delta=0.1)
+        self.assertAlmostEqual(by_kind["gain"].rect.x1, gain_rect.x1, delta=0.1)
+        self.assertAlmostEqual(by_kind["vswr"].rect.x0, vswr_rect.x0, delta=0.1)
+        self.assertAlmostEqual(by_kind["vswr"].rect.x1, vswr_rect.x1, delta=0.1)
+        self.assertAlmostEqual(by_kind["beamwidth_e_plane"].erase_rect.x0, e_plane_rect.x0, delta=0.1)
+        self.assertAlmostEqual(by_kind["beamwidth_h_plane"].erase_rect.x0, h_plane_rect.x0, delta=0.1)
+
+    def test_build_chart_replacements_prefers_artifact_manifest_assets(self) -> None:
+        update_artifact_manifest(
+            self.root,
+            "extract",
+            gain=build_asset_record(self.manifest_gain_svg, legend_path=self.manifest_gain_legend_svg),
+            beamwidth=build_asset_record(self.manifest_beamwidth_svg, legend_path=self.manifest_beamwidth_legend_svg),
+            polar_single=[
+                build_asset_record(self.manifest_azimuth_svg, legend_path=self.manifest_azimuth_legend_svg, plane="azimuth", frequency_ghz=5.5),
+                build_asset_record(self.manifest_elevation_svg, legend_path=self.manifest_elevation_legend_svg, plane="elevation", frequency_ghz=5.5),
+            ],
+        )
+        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
+
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_chart_replacements(
+                doc[1],
+                self.output_pdf,
+                self.extract_workbook,
+                artifact_manifest=manifest,
+            )
+
+        by_kind = {replacement.kind: replacement for replacement in replacements}
+        self.assertEqual(by_kind["gain"].asset_path, self.manifest_gain_svg)
+        self.assertEqual(by_kind["beamwidth"].asset_path, self.manifest_beamwidth_svg)
+        self.assertEqual(by_kind["azimuth"].asset_path, self.manifest_azimuth_svg)
+        self.assertEqual(by_kind["elevation"].asset_path, self.manifest_elevation_svg)
 
     def test_normalize_plot_widths_equalizes_gain_and_beamwidth(self) -> None:
         replacements = [
