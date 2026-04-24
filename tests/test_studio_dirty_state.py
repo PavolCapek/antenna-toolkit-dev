@@ -122,7 +122,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_font_size"], 11.5)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_legend_font_size"], 14.0)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_legend_font_size"], 13.0)
-        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["datasheet_template"], "Datasheet.pdf")
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["datasheet_template"], "Datasheet - RFE.pdf")
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["pdf_metadata_author"], "Custom Datasheet Author")
         loaded_before_second_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_before_second_save.presets, {})
@@ -140,23 +140,23 @@ class StudioDirtyStateTests(unittest.TestCase):
         tabs = [self.window.workflow_tabs.tabText(index) for index in range(self.window.workflow_tabs.count())]
 
         self.assertEqual(tabs, ["Inputs", "Processing", "Style", "Document", "Run"])
-        self.assertGreaterEqual(self.window.datasheet_template_combo.findData("Datasheet.pdf"), 0)
-        self.assertEqual(self.window.collect_preset_values()["datasheet_template"], "Datasheet.pdf")
+        self.assertGreaterEqual(self.window.datasheet_template_combo.findData("Datasheet - RFE.pdf"), 0)
+        self.assertEqual(self.window.collect_preset_values()["datasheet_template"], "Datasheet - RFE.pdf")
         self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "RF elements")
         self.window.pdf_metadata_author.setText("Preset Author")
         self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "Preset Author")
 
     def test_datasheet_template_selection_is_preset_backed_and_marks_snapshot_stale(self) -> None:
-        default_template = Path(self.temp_dir.name) / "Datasheet.pdf"
+        default_template = Path(self.temp_dir.name) / "Datasheet - RFE.pdf"
         alternate_template = Path(self.temp_dir.name) / "Alternate Style.pdf"
         default_template.write_text("default", encoding="utf-8")
         alternate_template.write_text("alternate", encoding="utf-8")
         options = [
-            ("Datasheet.pdf", default_template),
+            ("Datasheet - RFE.pdf", default_template),
             ("Alternate Style.pdf", alternate_template),
         ]
         with mock.patch.object(self.window, "_datasheet_template_options", return_value=options):
-            self.window.refresh_datasheet_template_options("Datasheet.pdf")
+            self.window.refresh_datasheet_template_options("Datasheet - RFE.pdf")
             initial_snapshot = self.window._current_stage_snapshot("datasheet")
             self.window.refresh_datasheet_template_options("Alternate Style.pdf")
             changed_snapshot = self.window._current_stage_snapshot("datasheet")
@@ -538,7 +538,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(queued, ["beam", "extract", "plot", "vswr", "datasheet"])
         self.assertIn("--beamwidth-db-colors", queued_args["plot"])
         self.assertIn("--template", queued_args["datasheet"])
-        self.assertEqual(Path(queued_args["datasheet"][queued_args["datasheet"].index("--template") + 1]).name, "Datasheet.pdf")
+        self.assertEqual(Path(queued_args["datasheet"][queued_args["datasheet"].index("--template") + 1]).name, "Datasheet - RFE.pdf")
         self.assertIn("--metadata-author", queued_args["datasheet"])
         self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--metadata-author") + 1], "Pipeline Author")
 

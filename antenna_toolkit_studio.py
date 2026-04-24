@@ -54,9 +54,12 @@ STAGE_DEFINITIONS = [
     ("datasheet", "Datasheet"),
 ]
 STAGE_LABELS = dict(STAGE_DEFINITIONS)
-DATASHEET_TEMPLATE = THIS_DIR / "Datasheet.pdf"
 DATASHEET_TEMPLATE_DIR = THIS_DIR / "Templates"
-DEFAULT_DATASHEET_TEMPLATE_NAME = DATASHEET_TEMPLATE.name
+DEFAULT_DATASHEET_TEMPLATE_NAME = "Datasheet - RFE.pdf"
+LEGACY_DATASHEET_TEMPLATE_ALIASES = {
+    "Datasheet.pdf": "Datasheet - RFE.pdf",
+    "Datasheet Netqui.pdf": "Datasheet - Netqui.pdf",
+}
 DEFAULT_PDF_METADATA_AUTHOR = "RF elements"
 GOOGLE_SHEETS_OAUTH_CLIENT_KEY = "google_sheets_oauth_client_json"
 GOOGLE_SHEETS_TOKEN_FILENAME = "google_sheets_token.json"
@@ -1697,8 +1700,6 @@ class ModernMainWindow(QMainWindow):
                 (path for path in DATASHEET_TEMPLATE_DIR.glob("*.pdf") if path.is_file()),
                 key=lambda path: path.stem.lower(),
             )
-        if not templates and DATASHEET_TEMPLATE.exists():
-            templates = [DATASHEET_TEMPLATE]
         return [(path.name, path.resolve()) for path in templates]
 
     def refresh_datasheet_template_options(self, select_name: str | None = None) -> None:
@@ -1706,6 +1707,12 @@ class ModernMainWindow(QMainWindow):
             return
         current_name = str(select_name or self.selected_datasheet_template_name() or DEFAULT_DATASHEET_TEMPLATE_NAME)
         options = self._datasheet_template_options()
+        option_names = {filename for filename, _path in options}
+        current_name = LEGACY_DATASHEET_TEMPLATE_ALIASES.get(current_name, current_name)
+        if current_name not in option_names:
+            legacy_target = LEGACY_DATASHEET_TEMPLATE_ALIASES.get(current_name)
+            if legacy_target in option_names:
+                current_name = legacy_target
         self.datasheet_template_combo.blockSignals(True)
         self.datasheet_template_combo.clear()
         for filename, _path in options:
