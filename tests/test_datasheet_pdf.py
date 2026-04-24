@@ -24,6 +24,7 @@ from datasheet_pdf import (
     build_replacements_from_workbook,
     load_technical_data_workbook,
 )
+from datasheet_templates import NETQUI_TEMPLATE_ADAPTER
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -977,6 +978,29 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertLess(by_kind["beamwidth_h_plane"].rect.x1, by_kind["beamwidth_h_plane"].legend_rect.x0)
         self.assertEqual(by_kind["beamwidth_e_plane"].legend_asset_path, self.beamwidth_e_plane_h_legend_svg)
         self.assertEqual(by_kind["beamwidth_h_plane"].legend_asset_path, self.beamwidth_h_plane_h_legend_svg)
+
+    def test_netqui_template_manifest_assigns_fixed_chart_slots(self) -> None:
+        gain_rect, vswr_rect, e_plane_rect, h_plane_rect = self._write_netqui_chart_template_pdf()
+
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_chart_replacements(
+                doc[1],
+                self.output_pdf,
+                self.extract_workbook,
+                adapter=NETQUI_TEMPLATE_ADAPTER,
+            )
+
+        by_kind = {replacement.kind: replacement for replacement in replacements}
+        self.assertEqual(by_kind["gain"].asset_path, self.gain_svg)
+        self.assertEqual(by_kind["vswr"].asset_path, self.vswr_svg)
+        self.assertEqual(by_kind["beamwidth_e_plane"].asset_path, self.beamwidth_e_plane_h_svg)
+        self.assertEqual(by_kind["beamwidth_h_plane"].asset_path, self.beamwidth_h_plane_h_svg)
+        self.assertAlmostEqual(by_kind["gain"].rect.x0, gain_rect.x0, delta=0.1)
+        self.assertAlmostEqual(by_kind["gain"].rect.x1, gain_rect.x1, delta=0.1)
+        self.assertAlmostEqual(by_kind["vswr"].rect.x0, vswr_rect.x0, delta=0.1)
+        self.assertAlmostEqual(by_kind["vswr"].rect.x1, vswr_rect.x1, delta=0.1)
+        self.assertAlmostEqual(by_kind["beamwidth_e_plane"].erase_rect.x0, e_plane_rect.x0, delta=0.1)
+        self.assertAlmostEqual(by_kind["beamwidth_h_plane"].erase_rect.x0, h_plane_rect.x0, delta=0.1)
 
     def test_build_chart_replacements_prefers_artifact_manifest_assets(self) -> None:
         update_artifact_manifest(

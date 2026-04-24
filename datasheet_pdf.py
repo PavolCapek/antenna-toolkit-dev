@@ -30,7 +30,7 @@ from datasheet_models import (
     text_or_placeholder,
 )
 from datasheet_service import build_render_context
-from datasheet_templates import DatasheetTemplateAdapter
+from datasheet_templates import DatasheetTemplateAdapter, TemplateChartManifest, TemplateChartSlot
 
 fitz.TOOLS.mupdf_display_errors(False)
 fitz.TOOLS.mupdf_display_warnings(False)
@@ -1941,6 +1941,131 @@ def _build_netqui_chart_replacements(
     return replacements
 
 
+def _manifest_slot_asset(
+    slot_spec: TemplateChartSlot,
+    output: Path,
+    extract_workbook: Path,
+    spans: list[TextSpan],
+    page: fitz.Page,
+    artifact_manifest: dict[str, object] | None,
+) -> Path | None:
+    if slot_spec.asset_key == "gain":
+        return _find_manifest_chart_asset(artifact_manifest, "gain") or _find_plot_asset(output, extract_workbook, "-gain.svg")
+    if slot_spec.asset_key == "beamwidth":
+        return _find_manifest_chart_asset(artifact_manifest, "beamwidth") or _find_plot_asset(output, extract_workbook, "-beamwidth.svg")
+    if slot_spec.asset_key == "vswr":
+        return _find_manifest_chart_asset(artifact_manifest, "vswr") or _find_optional_plot_asset(output, extract_workbook, "-vswr.svg")
+    if slot_spec.asset_key == "beamwidth_plane":
+        if not slot_spec.plane:
+            raise ValueError(f"Template chart slot '{slot_spec.kind}' is missing a beamwidth plane.")
+        return _find_beamwidth_plane_asset(output, extract_workbook, slot_spec.plane, artifact_manifest=artifact_manifest)
+    if slot_spec.asset_key in {"polar_azimuth", "polar_elevation"}:
+        azimuth_asset, elevation_asset = _find_polar_plot_assets(page, output, extract_workbook, spans, artifact_manifest=artifact_manifest)
+        return azimuth_asset if slot_spec.asset_key == "polar_azimuth" else elevation_asset
+    raise ValueError(f"Unknown template chart asset key '{slot_spec.asset_key}'.")
+
+
+def _build_manifest_chart_replacements(
+    page: fitz.Page,
+    ordered_slots: list[ChartSlot],
+    output: Path,
+    extract_workbook: Path,
+    chart_manifest: TemplateChartManifest,
+    spans: list[TextSpan],
+    artifact_manifest: dict[str, object] | None = None,
+) -> list[ChartReplacement]:
+    if chart_manifest.slot_order == "rows":
+        ordered_slots = [slot for row in _chart_slot_rows(ordered_slots) for slot in row]
+    replacements: list[ChartReplacement] = []
+    for slot_spec in chart_manifest.slots:
+        if slot_spec.slot_index >= len(ordered_slots):
+            if slot_spec.required:
+                raise ValueError(
+                    f"Datasheet template does not contain required chart slot '{slot_spec.kind}' at index {slot_spec.slot_index}."
+                )
+            continue
+        asset = _manifest_slot_asset(slot_spec, output, extract_workbook, spans, page, artifact_manifest)
+        if asset is None:
+            if slot_spec.required:
+                raise ValueError(f"Missing required chart asset for template slot '{slot_spec.kind}'.")
+            continue
+        slot_rect = fitz.Rect(ordered_slots[slot_spec.slot_index].rect)
+        if slot_spec.legend_mode == "netqui_side":
+            legend_asset = _legend_asset_path(asset)
+            plot_rect, legend_rect = _netqui_beamwidth_rects(slot_rect)
+            replacements.append(
+                ChartReplacement(
+                    slot_spec.kind,
+                    plot_rect,
+                    asset,
+                    legend_rect=legend_rect if legend_asset.exists() else None,
+                    legend_asset_path=legend_asset if legend_asset.exists() else None,
+                    erase_rect=slot_rect,
+                )
+            )
+        else:
+            replacements.append(ChartReplacement(slot_spec.kind, slot_rect, asset))
+
+    auto_legend_kinds = {slot.kind for slot in chart_manifest.slots if slot.legend_mode == "auto"}
+    if not auto_legend_kinds:
+        return replacements
+
+    index_by_kind = {replacement.kind: idx for idx, replacement in enumerate(replacements)}
+    polar_x_centers = {
+        "azimuth": (replacements[index_by_kind["azimuth"]].rect.x0 + replacements[index_by_kind["azimuth"]].rect.x1) / 2.0 if "azimuth" in index_by_kind else None,
+        "elevation": (replacements[index_by_kind["elevation"]].rect.x0 + replacements[index_by_kind["elevation"]].rect.x1) / 2.0 if "elevation" in index_by_kind else None,
+    }
+    legend_rects: dict[str, list[fitz.Rect]] = {replacement.kind: [] for replacement in replacements if replacement.kind in auto_legend_kinds}
+
+    for span in spans:
+        group = _legend_group(span.text)
+        if group == "gain" and "gain" in legend_rects:
+            legend_rects["gain"].append(fitz.Rect(span.bbox))
+        elif group == "beamwidth" and "beamwidth" in legend_rects:
+            legend_rects["beamwidth"].append(fitz.Rect(span.bbox))
+        elif group == "polar" and "azimuth" in legend_rects and "elevation" in legend_rects:
+            center_x = (span.bbox.x0 + span.bbox.x1) / 2.0
+            target_kind = min(
+                ("azimuth", "elevation"),
+                key=lambda kind: abs(center_x - float(polar_x_centers[kind])),
+            )
+            legend_rects[target_kind].append(fitz.Rect(span.bbox))
+
+    resolved: list[ChartReplacement] = []
+    for replacement in replacements:
+        if replacement.kind not in auto_legend_kinds:
+            resolved.append(replacement)
+            continue
+        grouped_legend_rects = legend_rects.get(replacement.kind, [])
+        legend_asset_path = _legend_asset_path(replacement.asset_path)
+        if grouped_legend_rects and legend_asset_path.exists():
+            plot_rect, legend_rect = _layout_split_chart_rects(
+                replacement.kind,
+                fitz.Rect(replacement.rect),
+                _union_rects(grouped_legend_rects),
+            )
+            resolved.append(
+                ChartReplacement(
+                    replacement.kind,
+                    plot_rect,
+                    replacement.asset_path,
+                    legend_rect=legend_rect,
+                    legend_asset_path=legend_asset_path,
+                )
+            )
+            continue
+
+        rects = [fitz.Rect(replacement.rect)] + grouped_legend_rects
+        resolved.append(
+            ChartReplacement(
+                replacement.kind,
+                _expand_rect(_union_rects(rects)),
+                replacement.asset_path,
+            )
+        )
+    return _normalize_plot_widths(resolved, set(chart_manifest.normalize_width_kinds))
+
+
 def _build_chart_replacements(
     page: fitz.Page,
     output: Path,
@@ -1955,6 +2080,18 @@ def _build_chart_replacements(
 
     ordered_slots = sorted(slots, key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
     spans = _extract_page_spans(page)
+    chart_manifest = adapter.manifest.chart_layout if adapter is not None and adapter.manifest is not None else None
+    if chart_manifest is not None:
+        return _build_manifest_chart_replacements(
+            page,
+            ordered_slots,
+            output,
+            extract_workbook,
+            chart_manifest,
+            spans,
+            artifact_manifest=artifact_manifest,
+        )
+
     chart_mode = adapter.chart_layout_mode if adapter is not None else ("netqui" if _is_netqui_chart_page(spans, ordered_slots) else "generic")
     if chart_mode == "netqui":
         return _build_netqui_chart_replacements(ordered_slots, output, extract_workbook, artifact_manifest=artifact_manifest)
@@ -2120,7 +2257,18 @@ def _replace_chart_images(
     if doc.page_count < 2:
         return
 
-    page = next((candidate for candidate in doc[1:] if len(_collect_chart_slots(candidate)) >= 2), None)
+    chart_manifest = adapter.manifest.chart_layout if adapter is not None and adapter.manifest is not None else None
+    if chart_manifest is not None and chart_manifest.page_index is not None:
+        if chart_manifest.page_index >= doc.page_count:
+            raise ValueError(f"Datasheet template does not contain configured chart page {chart_manifest.page_index + 1}.")
+        page = doc[chart_manifest.page_index]
+        if len(_collect_chart_slots(page)) < chart_manifest.min_image_slots:
+            raise ValueError(
+                f"Datasheet template chart page does not contain the expected {chart_manifest.min_image_slots} image slots."
+            )
+    else:
+        min_image_slots = chart_manifest.min_image_slots if chart_manifest is not None else 2
+        page = next((candidate for candidate in doc[1:] if len(_collect_chart_slots(candidate)) >= min_image_slots), None)
     if page is None:
         raise ValueError("Datasheet template does not contain the expected chart image slots.")
     replacements = _build_chart_replacements(

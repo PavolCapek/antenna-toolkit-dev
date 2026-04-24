@@ -106,6 +106,7 @@ class DatasheetPipelineTests(unittest.TestCase):
             )
 
         self.assertEqual(context.adapter.key, "netqui")
+        self.assertIsNotNone(context.adapter.manifest)
+        self.assertEqual(context.adapter.manifest.chart_layout.min_image_slots, 4)
         self.assertEqual(context.model.performance_fields["Gain"], "19.5 dBi")
         self.assertEqual(context.model.artifact_manifest["charts"]["gain"]["svg"], str(self.chart_svg.resolve()))
-
