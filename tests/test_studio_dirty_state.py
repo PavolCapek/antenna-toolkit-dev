@@ -216,6 +216,40 @@ class StudioDirtyStateTests(unittest.TestCase):
             second_snapshot["technical_data"]["cached_xlsx"]["size"],
         )
 
+    def test_old_plot_asset_snapshot_marks_plot_outputs_stale(self) -> None:
+        ffs_path = Path(self.temp_dir.name) / "sample.ffs"
+        ffs_path.write_text("ffs", encoding="utf-8")
+        self.window._add_ffs_files([str(ffs_path)])
+        project_dir = self.window.project_results_dir()
+        stem = self.window.deduced_beam_output().stem
+        for suffix in (
+            "gain",
+            "gain-legend",
+            "beamwidth",
+            "beamwidth-legend",
+            "beam-efficiency",
+            "beam-efficiency-legend",
+        ):
+            path = project_dir / f"{stem}-{suffix}.svg"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("<svg />", encoding="utf-8")
+
+        legacy_snapshot = dict(self.window._current_stage_snapshot("plot"))
+        legacy_snapshot.pop("tool_versions", None)
+        self.window._stage_state("plot").update(
+            {
+                "status": "success",
+                "last_success_at": "2026-04-24T12:00:00+00:00",
+                "snapshot": legacy_snapshot,
+            }
+        )
+
+        self.assertTrue(self.window._stage_is_stale("plot"))
+        self.assertEqual(self.window._stage_stale_detail("plot"), "App plot styling changed. Rerun Plots only.")
+        self.window.refresh_derived_paths()
+        self.app.processEvents()
+        self.assertEqual(self.window.stage_status_labels["plot"].text(), "App plot styling changed. Rerun Plots only.")
+
     def test_prepare_technical_data_downloads_google_sheet_to_cached_workbook(self) -> None:
         url = "https://docs.google.com/spreadsheets/d/sheet123abc/edit"
         cached_xlsx = Path(self.temp_dir.name) / "cached-google.xlsx"

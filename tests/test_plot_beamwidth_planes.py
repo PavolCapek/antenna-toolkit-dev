@@ -9,6 +9,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import fitz
 import numpy as np
 import pandas as pd
 
@@ -24,6 +25,32 @@ class BeamwidthPlanePlotTests(unittest.TestCase):
             for value in re.findall(r"stroke-width:\s*([^;\"]+)", text)
             if value.strip()
         }
+
+    def _first_handle_height(self, path: Path) -> int:
+        with fitz.open(path) as doc:
+            pix = doc[0].get_pixmap(matrix=fitz.Matrix(4, 4), alpha=False)
+        ys: list[int] = []
+        handle_limit = min(pix.width, 80)
+        for y in range(pix.height):
+            for x in range(handle_limit):
+                offset = (y * pix.width + x) * pix.n
+                red, green, blue = pix.samples[offset : offset + 3]
+                if min(red, green, blue) < 245:
+                    ys.append(y)
+                    break
+        if not ys:
+            return 0
+        clusters: list[tuple[int, int]] = []
+        start = previous = sorted(set(ys))[0]
+        for y in sorted(set(ys))[1:]:
+            if y <= previous + 4:
+                previous = y
+                continue
+            clusters.append((start, previous))
+            start = previous = y
+        clusters.append((start, previous))
+        first_start, first_end = clusters[0]
+        return first_end - first_start + 1
 
     def test_beamwidth_plane_phi_maps_by_polarization(self) -> None:
         self.assertEqual(beamwidth_plane_phi("H", "E"), 0)
@@ -196,6 +223,10 @@ class BeamwidthPlanePlotTests(unittest.TestCase):
 
             self.assertEqual(self._legend_stroke_widths(cartesian_legend), {"3"})
             self.assertEqual(self._legend_stroke_widths(polar_legend), {"3"})
+            self.assertLessEqual(
+                abs(self._first_handle_height(cartesian_legend) - self._first_handle_height(polar_legend)),
+                2,
+            )
 
 
 if __name__ == "__main__":

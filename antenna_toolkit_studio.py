@@ -54,6 +54,8 @@ STAGE_DEFINITIONS = [
     ("datasheet", "Datasheet"),
 ]
 STAGE_LABELS = dict(STAGE_DEFINITIONS)
+PLOT_ASSET_STYLE_VERSION = 2
+DATASHEET_RENDER_VERSION = 2
 DATASHEET_TEMPLATE_DIR = THIS_DIR / "Templates"
 DEFAULT_DATASHEET_TEMPLATE_NAME = "Datasheet - RFE.pdf"
 LEGACY_DATASHEET_TEMPLATE_ALIASES = {
@@ -2440,11 +2442,22 @@ class ModernMainWindow(QMainWindow):
         }
         return {key: values[key] for key in setting_keys.get(stage_key, []) if key in values}
 
+    def _stage_tool_versions(self, stage_key: str) -> dict[str, int]:
+        versions: dict[str, int] = {}
+        if stage_key in {"plot", "datasheet"}:
+            versions["plot_assets"] = PLOT_ASSET_STYLE_VERSION
+        if stage_key == "datasheet":
+            versions["datasheet_render"] = DATASHEET_RENDER_VERSION
+        return versions
+
     def _current_stage_snapshot(self, stage_key: str) -> dict[str, object]:
         snapshot: dict[str, object] = {
             "schema_version": CURRENT_PROJECT_SCHEMA_VERSION,
             "settings": self._stage_settings_snapshot(stage_key),
         }
+        tool_versions = self._stage_tool_versions(stage_key)
+        if tool_versions:
+            snapshot["tool_versions"] = tool_versions
         if stage_key in {"beam", "extract", "plot", "datasheet"}:
             snapshot["ffs_items"] = [
                 {
@@ -2607,6 +2620,25 @@ class ModernMainWindow(QMainWindow):
         if not snapshot:
             return True
         return snapshot != self._current_stage_snapshot(stage_key)
+
+    def _stage_stale_detail(self, stage_key: str) -> str:
+        if not self._stage_output_exists(stage_key):
+            return ""
+        stage_state = self._stage_state(stage_key)
+        snapshot = stage_state.get("snapshot")
+        if not isinstance(snapshot, dict):
+            return ""
+        current_versions = self._stage_tool_versions(stage_key)
+        if not current_versions:
+            return ""
+        previous_versions = snapshot.get("tool_versions")
+        if previous_versions == current_versions:
+            return ""
+        if stage_key == "plot":
+            return "App plot styling changed. Rerun Plots only."
+        if stage_key == "datasheet":
+            return "App plot or datasheet styling changed. Rerun Plots only, then Datasheet only."
+        return "App generation rules changed. Rerun this output."
 
     def _stale_stage_keys(self) -> list[str]:
         return [
@@ -2786,7 +2818,7 @@ class ModernMainWindow(QMainWindow):
                 chip_text = status.capitalize()
                 chip_tone = status
             elif self._stage_is_stale(stage_key):
-                text = "Stale"
+                text = self._stage_stale_detail(stage_key) or "Stale"
                 timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success else "Generated: unknown"
                 chip_text = "Stale"
                 chip_tone = "stale"
@@ -2976,7 +3008,12 @@ class ModernMainWindow(QMainWindow):
             labels = ", ".join(STAGE_LABELS[key] for key in stale_stages[:3])
             if len(stale_stages) > 3:
                 labels += ", ..."
-            self.readiness_summary.setText(f"Saved inputs changed since the last successful run. Rebuild the stale outputs: {labels}.")
+            stale_details = [self._stage_stale_detail(key) for key in stale_stages]
+            stale_details = [detail for detail in stale_details if detail]
+            if stale_details:
+                self.readiness_summary.setText(f"{stale_details[0]} Stale outputs: {labels}.")
+            else:
+                self.readiness_summary.setText(f"Saved inputs, settings, or generation rules changed since the last successful run. Rebuild the stale outputs: {labels}.")
             self._set_readiness_action("Run Full Pipeline", self.run_full, tooltip="Rebuild all outputs for the current project.")
             return
 
@@ -3045,7 +3082,12 @@ class ModernMainWindow(QMainWindow):
         elif not unsaved_changes and stale_stages:
             labels = ", ".join(STAGE_LABELS[key] for key in stale_stages)
             self.validation_label.setText(f"Outputs are stale for: {labels}")
-            self.project_health.setText(f"Project changed since the last successful run: {labels}.")
+            stale_details = [self._stage_stale_detail(key) for key in stale_stages]
+            stale_details = [detail for detail in stale_details if detail]
+            if stale_details:
+                self.project_health.setText(stale_details[0])
+            else:
+                self.project_health.setText(f"Project changed since the last successful run: {labels}.")
         elif not unsaved_changes:
             self.validation_label.setText("No validation issues.")
             self.project_health.setText("Inputs, presets, and generated outputs are in sync.")
