@@ -14,6 +14,7 @@ from datasheet_pdf import (
     _build_chart_replacements,
     _legend_target_rect,
     _layout_split_chart_rects,
+    _find_beamwidth_plane_asset,
     _normalize_plot_widths,
     _separate_plot_and_legend_rects,
     _shared_side_legend_scale,
@@ -1020,14 +1021,20 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertAlmostEqual(by_kind["beamwidth_h_plane"].erase_rect.x0, h_plane_rect.x0, delta=0.1)
 
     def test_build_chart_replacements_prefers_artifact_manifest_assets(self) -> None:
+        manifest_gain_legend = self.root / "manifest-legends" / "gain-key.svg"
+        manifest_beamwidth_legend = self.root / "manifest-legends" / "beamwidth-key.svg"
+        manifest_azimuth_legend = self.root / "manifest-legends" / "azimuth-key.svg"
+        manifest_elevation_legend = self.root / "manifest-legends" / "elevation-key.svg"
+        for path in (manifest_gain_legend, manifest_beamwidth_legend, manifest_azimuth_legend, manifest_elevation_legend):
+            self._write_svg(path, "#ffffff", width=140, height=70)
         update_artifact_manifest(
             self.root,
             "extract",
-            gain=build_asset_record(self.manifest_gain_svg, legend_path=self.manifest_gain_legend_svg),
-            beamwidth=build_asset_record(self.manifest_beamwidth_svg, legend_path=self.manifest_beamwidth_legend_svg),
+            gain=build_asset_record(self.manifest_gain_svg, legend_path=manifest_gain_legend),
+            beamwidth=build_asset_record(self.manifest_beamwidth_svg, legend_path=manifest_beamwidth_legend),
             polar_single=[
-                build_asset_record(self.manifest_azimuth_svg, legend_path=self.manifest_azimuth_legend_svg, plane="azimuth", frequency_ghz=5.5),
-                build_asset_record(self.manifest_elevation_svg, legend_path=self.manifest_elevation_legend_svg, plane="elevation", frequency_ghz=5.5),
+                build_asset_record(self.manifest_azimuth_svg, legend_path=manifest_azimuth_legend, plane="azimuth", frequency_ghz=5.5),
+                build_asset_record(self.manifest_elevation_svg, legend_path=manifest_elevation_legend, plane="elevation", frequency_ghz=5.5),
             ],
         )
         manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
@@ -1045,6 +1052,16 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(by_kind["beamwidth"].asset_path, self.manifest_beamwidth_svg)
         self.assertEqual(by_kind["azimuth"].asset_path, self.manifest_azimuth_svg)
         self.assertEqual(by_kind["elevation"].asset_path, self.manifest_elevation_svg)
+        self.assertEqual(by_kind["gain"].legend_asset_path, manifest_gain_legend)
+        self.assertEqual(by_kind["beamwidth"].legend_asset_path, manifest_beamwidth_legend)
+        self.assertEqual(by_kind["azimuth"].legend_asset_path, manifest_azimuth_legend)
+        self.assertEqual(by_kind["elevation"].legend_asset_path, manifest_elevation_legend)
+
+    def test_missing_beamwidth_plane_asset_reports_plots_only_rerun(self) -> None:
+        self.beamwidth_e_plane_h_svg.unlink()
+
+        with self.assertRaisesRegex(ValueError, "Rerun Plots only.*missing E Plane beamwidth SVG"):
+            _find_beamwidth_plane_asset(self.output_pdf, self.extract_workbook, "e-plane")
 
     def test_normalize_plot_widths_equalizes_gain_and_beamwidth(self) -> None:
         replacements = [

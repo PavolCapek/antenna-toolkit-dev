@@ -1462,7 +1462,7 @@ def _find_plot_asset(output: Path, extract_workbook: Path, suffix: str) -> Path:
                 if candidate.exists():
                     return candidate
     checked_list = ", ".join(str(path) for path in checked)
-    raise ValueError(f"Missing required plot asset '{suffix}'. Checked: {checked_list}")
+    raise ValueError(f"Missing required plot asset '{suffix}'. Rerun Plots only for this project. Checked: {checked_list}")
 
 
 def _manifest_chart_record(artifact_manifest: dict[str, object] | None, key: str) -> dict[str, object] | None:
@@ -1483,6 +1483,31 @@ def _manifest_svg_path(record: dict[str, object] | None, field: str = "svg") -> 
         return None
     path = Path(value)
     return path if path.exists() else None
+
+
+def _manifest_record_for_svg_path(
+    artifact_manifest: dict[str, object] | None,
+    svg_path: Path,
+) -> dict[str, object] | None:
+    if not isinstance(artifact_manifest, dict):
+        return None
+    charts = artifact_manifest.get("charts")
+    if not isinstance(charts, dict):
+        return None
+    target = svg_path.resolve()
+    chart_values: list[object] = []
+    for value in charts.values():
+        if isinstance(value, list):
+            chart_values.extend(value)
+        else:
+            chart_values.append(value)
+    for record in chart_values:
+        if not isinstance(record, dict):
+            continue
+        manifest_path = _manifest_svg_path(record)
+        if manifest_path is not None and manifest_path.resolve() == target:
+            return record
+    return None
 
 
 def _find_manifest_chart_asset(artifact_manifest: dict[str, object] | None, key: str) -> Path | None:
@@ -1565,7 +1590,11 @@ def _find_optional_plot_asset(output: Path, extract_workbook: Path, suffix: str)
         return None
 
 
-def _legend_asset_path(path: Path) -> Path:
+def _legend_asset_path(path: Path, artifact_manifest: dict[str, object] | None = None) -> Path:
+    manifest_record = _manifest_record_for_svg_path(artifact_manifest, path)
+    manifest_legend = _manifest_svg_path(manifest_record, "legend_svg")
+    if manifest_legend is not None:
+        return manifest_legend
     preferred = path.with_name(f"{path.stem}-legend{path.suffix}")
     legacy = path.with_name(f"{path.stem}_legend{path.suffix}")
     if preferred.exists() or not legacy.exists():
@@ -1654,7 +1683,10 @@ def _find_polar_plot_assets(
     common_frequencies = sorted(set(plane_assets["azimuth"]).intersection(plane_assets["elevation"]))
     if not common_frequencies:
         checked_list = ", ".join(str(path) for path in checked) if checked else "none"
-        raise ValueError(f"Missing required polar plot assets. Checked: {checked_list}")
+        raise ValueError(
+            "Missing required polar plot assets. Rerun Plots only for this project; "
+            f"missing matching azimuth/elevation polar SVGs. Checked: {checked_list}"
+        )
 
     if template_frequency is None:
         template_frequency = sum(common_frequencies) / len(common_frequencies)
@@ -1698,7 +1730,11 @@ def _find_beamwidth_plane_asset(
         asset = _find_optional_plot_asset(output, extract_workbook, asset_suffix)
         if asset is not None:
             return asset
-    raise ValueError(f"Missing required beamwidth {plane} plot asset. Checked suffixes: {', '.join(checked)}")
+    plane_label = str(plane).replace("-", " ").title()
+    raise ValueError(
+        f"Missing required beamwidth {plane} plot asset. Rerun Plots only for this project; "
+        f"missing {plane_label} beamwidth SVG. Checked suffixes: {', '.join(checked)}"
+    )
 
 
 def _collect_chart_slots(page: fitz.Page) -> list[ChartSlot]:
@@ -1926,7 +1962,7 @@ def _build_netqui_chart_replacements(
         (h_plane_slot, "beamwidth_h_plane", "h-plane"),
     ]:
         asset = _find_beamwidth_plane_asset(output, extract_workbook, plane, artifact_manifest=artifact_manifest)
-        legend_asset = _legend_asset_path(asset)
+        legend_asset = _legend_asset_path(asset, artifact_manifest)
         plot_rect, legend_rect = _netqui_beamwidth_rects(fitz.Rect(slot.rect))
         replacements.append(
             ChartReplacement(
@@ -1996,7 +2032,7 @@ def _build_manifest_chart_replacements(
             continue
         slot_rect = fitz.Rect(ordered_slots[slot_spec.slot_index].rect)
         if slot_spec.legend_mode == "netqui_side":
-            legend_asset = _legend_asset_path(asset)
+            legend_asset = _legend_asset_path(asset, artifact_manifest)
             plot_rect, legend_rect = _netqui_beamwidth_rects(slot_rect)
             replacements.append(
                 ChartReplacement(
@@ -2042,7 +2078,7 @@ def _build_manifest_chart_replacements(
             resolved.append(replacement)
             continue
         grouped_legend_rects = legend_rects.get(replacement.kind, [])
-        legend_asset_path = _legend_asset_path(replacement.asset_path)
+        legend_asset_path = _legend_asset_path(replacement.asset_path, artifact_manifest)
         if grouped_legend_rects and legend_asset_path.exists():
             plot_rect, legend_rect = _layout_split_chart_rects(
                 replacement.kind,
@@ -2145,7 +2181,7 @@ def _build_chart_replacements(
     resolved: list[ChartReplacement] = []
     for replacement in replacements:
         grouped_legend_rects = legend_rects.get(replacement.kind, [])
-        legend_asset_path = _legend_asset_path(replacement.asset_path)
+        legend_asset_path = _legend_asset_path(replacement.asset_path, artifact_manifest)
         if grouped_legend_rects and legend_asset_path.exists():
             plot_rect, legend_rect = _layout_split_chart_rects(
                 replacement.kind,

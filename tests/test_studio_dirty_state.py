@@ -250,6 +250,53 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(self.window.stage_status_labels["plot"].text(), "App plot styling changed. Rerun Plots only.")
 
+    def test_successful_plot_and_datasheet_snapshots_include_tool_versions(self) -> None:
+        ffs_path = Path(self.temp_dir.name) / "sample.ffs"
+        s2p_path = Path(self.temp_dir.name) / "sample.s2p"
+        technical_path = Path(self.temp_dir.name) / "technical.xlsx"
+        for path, content in (
+            (ffs_path, "ffs"),
+            (s2p_path, "s2p"),
+            (technical_path, "xlsx"),
+            (self.window.deduced_beam_output(), "beam"),
+            (self.window.deduced_extract_output(), "extract"),
+            (self.window.deduced_datasheet_output(), "pdf"),
+        ):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        self.window._add_ffs_files([str(ffs_path)])
+        self.window._set_touchstone(str(s2p_path))
+        self.window._set_technical_data(str(technical_path))
+        for path in self.window._stage_output_files("plot"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("<svg />", encoding="utf-8")
+
+        plot_args = [studio_module.SCRIPT_PLOT]
+        self.window.on_proc_step_started(plot_args, "plot.py")
+        self.window.on_proc_step_finished(plot_args, 0, None)
+        plot_snapshot = self.window._stage_state("plot")["snapshot"]
+
+        self.assertEqual(
+            plot_snapshot["tool_versions"]["plot_assets"],
+            studio_module.PLOT_ASSET_STYLE_VERSION,
+        )
+        self.assertFalse(self.window._stage_is_stale("plot"))
+
+        datasheet_args = [studio_module.SCRIPT_DATASHEET]
+        self.window.on_proc_step_started(datasheet_args, "datasheet_pdf.py")
+        self.window.on_proc_step_finished(datasheet_args, 0, None)
+        datasheet_snapshot = self.window._stage_state("datasheet")["snapshot"]
+
+        self.assertEqual(
+            datasheet_snapshot["tool_versions"]["plot_assets"],
+            studio_module.PLOT_ASSET_STYLE_VERSION,
+        )
+        self.assertEqual(
+            datasheet_snapshot["tool_versions"]["datasheet_render"],
+            studio_module.DATASHEET_RENDER_VERSION,
+        )
+        self.assertFalse(self.window._stage_is_stale("datasheet"))
+
     def test_prepare_technical_data_downloads_google_sheet_to_cached_workbook(self) -> None:
         url = "https://docs.google.com/spreadsheets/d/sheet123abc/edit"
         cached_xlsx = Path(self.temp_dir.name) / "cached-google.xlsx"
