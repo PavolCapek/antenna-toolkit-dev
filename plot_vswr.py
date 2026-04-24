@@ -17,6 +17,7 @@ Author: ChatGPT
 """
 
 import argparse
+import json
 import math
 from pathlib import Path
 from typing import List, Tuple
@@ -26,16 +27,27 @@ from matplotlib.ticker import FuncFormatter, FixedFormatter, FixedLocator, NullF
 from plot import (
     CARTESIAN_FIGURE_HEIGHT_IN,
     CARTESIAN_FIGURE_WIDTH_IN,
+    DEFAULT_PLOT_FONT_SIZE,
+    DEFAULT_LEGEND_FONT_SIZE,
+    DEFAULT_GRID_LINE_WIDTH,
+    DEFAULT_PLOT_LINE_WIDTH,
     STACKED_LEGEND_ENTRY_SEP,
-    STACKED_LEGEND_FONT_SIZE,
     STACKED_LEGEND_ROW_SEP,
     export_stacked_line_legend,
 )
+from datasheet_artifacts import build_asset_record, update_artifact_manifest
 from legend_utils import apply_legend_labels, parse_legend_labels
 
 # ------------------ global color scheme (kept from gain plot) ------------------
 DEFAULT_SOLID_COLORS = ["#2bb6f6", "#f5a623"]
 SOLID_COLORS = DEFAULT_SOLID_COLORS[:]
+
+
+def emit_progress(stage: str, current: int, total: int, label: str) -> None:
+    print(
+        f"AT_PROGRESS {json.dumps({'stage': stage, 'current': int(current), 'total': int(total), 'label': label})}",
+        flush=True,
+    )
 DASHED_COLORS = SOLID_COLORS[:]  # same hues for dashed variants
 
 def color_for_index(style: str, idx: int) -> str:
@@ -208,14 +220,17 @@ def plot_xy(x, series_list, names, out_path, y_label,
             grid_color="#6f7a81", styles=None, colors=None,
             y_min=None, y_max=None, y_step=None,
             smooth_window: int = 5, x_step: float = None, x_ticks=None,
-            x_log: bool = False, x_min: float | None = None, x_max: float | None = None):
+            x_log: bool = False, x_min: float | None = None, x_max: float | None = None,
+            font_size: float = DEFAULT_PLOT_FONT_SIZE, legend_font_size: float = DEFAULT_LEGEND_FONT_SIZE,
+            grid_line_width: float = DEFAULT_GRID_LINE_WIDTH,
+            line_width: float = DEFAULT_PLOT_LINE_WIDTH):
     fig, ax = plt.subplots(figsize=(CARTESIAN_FIGURE_WIDTH_IN, CARTESIAN_FIGURE_HEIGHT_IN), dpi=120)
     ax.set_facecolor("white")
-    ax.grid(True, which="both", axis="both", color=grid_color, linewidth=0.9)
+    ax.grid(True, which="both", axis="both", color=grid_color, linewidth=grid_line_width)
     ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_color(grid_color)
-        spine.set_linewidth(0.9)
+        spine.set_linewidth(grid_line_width)
 
     xmin = float(x_min) if x_min is not None else float(np.nanmin(x))
     xmax = float(x_max) if x_max is not None else float(np.nanmax(x))
@@ -235,16 +250,16 @@ def plot_xy(x, series_list, names, out_path, y_label,
     if y_step is not None and y_min is not None and y_max is not None:
         ax.set_yticks(np.arange(y_min, y_max + 1e-9, y_step))
 
-    ax.set_xlabel("Frequency / GHz", color=grid_color)
-    ax.set_ylabel(y_label, color=grid_color)
-    ax.tick_params(colors=grid_color)
+    ax.set_xlabel("Frequency / GHz", color=grid_color, fontsize=font_size)
+    ax.set_ylabel(y_label, color=grid_color, fontsize=font_size)
+    ax.tick_params(colors=grid_color, labelsize=font_size, width=grid_line_width)
 
     lines = []
     for i, y in enumerate(series_list):
         ysm = smooth_series(np.asarray(y, dtype=float), window=smooth_window)
         st_in = styles[i] if styles and i < len(styles) else "-"
         color_in = colors[i] if colors and i < len(colors) else None
-        ln, = ax.plot(x, ysm, linewidth=2.0, linestyle=st_in, solid_capstyle="round", color=color_in)
+        ln, = ax.plot(x, ysm, linewidth=line_width, linestyle=st_in, solid_capstyle="round", color=color_in)
         lines.append(ln)
 
     legend_items = [(name, ln.get_color(), ln.get_linestyle()) for name, ln in zip(names, lines)]
@@ -257,8 +272,8 @@ def plot_xy(x, series_list, names, out_path, y_label,
         legend_items,
         out_path,
         ncol=1,
-        fontsize=STACKED_LEGEND_FONT_SIZE,
-        linewidth=2.0,
+        fontsize=legend_font_size,
+        linewidth=line_width,
         row_sep=STACKED_LEGEND_ROW_SEP,
         entry_sep=STACKED_LEGEND_ENTRY_SEP,
     )
@@ -318,7 +333,7 @@ def build_windowed_vswr_series(
 def main():
     p = argparse.ArgumentParser(description="Generate an SVG VSWR plot from a .s1p or .s2p file (styled).")
     p.add_argument("input", help="Input .s1p or .s2p path")
-    p.add_argument("--output", default=None, help="Output SVG filename or path (default: <input_basename>_vswr.svg)")
+    p.add_argument("--output", default=None, help="Output SVG filename or path (default: <input_basename>-vswr.svg)")
     p.add_argument("--out-dir", default=None, help="Directory to save the output file")
     p.add_argument("--fmin", type=float, default=None, help="Min frequency in GHz (e.g., 4.5)")
     p.add_argument("--fmax", type=float, default=None, help="Max frequency in GHz (e.g., 8)")
@@ -329,11 +344,23 @@ def main():
     p.add_argument("--x-log", action="store_true", help="Use logarithmic scaling on the x-axis.")
     p.add_argument("--smooth-window", type=int, default=5, help="Centered moving-average window (points). Use 1 to disable.")
     p.add_argument("--grid-color", default="#6f7a81", help="Grid/axis color (hex).")
+    p.add_argument("--grid-line-width", type=float, default=None, help=argparse.SUPPRESS)
+    p.add_argument("--cartesian-grid-line-width", type=float, default=None, help="Line width used for VSWR grid lines, axes, and tick marks.")
     p.add_argument("--line-colors", default=None, help="Comma-separated colors for the port traces.")
+    p.add_argument("--line-width", type=float, default=None, help=argparse.SUPPRESS)
+    p.add_argument("--cartesian-line-width", type=float, default=None, help="Line width used for VSWR traces and legend.")
+    p.add_argument("--font-size", type=float, default=None, help=argparse.SUPPRESS)
+    p.add_argument("--cartesian-font-size", type=float, default=None, help="Base font size used for VSWR labels and tick labels.")
+    p.add_argument("--legend-font-size", type=float, default=None, help=argparse.SUPPRESS)
+    p.add_argument("--cartesian-legend-font-size", type=float, default=None, help="Font size used for the exported VSWR legend.")
     p.add_argument("--legend-labels", default=None, help="Comma-separated legend overrides for VSWR traces, in plotted series order.")
     args = p.parse_args()
 
     set_line_colors(parse_color_list(args.line_colors))
+    cartesian_grid_line_width = float(args.cartesian_grid_line_width if args.cartesian_grid_line_width is not None else (args.grid_line_width if args.grid_line_width is not None else DEFAULT_GRID_LINE_WIDTH))
+    cartesian_line_width = float(args.cartesian_line_width if args.cartesian_line_width is not None else (args.line_width if args.line_width is not None else DEFAULT_PLOT_LINE_WIDTH))
+    cartesian_font_size = float(args.cartesian_font_size if args.cartesian_font_size is not None else (args.font_size if args.font_size is not None else DEFAULT_PLOT_FONT_SIZE))
+    cartesian_legend_font_size = float(args.cartesian_legend_font_size if args.cartesian_legend_font_size is not None else (args.legend_font_size if args.legend_font_size is not None else DEFAULT_LEGEND_FONT_SIZE))
 
     freqs_hz, data, fmt, z0, nports = read_touchstone(args.input)
     traces = [
@@ -348,7 +375,7 @@ def main():
     # Determine default filename
     in_path = Path(args.input)
     if args.output is None:
-        out_file = in_path.stem + "_vswr.svg"
+        out_file = in_path.stem + "-vswr.svg"
         out_path = (Path(args.out_dir) / out_file) if args.out_dir else in_path.with_name(out_file)
     else:
         output_path = Path(args.output)
@@ -367,6 +394,7 @@ def main():
     styles = ["-"] * len(series)
     colors = [color_for_index("-", i) for i in range(len(series))]
 
+    emit_progress("vswr", 1, 2, f"Rendering {out_path.name}")
     out_path, legend_path = plot_xy(
         f_plot,
         series,
@@ -384,6 +412,17 @@ def main():
         x_log=args.x_log,
         x_min=x_axis_min,
         x_max=x_axis_max,
+        font_size=cartesian_font_size,
+        legend_font_size=cartesian_legend_font_size,
+        grid_line_width=cartesian_grid_line_width,
+        line_width=cartesian_line_width,
+    )
+    emit_progress("vswr", 2, 2, f"Saving {out_path.name}")
+    bookstem = out_path.stem[:-5] if out_path.stem.endswith("-vswr") else out_path.stem
+    update_artifact_manifest(
+        out_path.parent,
+        bookstem,
+        vswr=build_asset_record(out_path, legend_path=legend_path),
     )
     print(f"Saved: {out_path}")
     if legend_path:

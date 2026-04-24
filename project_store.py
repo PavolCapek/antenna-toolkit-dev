@@ -8,10 +8,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 PROJECTS_DIRNAME = "Projects"
 PROJECT_FILE_NAME = "project.json"
-CURRENT_PROJECT_SCHEMA_VERSION = 3
+CURRENT_PROJECT_SCHEMA_VERSION = 4
 
 
 def utc_now_iso() -> str:
@@ -45,6 +46,8 @@ def sanitize_project_slug(name: str) -> str:
 def serialize_workspace_path(root: Path, path: str | Path | None) -> str:
     if not path:
         return ""
+    if is_url(path):
+        return str(path).strip()
     resolved = Path(path)
     resolved = resolved if resolved.is_absolute() else (root / resolved)
     resolved = resolved.resolve()
@@ -57,8 +60,17 @@ def serialize_workspace_path(root: Path, path: str | Path | None) -> str:
 def resolve_project_path(root: Path, value: str | Path | None) -> str:
     if not value:
         return ""
+    if is_url(value):
+        return str(value).strip()
     path = Path(value)
     return str(path.resolve() if path.is_absolute() else (root / path).resolve())
+
+
+def is_url(value: str | Path | None) -> bool:
+    if value is None:
+        return False
+    parsed = urlparse(str(value).strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 @dataclass
@@ -68,6 +80,7 @@ class ProjectRecord:
     schema_version: int = CURRENT_PROJECT_SCHEMA_VERSION
     ffs_items: list[dict[str, Any]] = field(default_factory=list)
     touchstone_file: str = ""
+    technical_data_file: str = ""
     settings: dict[str, Any] = field(default_factory=dict)
     presets: dict[str, dict[str, Any]] = field(default_factory=dict)
     active_preset: str = ""
@@ -82,6 +95,7 @@ class ProjectRecord:
         if not ffs_items:
             ffs_items = _normalize_ffs_items(payload.get("ffs_files", []))
         touchstone_file = str(payload.get("touchstone_file", "")).strip()
+        technical_data_file = str(payload.get("technical_data_file", "")).strip()
         settings = payload.get("settings", {})
         if not isinstance(settings, dict):
             settings = {}
@@ -98,6 +112,7 @@ class ProjectRecord:
             schema_version=max(1, schema_version),
             ffs_items=ffs_items,
             touchstone_file=touchstone_file,
+            technical_data_file=technical_data_file,
             settings=settings,
             presets={str(key): value for key, value in presets.items() if isinstance(value, dict)},
             active_preset=active_preset,
@@ -111,6 +126,9 @@ class ProjectRecord:
             "slug": self.slug,
             "ffs_items": self.ffs_items,
             "touchstone_file": self.touchstone_file,
+            "technical_data_file": self.technical_data_file,
+            "settings": self.settings,
+            "presets": self.presets,
             "active_preset": self.active_preset,
             "run_state": self.run_state,
         }
@@ -147,13 +165,13 @@ class ProjectRecord:
         return self.project_dir(root) / f"{self.slug}.xlsx"
 
     def extract_path(self, root: Path) -> Path:
-        return self.project_dir(root) / f"{self.slug}_extracted_data.xlsx"
+        return self.project_dir(root) / f"{self.slug}-extracted-data.xlsx"
 
     def datasheet_path(self, root: Path) -> Path:
-        return self.project_dir(root) / f"{self.slug}_datasheet.pdf"
+        return self.project_dir(root) / f"{self.slug}-datasheet.pdf"
 
     def vswr_path(self, root: Path) -> Path:
-        return self.project_dir(root) / f"{self.slug}_vswr.svg"
+        return self.project_dir(root) / f"{self.slug}-vswr.svg"
 
 
 class ProjectStore:
@@ -245,6 +263,7 @@ class ProjectStore:
             schema_version=CURRENT_PROJECT_SCHEMA_VERSION,
             ffs_items=[dict(item) for item in source.ffs_items],
             touchstone_file=source.touchstone_file,
+            technical_data_file=source.technical_data_file,
             settings={},
             presets={},
             active_preset=source.active_preset,

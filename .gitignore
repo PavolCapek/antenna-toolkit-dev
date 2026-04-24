@@ -6,15 +6,56 @@
 # Python cache
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+site/
 
 # Local tool/editor state
 .nova_qt_state.json
 .nova_qt_studio_state.json
+client_secret*.json
+.idea/
+.vscode/
+.python-version
 
 # Virtual environments
 .venv/
 venv/
 env/
+
+# Repository-local scratch/output
+/tmp/
+
+# Generated test artifacts
+pytestdebug.log
+junit*.xml
+coverage.xml
+test-results/
+playwright-report/
+tests/.pytest_cache/
+tests/__pycache__/
+tests/tmp/
+tests/output/
+
+# Temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.swp
+*.swo
+*~
+~$*
 
 # Optional OS/editor files
 .DS_Store
