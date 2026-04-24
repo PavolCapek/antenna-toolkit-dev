@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import sys
 import tempfile
 import unittest
@@ -16,6 +17,14 @@ from plot import beamwidth_plane_phi
 
 
 class BeamwidthPlanePlotTests(unittest.TestCase):
+    def _legend_stroke_widths(self, path: Path) -> set[str]:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        return {
+            value.strip()
+            for value in re.findall(r"stroke-width:\s*([^;\"]+)", text)
+            if value.strip()
+        }
+
     def test_beamwidth_plane_phi_maps_by_polarization(self) -> None:
         self.assertEqual(beamwidth_plane_phi("H", "E"), 0)
         self.assertEqual(beamwidth_plane_phi("H", "H"), 90)
@@ -146,6 +155,47 @@ class BeamwidthPlanePlotTests(unittest.TestCase):
         self.assertIn("input-beamwidth-h-plane.svg", by_name)
         np.testing.assert_allclose(by_name["input-beamwidth-e-plane.svg"][1][0], [100.0])
         np.testing.assert_allclose(by_name["input-beamwidth-h-plane.svg"][1][0], [10.0])
+
+    def test_cartesian_and_polar_legend_handles_use_same_stroke_width(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            cartesian_path = temp_path / "cartesian.svg"
+            polar_path = temp_path / "polar.svg"
+
+            plot.plot_xy(
+                np.array([1.0, 2.0, 3.0]),
+                [np.array([1.0, 2.0, 3.0]), np.array([1.5, 2.5, 3.5])],
+                ["Cartesian A", "Cartesian B"],
+                cartesian_path,
+                "Value",
+                line_width=6.0,
+            )
+            plot.save_polar(
+                polar_path,
+                [
+                    {
+                        "angles": np.array([0.0, 90.0, 180.0, 270.0, 360.0]),
+                        "series": np.array([0.0, -3.0, -12.0, -3.0, 0.0]),
+                        "label": "Polar A",
+                        "linestyle": "-",
+                    },
+                    {
+                        "angles": np.array([0.0, 90.0, 180.0, 270.0, 360.0]),
+                        "series": np.array([-1.0, -4.0, -14.0, -4.0, -1.0]),
+                        "label": "Polar B",
+                        "linestyle": "--",
+                    },
+                ],
+                "Polar",
+                line_width=9.0,
+                legend_ncol=1,
+            )
+
+            cartesian_legend = plot.legend_output_path(cartesian_path)
+            polar_legend = plot.legend_output_path(polar_path)
+
+            self.assertEqual(self._legend_stroke_widths(cartesian_legend), {"3"})
+            self.assertEqual(self._legend_stroke_widths(polar_legend), {"3"})
 
 
 if __name__ == "__main__":

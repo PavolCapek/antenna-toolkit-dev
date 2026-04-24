@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -178,12 +179,19 @@ class ProgressReportingTests(unittest.TestCase):
             template = root / "template.pdf"
             workbook = root / "extract.xlsx"
             buffer = io.StringIO()
+            model = SimpleNamespace(
+                performance_fields=replacements,
+                technical_entries=[],
+                artifact_manifest={},
+            )
+            context = SimpleNamespace(model=model, adapter=None)
+            slots = {label: slot for label in datasheet_pdf.FIELD_LABELS}
             with (
-                mock.patch.object(datasheet_pdf, "build_replacements_from_workbook", return_value=replacements),
+                mock.patch.object(datasheet_pdf, "build_render_context", return_value=context),
                 mock.patch.object(datasheet_pdf.fitz, "open", return_value=FakeDoc()),
                 mock.patch.object(datasheet_pdf, "_build_pdf_metadata", return_value={}),
                 mock.patch.object(datasheet_pdf, "_extract_page_spans", return_value=[]),
-                mock.patch.object(datasheet_pdf, "_find_replacement_slot", return_value=slot),
+                mock.patch.object(datasheet_pdf, "_find_replacement_slots", return_value=slots),
                 mock.patch.object(datasheet_pdf, "_fit_font_size", return_value=7.0),
                 mock.patch.object(datasheet_pdf, "_font_path_for_display_font", return_value=None),
                 mock.patch.object(datasheet_pdf, "_resolve_font_name", return_value="helv"),

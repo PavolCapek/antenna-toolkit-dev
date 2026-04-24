@@ -73,6 +73,7 @@ DEFAULT_PLOT_FONT_SIZE = 10.5
 DEFAULT_LEGEND_FONT_SIZE = 10.5
 DEFAULT_GRID_LINE_WIDTH = 0.9
 DEFAULT_PLOT_LINE_WIDTH = 2.0
+DEFAULT_LEGEND_LINE_WIDTH = 3.0
 STACKED_LEGEND_TEXT_COLOR = "#8a949c"
 STACKED_LEGEND_COLUMN_SEP = 16.0
 STACKED_LEGEND_ROW_SEP = 24.0
@@ -534,7 +535,7 @@ def plot_xy(x, series_list, names, out_path, y_label,
         out_path,
         ncol=1,
         fontsize=legend_font_size,
-        linewidth=line_width,
+        linewidth=DEFAULT_LEGEND_LINE_WIDTH,
         row_sep=STACKED_LEGEND_ROW_SEP,
         entry_sep=STACKED_LEGEND_ENTRY_SEP,
     )
@@ -616,7 +617,7 @@ def save_polar(out_path, datasets, title,
         out_path,
         ncol=legend_ncol,
         fontsize=legend_font_size,
-        linewidth=line_width + 0.3,
+        linewidth=DEFAULT_LEGEND_LINE_WIDTH,
         column_sep=STACKED_LEGEND_COLUMN_SEP,
         row_sep=STACKED_LEGEND_ROW_SEP,
         entry_sep=STACKED_LEGEND_ENTRY_SEP,
