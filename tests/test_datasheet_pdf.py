@@ -24,7 +24,7 @@ from datasheet_pdf import (
     build_replacements_from_workbook,
     load_technical_data_workbook,
 )
-from datasheet_templates import NETQUI_TEMPLATE_ADAPTER
+from datasheet_templates import NETQUI_TEMPLATE_ADAPTER, RFE_TEMPLATE_ADAPTER
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -682,6 +682,7 @@ class DatasheetPdfTests(unittest.TestCase):
             page_text = doc[0].get_text()
 
         self.assertIn("text_placeholder", page_text)
+        self.assertIn("4900 - 7125 MHz", page_text)
         self.assertIn("19.5 dBi", page_text)
         self.assertIn("50 Ohm", page_text)
         self.assertIn("Dual Linear H + V", page_text)
@@ -960,6 +961,22 @@ class DatasheetPdfTests(unittest.TestCase):
             (by_kind["elevation"].legend_rect.x0 + by_kind["elevation"].legend_rect.x1) / 2.0,
             delta=0.5,
         )
+
+    def test_rfe_template_manifest_keeps_azimuth_left_and_elevation_right(self) -> None:
+        self._write_template_pdf(reverse_polar_slot_order=True)
+
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_chart_replacements(
+                doc[1],
+                self.output_pdf,
+                self.extract_workbook,
+                adapter=RFE_TEMPLATE_ADAPTER,
+            )
+
+        by_kind = {replacement.kind: replacement for replacement in replacements}
+        self.assertLess(by_kind["azimuth"].rect.x0, by_kind["elevation"].rect.x0)
+        self.assertEqual(by_kind["azimuth"].asset_path, self.azimuth_svg)
+        self.assertEqual(by_kind["elevation"].asset_path, self.elevation_svg)
 
     def test_netqui_template_uses_e_and_h_plane_beamwidth_slots(self) -> None:
         self._write_netqui_chart_template_pdf()

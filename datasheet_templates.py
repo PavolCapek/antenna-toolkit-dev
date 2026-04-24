@@ -91,7 +91,18 @@ NETQUI_TEMPLATE_MANIFEST = TemplateManifest(
 
 RFE_TEMPLATE_MANIFEST = TemplateManifest(
     key="rfe",
-    chart_layout=GENERIC_TEMPLATE_MANIFEST.chart_layout,
+    chart_layout=TemplateChartManifest(
+        page_index=None,
+        min_image_slots=2,
+        slots=(
+            TemplateChartSlot("gain", 0, "gain"),
+            TemplateChartSlot("beamwidth", 1, "beamwidth"),
+            TemplateChartSlot("azimuth", 2, "polar_azimuth", required=False),
+            TemplateChartSlot("elevation", 3, "polar_elevation", required=False),
+        ),
+        normalize_width_kinds=("gain", "beamwidth"),
+        slot_order="first_two_then_x",
+    ),
 )
 
 GENERIC_TEMPLATE_ADAPTER = DatasheetTemplateAdapter(

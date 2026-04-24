@@ -1976,6 +1976,11 @@ def _build_manifest_chart_replacements(
 ) -> list[ChartReplacement]:
     if chart_manifest.slot_order == "rows":
         ordered_slots = [slot for row in _chart_slot_rows(ordered_slots) for slot in row]
+    elif chart_manifest.slot_order == "first_two_then_x" and len(ordered_slots) > 2:
+        ordered_slots = ordered_slots[:2] + sorted(
+            ordered_slots[2:],
+            key=lambda slot: (slot.rect.x0, slot.rect.y0, slot.rect.y1, slot.rect.x1),
+        )
     replacements: list[ChartReplacement] = []
     for slot_spec in chart_manifest.slots:
         if slot_spec.slot_index >= len(ordered_slots):
@@ -2320,15 +2325,6 @@ def build_datasheet_pdf(
         page_spans = _extract_page_spans(page)
         slots = _find_replacement_slots(page, FIELD_LABELS, page_spans)
         registered_fonts: set[str] = set()
-        for slot in slots.values():
-            page.add_redact_annot(slot.erase_rect, fill=None)
-        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
-        for label in FIELD_LABELS:
-            if label not in slots:
-                continue
-            slot = slots[label]
-            text = replacements[label]
-            _insert_replacement_slot_text(page, slot, text, registered_fonts=registered_fonts)
 
         next_step = 2
         if technical_data_workbook:
@@ -2343,6 +2339,17 @@ def build_datasheet_pdf(
                 )
             )
             next_step += 1
+
+        page = doc[0]
+        for slot in slots.values():
+            page.add_redact_annot(slot.erase_rect, fill=None)
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+        for label in FIELD_LABELS:
+            if label not in slots:
+                continue
+            slot = slots[label]
+            text = replacements[label]
+            _insert_replacement_slot_text(page, slot, text, registered_fonts=registered_fonts)
 
         _redraw_split_table_separators(doc[0])
         emit_progress("datasheet", next_step, total_steps, "Embedding chart assets")
