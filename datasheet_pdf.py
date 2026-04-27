@@ -541,6 +541,8 @@ def _redraw_netqui_table_separators(page: fitz.Page, layout_mode: str) -> None:
     line_color = (0.13669031858444214, 0.12195010483264923, 0.1252918243408203)
     seen: set[tuple[float, float, float]] = set()
     for slot in slots:
+        if layout_mode == "netqui_1pol" and slot.label.strip().lower().rstrip(".") == "beamwidth h plane":
+            continue
         line_left = 36.638 if slot.label_rect.x0 < 280.0 else 285.0
         line_right = slot.table_right
         key = (round(line_left, 3), round(slot.row_bottom, 3), round(line_right, 3))
@@ -656,7 +658,9 @@ def _technical_data_row_slots(page: fitz.Page, *, layout_mode: str = "auto") -> 
         labels = [
             span
             for span in spans
-            if span.bbox.y0 > section["heading"].bbox.y1
+            if (label_text := span.text.strip().replace("\u200b", ""))
+            and label_text.upper() not in {"DIMMENSIONS", "DIMENSIONS"}
+            and span.bbox.y0 > section["heading"].bbox.y1
             and span.bbox.y0 < bottom_y
             and section["label_x0"] <= span.bbox.x0 <= section["label_x1"]
             and span.bbox.x1 <= section["label_x1"] + 18.0
@@ -792,14 +796,6 @@ def _replace_technical_table(
             color=MISSING_VALUE_COLOR if is_missing else slot.value_color,
             registered_fonts=registered_fonts,
         )
-        page.draw_line(
-            (36.638, slot.row_bottom),
-            (slot.table_right, slot.row_bottom),
-            color=(0.13669031858444214, 0.12195010483264923, 0.1252918243408203),
-            width=0.25,
-            overlay=True,
-        )
-
     extra_entries = [
         entry
         for entry in entries

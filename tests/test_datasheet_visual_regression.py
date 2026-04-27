@@ -39,17 +39,29 @@ def _span_for_text(page: fitz.Page, text: str) -> fitz.Rect:
     raise AssertionError(f"Text not found in rendered page: {text}")
 
 
+def _horizontal_table_segments(page: fitz.Page) -> list[tuple[float, float, float]]:
+    segments: list[tuple[float, float, float]] = []
+    for drawing in page.get_drawings():
+        for item in drawing.get("items", []):
+            if item[0] != "l":
+                continue
+            p1, p2 = item[1], item[2]
+            if abs(p1.y - p2.y) > 0.3:
+                continue
+            if not (400.0 <= p1.y <= 610.0):
+                continue
+            if abs(p2.x - p1.x) <= 40.0:
+                continue
+            segments.append((round(min(p1.x, p2.x), 2), round(max(p1.x, p2.x), 2), round(p1.y, 2)))
+    return segments
+
+
 def _has_left_table_line_below(page: fitz.Page, text: str) -> bool:
     span = _span_for_text(page, text)
-    for drawing in page.get_drawings():
-        rect = drawing.get("rect")
-        if rect is None:
+    for x0, x1, y in _horizontal_table_segments(page):
+        if not (span.y1 <= y <= span.y1 + 8.0):
             continue
-        if abs(rect.y1 - rect.y0) > 0.3:
-            continue
-        if not (span.y1 <= rect.y0 <= span.y1 + 8.0):
-            continue
-        if rect.x0 <= 40.0 and rect.x1 >= 290.0:
+        if x0 <= 40.0 and x1 >= 290.0:
             return True
     return False
 
@@ -172,6 +184,11 @@ class DatasheetVisualRegressionTests(unittest.TestCase):
             self.assertIn("text_placeholder", text)
             self.assertTrue(_has_left_table_line_below(page_one, "VSWR"))
             self.assertTrue(_has_left_table_line_below(page_one, "Nominal Impedance"))
+            self.assertFalse(_has_left_table_line_below(page_one, "Beamwidth H plane."))
+            table_segments = _horizontal_table_segments(page_one)
+            self.assertEqual(len(table_segments), len(set(table_segments)))
+            self.assertFalse([segment for segment in table_segments if segment[0] < 40.0 and segment[1] > 500.0])
+            self.assertFalse([segment for segment in table_segments if segment[2] > 565.0])
             self.assertEqual(len(replacements), 7)
             for replacement in replacements:
                 self.assertGreater(_non_white_ratio(page_two, replacement.erase_rect or replacement.rect), 0.01)
