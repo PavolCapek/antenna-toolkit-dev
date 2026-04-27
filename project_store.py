@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 PROJECTS_DIRNAME = "Projects"
 PROJECT_FILE_NAME = "project.json"
-CURRENT_PROJECT_SCHEMA_VERSION = 4
+CURRENT_PROJECT_SCHEMA_VERSION = 5
 
 
 def utc_now_iso() -> str:
@@ -28,12 +28,14 @@ def _normalize_ffs_items(payload: object) -> list[dict[str, Any]]:
         if isinstance(raw, dict):
             path = str(raw.get("path", "")).strip()
             enabled = bool(raw.get("enabled", True))
+            port_label = str(raw.get("port_label", "")).strip()
         else:
             path = str(raw).strip()
             enabled = True
+            port_label = ""
         if not path or path in seen:
             continue
-        items.append({"path": path, "enabled": enabled})
+        items.append({"path": path, "enabled": enabled, "port_label": port_label})
         seen.add(path)
     return items
 

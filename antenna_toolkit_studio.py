@@ -34,6 +34,7 @@ from project_store import (
     CURRENT_PROJECT_SCHEMA_VERSION, ProjectRecord, ProjectStore, resolve_project_path,
     sanitize_project_slug, serialize_workspace_path, utc_now_iso,
 )
+from legend_utils import detect_polarization
 from datasheet_artifacts import artifact_manifest_path
 
 APP_TITLE = "Antenna Toolkit Studio"
@@ -55,7 +56,7 @@ STAGE_DEFINITIONS = [
     ("datasheet", "Datasheet"),
 ]
 STAGE_LABELS = dict(STAGE_DEFINITIONS)
-PLOT_ASSET_STYLE_VERSION = 2
+PLOT_ASSET_STYLE_VERSION = 3
 DATASHEET_RENDER_VERSION = 2
 DATASHEET_TEMPLATE_DIR = THIS_DIR / "Templates"
 DEFAULT_DATASHEET_TEMPLATE_NAME = "Datasheet - RFE.pdf"
@@ -384,6 +385,13 @@ def apply_tooltip(widget: QWidget, text: str) -> None:
         widget.next_btn.setToolTip(text)
         widget.pick.setToolTip(text)
         widget.swatch.setToolTip(text)
+    elif isinstance(widget, PolarLineStyleSelector):
+        widget.color_selector.combo.setToolTip(text)
+        widget.color_selector.prev_btn.setToolTip(text)
+        widget.color_selector.next_btn.setToolTip(text)
+        widget.color_selector.pick.setToolTip(text)
+        widget.color_selector.swatch.setToolTip(text)
+        widget.style_combo.setToolTip(text)
 
 
 def add_form_row(form: QFormLayout, label: str, field: QWidget, tooltip: str) -> None:
@@ -740,6 +748,61 @@ class StudioColorSelector(QWidget):
         color = QColorDialog.getColor(QColor(self.current_color), self, "Select color")
         if color.isValid():
             self.set_color(color.name())
+
+
+class PolarLineStyleSelector(QWidget):
+    styleChanged = Signal()
+
+    def __init__(
+        self,
+        store: Persist,
+        color_key: str,
+        style_key: str,
+        default_color: str,
+        default_style: str,
+    ):
+        super().__init__()
+        self.store = store
+        self.color_key = color_key
+        self.style_key = style_key
+        self.color_selector = StudioColorSelector(store, color_key, default_color)
+        self.style_combo = NoWheelComboBox()
+        self.style_combo.addItem("Solid", "solid")
+        self.style_combo.addItem("Dashed", "dashed")
+        self.style_combo.currentIndexChanged.connect(self._on_style_changed)
+        self.setFocusProxy(self.color_selector.combo)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        lay.addWidget(self.color_selector, 1)
+        lay.addWidget(self.style_combo)
+
+        self.color_selector.colorChanged.connect(lambda _value: self.styleChanged.emit())
+        self.set_style(str(store.get(style_key, default_style)), persist=False)
+
+    def color(self) -> str:
+        return self.color_selector.color()
+
+    def set_color(self, value: str, persist: bool = True) -> None:
+        self.color_selector.set_color(value, persist=persist)
+
+    def style(self) -> str:
+        return str(self.style_combo.currentData() or "solid")
+
+    def set_style(self, value: str, persist: bool = True) -> None:
+        normalized = "dashed" if str(value).strip().lower() in {"dashed", "dash", "--"} else "solid"
+        index = self.style_combo.findData(normalized)
+        self.style_combo.blockSignals(True)
+        self.style_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.style_combo.blockSignals(False)
+        if persist:
+            self.store.set(self.style_key, normalized)
+        self.styleChanged.emit()
+
+    def _on_style_changed(self) -> None:
+        self.store.set(self.style_key, self.style())
+        self.styleChanged.emit()
 
 
 class ConsoleWindow(QWidget):
@@ -1160,6 +1223,7 @@ class ModernMainWindow(QMainWindow):
         project_card.body.addLayout(badge_grid)
 
         command_left = QWidget()
+        self.command_left = command_left
         command_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         command_left_layout = QVBoxLayout(command_left)
         command_left_layout.setContentsMargins(0, 0, 0, 0)
@@ -1294,14 +1358,26 @@ class ModernMainWindow(QMainWindow):
         self.ffs_list.itemChanged.connect(self.on_ffs_item_changed)
         self.ffs_list.itemSelectionChanged.connect(self._update_ffs_action_state)
         ffs_card.body.addWidget(self.ffs_list, 1)
+        ffs_label_row = QHBoxLayout()
+        ffs_label_row.setContentsMargins(0, 0, 0, 0)
+        self.ffs_port_label_field = QLineEdit()
+        self.ffs_port_label_field.setPlaceholderText("blank, H, V, Port 1, +45...")
+        self.ffs_port_label_field.setToolTip("Legend label for the selected far-field file. Leave blank for no prefix on single-port plots.")
+        self.ffs_port_label_field.setEnabled(False)
+        self.ffs_port_label_field.textEdited.connect(self.update_selected_ffs_port_label)
+        ffs_label_row.addWidget(QLabel("Selected port label"))
+        ffs_label_row.addWidget(self.ffs_port_label_field, 1)
+        ffs_card.body.addLayout(ffs_label_row)
         self.add_ffs_button = QPushButton("Add .ffs"); self.add_ffs_button.clicked.connect(self.add_ffs)
         self.remove_ffs_button = QPushButton("Remove selected"); self.remove_ffs_button.clicked.connect(self.remove_ffs)
+        self.ffs_port_label_button = QPushButton("Port label"); self.ffs_port_label_button.clicked.connect(self.edit_selected_ffs_port_label)
         self.clear_ffs_button = QPushButton("Clear list"); self.clear_ffs_button.clicked.connect(self.clear_ffs)
         self.ffs_up_button = QPushButton("Move up"); self.ffs_up_button.clicked.connect(self.move_ffs_up)
         self.ffs_down_button = QPushButton("Move down"); self.ffs_down_button.clicked.connect(self.move_ffs_down)
         self.ffs_toggle_button = QPushButton("Enable/disable"); self.ffs_toggle_button.clicked.connect(self.toggle_selected_ffs_enabled)
         self.add_ffs_button.setToolTip("Browse for CST far-field export files to include in this project.")
         self.remove_ffs_button.setToolTip("Remove the highlighted far-field files from the current project.")
+        self.ffs_port_label_button.setToolTip("Set the port label used in polar plot legends for the selected far-field file.")
         self.clear_ffs_button.setToolTip("Clear the full far-field file list.")
         self.ffs_up_button.setToolTip("Move the selected far-field files up in the processing order.")
         self.ffs_down_button.setToolTip("Move the selected far-field files down in the processing order.")
@@ -1311,6 +1387,7 @@ class ModernMainWindow(QMainWindow):
         ffs_actions.set_buttons([
             self.add_ffs_button,
             self.remove_ffs_button,
+            self.ffs_port_label_button,
             self.clear_ffs_button,
             self.ffs_up_button,
             self.ffs_down_button,
@@ -1492,6 +1569,10 @@ class ModernMainWindow(QMainWindow):
         self.polar_grid_line_width = TrimmedDoubleSpinBox(); self.polar_grid_line_width.setRange(0.1, 10.0); self.polar_grid_line_width.setDecimals(2); self.polar_grid_line_width.setSingleStep(0.1); self.polar_grid_line_width.setValue(float(self.store.get("polar_grid_line_width", self.store.get("plot_grid_line_width", 0.9)))); self.polar_grid_line_width.valueChanged.connect(lambda v: self.store.set("polar_grid_line_width", float(v)))
         self.plot_line1 = StudioColorSelector(self.store, "plot_line_1", DEFAULT_LINE_COLORS[0][1])
         self.plot_line2 = StudioColorSelector(self.store, "plot_line_2", DEFAULT_LINE_COLORS[1][1])
+        self.polar_azimuth_line1 = PolarLineStyleSelector(self.store, "polar_azimuth_line_1_color", "polar_azimuth_line_1_style", self.store.get("plot_line_1", DEFAULT_LINE_COLORS[0][1]), "solid")
+        self.polar_azimuth_line2 = PolarLineStyleSelector(self.store, "polar_azimuth_line_2_color", "polar_azimuth_line_2_style", self.store.get("plot_line_2", DEFAULT_LINE_COLORS[1][1]), "solid")
+        self.polar_elevation_line1 = PolarLineStyleSelector(self.store, "polar_elevation_line_1_color", "polar_elevation_line_1_style", self.store.get("plot_line_1", DEFAULT_LINE_COLORS[0][1]), "dashed")
+        self.polar_elevation_line2 = PolarLineStyleSelector(self.store, "polar_elevation_line_2_color", "polar_elevation_line_2_style", self.store.get("plot_line_2", DEFAULT_LINE_COLORS[1][1]), "dashed")
         self.beamwidth_3db_color = StudioColorSelector(self.store, "beamwidth_3db_color", DEFAULT_BEAMWIDTH_DB_COLORS[0][1], presets=DEFAULT_BEAMWIDTH_DB_COLORS)
         self.beamwidth_6db_color = StudioColorSelector(self.store, "beamwidth_6db_color", DEFAULT_BEAMWIDTH_DB_COLORS[1][1], presets=DEFAULT_BEAMWIDTH_DB_COLORS)
         self.beamwidth_10db_color = StudioColorSelector(self.store, "beamwidth_10db_color", DEFAULT_BEAMWIDTH_DB_COLORS[2][1], presets=DEFAULT_BEAMWIDTH_DB_COLORS)
@@ -1565,6 +1646,10 @@ class ModernMainWindow(QMainWindow):
         add_form_row(polar_metrics_form, "Line width", StepperField(self.polar_line_width), "Trace thickness used by the polar plots.")
         add_form_row(polar_metrics_form, "Font size", StepperField(self.polar_font_size), "Base font size used by polar plot labels and tick labels.")
         add_form_row(polar_metrics_form, "Legend font", StepperField(self.polar_legend_font_size), "Font size used by exported polar legends.")
+        add_form_row(polar_metrics_form, "Azimuth line 1", self.polar_azimuth_line1, "Color and style for the first azimuth polar trace.")
+        add_form_row(polar_metrics_form, "Azimuth line 2", self.polar_azimuth_line2, "Color and style for the second azimuth polar trace.")
+        add_form_row(polar_metrics_form, "Elevation line 1", self.polar_elevation_line1, "Color and style for the first elevation polar trace.")
+        add_form_row(polar_metrics_form, "Elevation line 2", self.polar_elevation_line2, "Color and style for the second elevation polar trace.")
         polar_metrics_card.body.addLayout(polar_metrics_form)
 
         legend_card = Card("Legend labels")
@@ -1826,6 +1911,14 @@ class ModernMainWindow(QMainWindow):
         self.polar_legend_font_size.setValue(10.5)
         self.plot_line1.set_color(DEFAULT_LINE_COLORS[0][1], persist=False)
         self.plot_line2.set_color(DEFAULT_LINE_COLORS[1][1], persist=False)
+        self.polar_azimuth_line1.set_color(DEFAULT_LINE_COLORS[0][1], persist=False)
+        self.polar_azimuth_line1.set_style("solid", persist=False)
+        self.polar_azimuth_line2.set_color(DEFAULT_LINE_COLORS[1][1], persist=False)
+        self.polar_azimuth_line2.set_style("solid", persist=False)
+        self.polar_elevation_line1.set_color(DEFAULT_LINE_COLORS[0][1], persist=False)
+        self.polar_elevation_line1.set_style("dashed", persist=False)
+        self.polar_elevation_line2.set_color(DEFAULT_LINE_COLORS[1][1], persist=False)
+        self.polar_elevation_line2.set_style("dashed", persist=False)
         self.beamwidth_3db_color.set_color(DEFAULT_BEAMWIDTH_DB_COLORS[0][1], persist=False)
         self.beamwidth_6db_color.set_color(DEFAULT_BEAMWIDTH_DB_COLORS[1][1], persist=False)
         self.beamwidth_10db_color.set_color(DEFAULT_BEAMWIDTH_DB_COLORS[2][1], persist=False)
@@ -1884,6 +1977,14 @@ class ModernMainWindow(QMainWindow):
             "polar_legend_font_size": 10.5,
             "plot_line_1": DEFAULT_LINE_COLORS[0][1],
             "plot_line_2": DEFAULT_LINE_COLORS[1][1],
+            "polar_azimuth_line_1_color": DEFAULT_LINE_COLORS[0][1],
+            "polar_azimuth_line_1_style": "solid",
+            "polar_azimuth_line_2_color": DEFAULT_LINE_COLORS[1][1],
+            "polar_azimuth_line_2_style": "solid",
+            "polar_elevation_line_1_color": DEFAULT_LINE_COLORS[0][1],
+            "polar_elevation_line_1_style": "dashed",
+            "polar_elevation_line_2_color": DEFAULT_LINE_COLORS[1][1],
+            "polar_elevation_line_2_style": "dashed",
             "beamwidth_3db_color": DEFAULT_BEAMWIDTH_DB_COLORS[0][1],
             "beamwidth_6db_color": DEFAULT_BEAMWIDTH_DB_COLORS[1][1],
             "beamwidth_10db_color": DEFAULT_BEAMWIDTH_DB_COLORS[2][1],
@@ -1997,6 +2098,7 @@ class ModernMainWindow(QMainWindow):
                 "panel_gap": 10,
                 "button_gap": 6,
                 "command_panel_min_card_width": 430,
+                "command_left_max_width": 16777215,
                 "readiness_panel_min_card_width": 150,
                 "inputs_panel_min_card_width": 320,
                 "processing_panel_min_card_width": 300,
@@ -2048,7 +2150,8 @@ class ModernMainWindow(QMainWindow):
             "card_body_spacing": 10,
             "panel_gap": 14,
             "button_gap": 10,
-            "command_panel_min_card_width": 480,
+            "command_panel_min_card_width": 360,
+            "command_left_max_width": 390,
             "readiness_panel_min_card_width": 170,
             "inputs_panel_min_card_width": 360,
             "processing_panel_min_card_width": 320,
@@ -2071,7 +2174,7 @@ class ModernMainWindow(QMainWindow):
             "badge_padding": (7, 11),
             "tab_margin_top": 8,
             "tab_padding": (11, 18),
-            "tab_min_width": 120,
+            "tab_min_width": 110,
             "input_padding": (9, 12),
             "button_padding": (11, 15),
             "primary_button_padding": (12, 18),
@@ -2139,6 +2242,7 @@ class ModernMainWindow(QMainWindow):
             panel.refresh_layout(force=True)
         self.pipeline_details_layout.setSpacing(int(metrics["card_body_spacing"]))
         self.ffs_list.setMinimumHeight(int(metrics["ffs_list_min_height"]))
+        self.command_left.setMaximumWidth(int(metrics["command_left_max_width"]))
         compact = self._compact_layout
         self.brand_subtitle.setVisible(not compact)
         self.run_help_label.setVisible(not compact)
@@ -2368,6 +2472,10 @@ class ModernMainWindow(QMainWindow):
             self.polar_legend_font_size.valueChanged,
             self.plot_line1.colorChanged,
             self.plot_line2.colorChanged,
+            self.polar_azimuth_line1.styleChanged,
+            self.polar_azimuth_line2.styleChanged,
+            self.polar_elevation_line1.styleChanged,
+            self.polar_elevation_line2.styleChanged,
             self.beamwidth_3db_color.colorChanged,
             self.beamwidth_6db_color.colorChanged,
             self.beamwidth_10db_color.colorChanged,
@@ -2394,6 +2502,7 @@ class ModernMainWindow(QMainWindow):
             items.append({
                 "path": self._item_path(item),
                 "enabled": item.checkState() == Qt.Checked,
+                "port_label": self._item_port_label(item),
             })
         return items
 
@@ -2440,6 +2549,10 @@ class ModernMainWindow(QMainWindow):
                 "cartesian_font_size", "polar_font_size",
                 "cartesian_legend_font_size", "polar_legend_font_size",
                 "plot_line_1", "plot_line_2",
+                "polar_azimuth_line_1_color", "polar_azimuth_line_1_style",
+                "polar_azimuth_line_2_color", "polar_azimuth_line_2_style",
+                "polar_elevation_line_1_color", "polar_elevation_line_1_style",
+                "polar_elevation_line_2_color", "polar_elevation_line_2_style",
                 "beamwidth_3db_color", "beamwidth_6db_color", "beamwidth_10db_color",
                 "gain_legend_labels", "beamwidth_legend_labels", "beam_eff_legend_labels",
                 "rings", "angle", "clip",
@@ -2477,6 +2590,7 @@ class ModernMainWindow(QMainWindow):
                 {
                     "path": serialize_workspace_path(THIS_DIR, str(item["path"])),
                     "enabled": bool(item["enabled"]),
+                    "port_label": str(item.get("port_label", "")).strip(),
                     "file": self._path_fingerprint(str(item["path"])),
                 }
                 for item in self.collect_ffs_items()
@@ -3135,6 +3249,24 @@ class ModernMainWindow(QMainWindow):
     def selected_ffs(self) -> list[str]:
         return [str(item["path"]) for item in self.collect_ffs_items() if bool(item["enabled"])]
 
+    def polar_port_labels_json(self) -> str:
+        labels: dict[str, str] = {}
+        for item in self.collect_ffs_items():
+            if not bool(item.get("enabled", True)):
+                continue
+            label = str(item.get("port_label", "")).strip()
+            if not label:
+                continue
+            path = str(item.get("path", "")).strip()
+            if not path:
+                continue
+            resolved = str(resolve_workspace_path(path))
+            stem = Path(resolved).stem
+            for key in (resolved, display_workspace_path(resolved), stem, stem[:31]):
+                if key:
+                    labels[key] = label
+        return json.dumps(labels, sort_keys=True)
+
     def selected_s2p(self) -> str:
         value = self.s2p_field.text().strip()
         return str(resolve_workspace_path(value)) if value else ""
@@ -3276,6 +3408,7 @@ class ModernMainWindow(QMainWindow):
                 {
                     "path": serialize_workspace_path(THIS_DIR, str(item["path"])),
                     "enabled": bool(item["enabled"]),
+                    "port_label": str(item.get("port_label", "")).strip(),
                 }
                 for item in self.collect_ffs_items()
             ],
@@ -3351,10 +3484,12 @@ class ModernMainWindow(QMainWindow):
             self.btn_full,
             self.btn_clear_outputs,
             self.ffs_list,
+            self.ffs_port_label_field,
             self.s2p_field,
             self.technical_data_field,
             self.add_ffs_button,
             self.remove_ffs_button,
+            self.ffs_port_label_button,
             self.clear_ffs_button,
             self.select_s2p_button,
             self.clear_s2p_button,
@@ -3787,6 +3922,14 @@ class ModernMainWindow(QMainWindow):
             "polar_legend_font_size": float(self.polar_legend_font_size.value()),
             "plot_line_1": self.plot_line1.color(),
             "plot_line_2": self.plot_line2.color(),
+            "polar_azimuth_line_1_color": self.polar_azimuth_line1.color(),
+            "polar_azimuth_line_1_style": self.polar_azimuth_line1.style(),
+            "polar_azimuth_line_2_color": self.polar_azimuth_line2.color(),
+            "polar_azimuth_line_2_style": self.polar_azimuth_line2.style(),
+            "polar_elevation_line_1_color": self.polar_elevation_line1.color(),
+            "polar_elevation_line_1_style": self.polar_elevation_line1.style(),
+            "polar_elevation_line_2_color": self.polar_elevation_line2.color(),
+            "polar_elevation_line_2_style": self.polar_elevation_line2.style(),
             "beamwidth_3db_color": self.beamwidth_3db_color.color(),
             "beamwidth_6db_color": self.beamwidth_6db_color.color(),
             "beamwidth_10db_color": self.beamwidth_10db_color.color(),
@@ -3852,6 +3995,18 @@ class ModernMainWindow(QMainWindow):
         if polar_legend_font_size is not None: self.polar_legend_font_size.setValue(float(polar_legend_font_size))
         if "plot_line_1" in values: self.plot_line1.set_color(str(values["plot_line_1"]))
         if "plot_line_2" in values: self.plot_line2.set_color(str(values["plot_line_2"]))
+        if "polar_azimuth_line_1_color" in values or "plot_line_1" in values:
+            self.polar_azimuth_line1.set_color(str(values.get("polar_azimuth_line_1_color", values.get("plot_line_1"))))
+        if "polar_azimuth_line_2_color" in values or "plot_line_2" in values:
+            self.polar_azimuth_line2.set_color(str(values.get("polar_azimuth_line_2_color", values.get("plot_line_2"))))
+        if "polar_elevation_line_1_color" in values or "plot_line_1" in values:
+            self.polar_elevation_line1.set_color(str(values.get("polar_elevation_line_1_color", values.get("plot_line_1"))))
+        if "polar_elevation_line_2_color" in values or "plot_line_2" in values:
+            self.polar_elevation_line2.set_color(str(values.get("polar_elevation_line_2_color", values.get("plot_line_2"))))
+        if "polar_azimuth_line_1_style" in values: self.polar_azimuth_line1.set_style(str(values["polar_azimuth_line_1_style"]))
+        if "polar_azimuth_line_2_style" in values: self.polar_azimuth_line2.set_style(str(values["polar_azimuth_line_2_style"]))
+        if "polar_elevation_line_1_style" in values: self.polar_elevation_line1.set_style(str(values["polar_elevation_line_1_style"]))
+        if "polar_elevation_line_2_style" in values: self.polar_elevation_line2.set_style(str(values["polar_elevation_line_2_style"]))
         if "beamwidth_3db_color" in values: self.beamwidth_3db_color.set_color(str(values["beamwidth_3db_color"]))
         if "beamwidth_6db_color" in values: self.beamwidth_6db_color.set_color(str(values["beamwidth_6db_color"]))
         if "beamwidth_10db_color" in values: self.beamwidth_10db_color.set_color(str(values["beamwidth_10db_color"]))
@@ -3983,6 +4138,12 @@ class ModernMainWindow(QMainWindow):
     def _item_path(self, item: QListWidgetItem) -> str:
         return item.data(Qt.UserRole) or str(resolve_workspace_path(item.text()))
 
+    def _item_port_label(self, item: QListWidgetItem) -> str:
+        return str(item.data(Qt.UserRole + 1) or "").strip()
+
+    def _default_port_label_for_path(self, path: str) -> str:
+        return detect_polarization(Path(path).stem) or ""
+
     def _refresh_ffs_item_display(self, item: QListWidgetItem) -> None:
         path = self._item_path(item)
         enabled = item.checkState() == Qt.Checked
@@ -3992,6 +4153,9 @@ class ModernMainWindow(QMainWindow):
         if path and not Path(path).exists():
             suffixes.append("missing")
         label = display_workspace_path(path)
+        port_label = self._item_port_label(item)
+        if port_label:
+            label += f"  |  Port: {port_label}"
         if suffixes:
             label += " [" + ", ".join(suffixes) + "]"
         previous = self._suppress_ffs_item_change
@@ -4000,11 +4164,12 @@ class ModernMainWindow(QMainWindow):
         item.setToolTip(path)
         self._suppress_ffs_item_change = previous
 
-    def _make_ffs_item(self, path: str, enabled: bool = True) -> QListWidgetItem:
+    def _make_ffs_item(self, path: str, enabled: bool = True, port_label: str = "") -> QListWidgetItem:
         actual = str(resolve_workspace_path(path))
         item = QListWidgetItem()
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
         item.setData(Qt.UserRole, actual)
+        item.setData(Qt.UserRole + 1, str(port_label).strip())
         item.setCheckState(Qt.Checked if enabled else Qt.Unchecked)
         self._refresh_ffs_item_display(item)
         return item
@@ -4017,7 +4182,7 @@ class ModernMainWindow(QMainWindow):
             path = str(entry.get("path", "")).strip()
             if not path:
                 continue
-            item = self._make_ffs_item(path, bool(entry.get("enabled", True)))
+            item = self._make_ffs_item(path, bool(entry.get("enabled", True)), str(entry.get("port_label", "")).strip())
             self.ffs_list.addItem(item)
             if path in selected:
                 item.setSelected(True)
@@ -4036,9 +4201,15 @@ class ModernMainWindow(QMainWindow):
 
     def _update_ffs_action_state(self) -> None:
         has_project = bool(self.active_project_slug)
-        selected = bool(self.ffs_list.selectedItems())
+        selected_items = self.ffs_list.selectedItems()
+        selected = bool(selected_items)
         count = self.ffs_list.count()
         self.remove_ffs_button.setEnabled(has_project and selected)
+        self.ffs_port_label_button.setEnabled(has_project and selected)
+        self.ffs_port_label_field.setEnabled(has_project and selected)
+        previous = self.ffs_port_label_field.blockSignals(True)
+        self.ffs_port_label_field.setText(self._item_port_label(selected_items[0]) if selected else "")
+        self.ffs_port_label_field.blockSignals(previous)
         self.clear_ffs_button.setEnabled(has_project and count > 0)
         self.ffs_up_button.setEnabled(has_project and selected)
         self.ffs_down_button.setEnabled(has_project and selected)
@@ -4052,12 +4223,14 @@ class ModernMainWindow(QMainWindow):
             if isinstance(raw, dict):
                 path = str(raw.get("path", "")).strip()
                 enabled = bool(raw.get("enabled", True))
+                port_label = str(raw.get("port_label", "")).strip()
             else:
                 path = str(raw).strip()
                 enabled = True
+                port_label = self._default_port_label_for_path(path)
             actual = str(resolve_workspace_path(path))
             if actual.lower().endswith(".ffs") and actual not in existing:
-                item = self._make_ffs_item(actual, enabled)
+                item = self._make_ffs_item(actual, enabled, port_label)
                 self.ffs_list.addItem(item)
                 existing.add(actual)
                 added = True
@@ -4081,6 +4254,37 @@ class ModernMainWindow(QMainWindow):
         for item in list(self.ffs_list.selectedItems()):
             self.ffs_list.takeItem(self.ffs_list.row(item))
         self.store.set("beam_ffs", self.selected_ffs())
+        self._mark_project_dirty()
+
+    def edit_selected_ffs_port_label(self) -> None:
+        selected = self.ffs_list.selectedItems()
+        if not selected:
+            return
+        item = selected[0]
+        current = self._item_port_label(item)
+        label, ok = QInputDialog.getText(self, "Port Label", "Legend label for selected far-field file:", text=current)
+        if not ok:
+            return
+        label = label.strip()
+        if label == current:
+            return
+        item.setData(Qt.UserRole + 1, label)
+        self._refresh_ffs_item_display(item)
+        previous = self.ffs_port_label_field.blockSignals(True)
+        self.ffs_port_label_field.setText(label)
+        self.ffs_port_label_field.blockSignals(previous)
+        self._mark_project_dirty()
+
+    def update_selected_ffs_port_label(self, text: str) -> None:
+        selected = self.ffs_list.selectedItems()
+        if not selected or self._loading_project:
+            return
+        item = selected[0]
+        label = text.strip()
+        if label == self._item_port_label(item):
+            return
+        item.setData(Qt.UserRole + 1, label)
+        self._refresh_ffs_item_display(item)
         self._mark_project_dirty()
 
     def clear_ffs(self):
@@ -4626,6 +4830,9 @@ class ModernMainWindow(QMainWindow):
                 "--polar-grid-line-width", str(self.polar_grid_line_width.value()),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
                 "--beamwidth-db-colors", ",".join([self.beamwidth_3db_color.color(), self.beamwidth_6db_color.color(), self.beamwidth_10db_color.color()]),
+                "--polar-line-colors", ",".join([self.polar_azimuth_line1.color(), self.polar_azimuth_line2.color(), self.polar_elevation_line1.color(), self.polar_elevation_line2.color()]),
+                "--polar-line-styles", ",".join([self.polar_azimuth_line1.style(), self.polar_azimuth_line2.style(), self.polar_elevation_line1.style(), self.polar_elevation_line2.style()]),
+                "--polar-port-labels-json", self.polar_port_labels_json(),
                 "--cartesian-line-width", str(self.cartesian_line_width.value()),
                 "--cartesian-figure-width", str(self.cartesian_figure_width.value()),
                 "--cartesian-figure-height", str(self.cartesian_figure_height.value()),
@@ -4769,6 +4976,9 @@ class ModernMainWindow(QMainWindow):
                 "--polar-grid-line-width", str(self.polar_grid_line_width.value()),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
                 "--beamwidth-db-colors", ",".join([self.beamwidth_3db_color.color(), self.beamwidth_6db_color.color(), self.beamwidth_10db_color.color()]),
+                "--polar-line-colors", ",".join([self.polar_azimuth_line1.color(), self.polar_azimuth_line2.color(), self.polar_elevation_line1.color(), self.polar_elevation_line2.color()]),
+                "--polar-line-styles", ",".join([self.polar_azimuth_line1.style(), self.polar_azimuth_line2.style(), self.polar_elevation_line1.style(), self.polar_elevation_line2.style()]),
+                "--polar-port-labels-json", self.polar_port_labels_json(),
                 "--cartesian-line-width", str(self.cartesian_line_width.value()),
                 "--cartesian-figure-width", str(self.cartesian_figure_width.value()),
                 "--cartesian-figure-height", str(self.cartesian_figure_height.value()),

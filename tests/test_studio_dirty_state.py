@@ -69,6 +69,39 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertFalse(self.window.project_save_button.isEnabled())
         self.assertFalse(self.window.project_name.text().endswith("*"))
 
+    def test_ffs_port_label_is_project_only_and_marks_dirty(self) -> None:
+        ffs_path = Path(self.temp_dir.name) / "sample_H.ffs"
+        ffs_path.write_text("ffs", encoding="utf-8")
+        self.window._add_ffs_files([str(ffs_path)])
+        self.app.processEvents()
+
+        self.assertEqual(self.window.collect_ffs_items()[0]["port_label"], "H")
+        self.window.save_project_changes()
+        self.assertFalse(self.window.has_unsaved_project_changes())
+
+        self.window.ffs_list.item(0).setSelected(True)
+        self.app.processEvents()
+        self.assertTrue(self.window.ffs_port_label_field.isEnabled())
+        self.assertEqual(self.window.ffs_port_label_field.text(), "H")
+        self.window.ffs_port_label_field.setText("Port 1")
+        self.window.update_selected_ffs_port_label("Port 1")
+        self.app.processEvents()
+
+        self.assertTrue(self.window.has_unsaved_project_changes())
+        self.assertEqual(self.window.collect_ffs_items()[0]["port_label"], "Port 1")
+        self.assertNotIn("port_label", self.window.collect_preset_values())
+
+        self.window.save_project_changes()
+        loaded = self.window.project_store.load_project(self.project.slug)
+        self.assertEqual(loaded.ffs_items[0]["port_label"], "Port 1")
+
+    def test_command_left_column_is_narrower_on_desktop_layout(self) -> None:
+        self.window._compact_layout = False
+        self.window._apply_layout_metrics()
+
+        self.assertEqual(self.window.command_left.maximumWidth(), 390)
+        self.assertEqual(self.window.command_panel.min_card_width, 360)
+
     def test_preset_changes_require_project_save(self) -> None:
         self.window.global_presets["Preset A"] = self.window.collect_preset_values()
         self.window.global_active_preset = "Preset A"
@@ -108,6 +141,14 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.window.polar_font_size.setValue(11.5)
         self.window.cartesian_legend_font_size.setValue(14.0)
         self.window.polar_legend_font_size.setValue(13.0)
+        self.window.polar_azimuth_line1.set_color("#101010")
+        self.window.polar_azimuth_line1.set_style("dashed")
+        self.window.polar_azimuth_line2.set_color("#202020")
+        self.window.polar_azimuth_line2.set_style("solid")
+        self.window.polar_elevation_line1.set_color("#303030")
+        self.window.polar_elevation_line1.set_style("solid")
+        self.window.polar_elevation_line2.set_color("#404040")
+        self.window.polar_elevation_line2.set_style("dashed")
         self.window.pdf_metadata_author.setText("Custom Datasheet Author")
         self.app.processEvents()
 
@@ -126,6 +167,14 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_font_size"], 11.5)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_legend_font_size"], 14.0)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_legend_font_size"], 13.0)
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_azimuth_line_1_color"], "#101010")
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_azimuth_line_1_style"], "dashed")
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_azimuth_line_2_color"], "#202020")
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_azimuth_line_2_style"], "solid")
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_elevation_line_1_color"], "#303030")
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_elevation_line_1_style"], "solid")
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_elevation_line_2_color"], "#404040")
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_elevation_line_2_style"], "dashed")
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["datasheet_template"], "Datasheet - RFE.pdf")
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["pdf_metadata_author"], "Custom Datasheet Author")
         self.window.cartesian_figure_width.setValue(12.0)
@@ -133,6 +182,10 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.window.apply_preset_values(self.window.preset_store.load_presets()["Preset A"])
         self.assertEqual(self.window.cartesian_figure_width.value(), 10.5)
         self.assertEqual(self.window.cartesian_figure_height.value(), 4.2)
+        self.assertEqual(self.window.polar_azimuth_line1.color(), "#101010")
+        self.assertEqual(self.window.polar_azimuth_line1.style(), "dashed")
+        self.assertEqual(self.window.polar_elevation_line2.color(), "#404040")
+        self.assertEqual(self.window.polar_elevation_line2.style(), "dashed")
         loaded_before_second_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_before_second_save.presets, {})
         self.assertEqual(loaded_before_second_save.settings, first_saved_settings)
@@ -228,7 +281,7 @@ class StudioDirtyStateTests(unittest.TestCase):
     def test_old_plot_asset_snapshot_marks_plot_outputs_stale(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "sample.ffs"
         ffs_path.write_text("ffs", encoding="utf-8")
-        self.window._add_ffs_files([str(ffs_path)])
+        self.window._add_ffs_files([{"path": str(ffs_path), "enabled": True, "port_label": "Port 1"}])
         project_dir = self.window.project_results_dir()
         stem = self.window.deduced_beam_output().stem
         for suffix in (
@@ -275,7 +328,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         ):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
-        self.window._add_ffs_files([str(ffs_path)])
+        self.window._add_ffs_files([{"path": str(ffs_path), "enabled": True, "port_label": "Port 1"}])
         self.window._set_touchstone(str(s2p_path))
         self.window._set_technical_data(str(technical_path))
         for path in self.window._stage_output_files("plot"):
@@ -608,12 +661,20 @@ class StudioDirtyStateTests(unittest.TestCase):
         ffs_path.write_text("ffs", encoding="utf-8")
         s2p_path.write_text("s2p", encoding="utf-8")
         technical_data_path.write_text("xlsx", encoding="utf-8")
-        self.window._add_ffs_files([str(ffs_path)])
+        self.window._add_ffs_files([{"path": str(ffs_path), "enabled": True, "port_label": "Port 1"}])
         self.window._set_touchstone(str(s2p_path))
         self.window._set_technical_data(str(technical_data_path))
         self.window.pdf_metadata_author.setText("Pipeline Author")
         self.window.cartesian_figure_width.setValue(9.75)
         self.window.cartesian_figure_height.setValue(4.5)
+        self.window.polar_azimuth_line1.set_color("#111111")
+        self.window.polar_azimuth_line1.set_style("solid")
+        self.window.polar_azimuth_line2.set_color("#222222")
+        self.window.polar_azimuth_line2.set_style("dashed")
+        self.window.polar_elevation_line1.set_color("#333333")
+        self.window.polar_elevation_line1.set_style("dashed")
+        self.window.polar_elevation_line2.set_color("#444444")
+        self.window.polar_elevation_line2.set_style("solid")
         self.app.processEvents()
 
         queued: list[str] = []
@@ -633,6 +694,12 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertIn("--beamwidth-db-colors", queued_args["plot"])
         self.assertEqual(queued_args["plot"][queued_args["plot"].index("--cartesian-figure-width") + 1], "9.75")
         self.assertEqual(queued_args["plot"][queued_args["plot"].index("--cartesian-figure-height") + 1], "4.5")
+        self.assertEqual(queued_args["plot"][queued_args["plot"].index("--polar-line-colors") + 1], "#111111,#222222,#333333,#444444")
+        self.assertEqual(queued_args["plot"][queued_args["plot"].index("--polar-line-styles") + 1], "solid,dashed,dashed,solid")
+        self.assertIn("--polar-port-labels-json", queued_args["plot"])
+        plot_port_labels = json.loads(queued_args["plot"][queued_args["plot"].index("--polar-port-labels-json") + 1])
+        self.assertIn("sample", plot_port_labels)
+        self.assertEqual(plot_port_labels["sample"], "Port 1")
         self.assertEqual(queued_args["vswr"][queued_args["vswr"].index("--cartesian-figure-width") + 1], "9.75")
         self.assertEqual(queued_args["vswr"][queued_args["vswr"].index("--cartesian-figure-height") + 1], "4.5")
         self.assertIn("--template", queued_args["datasheet"])
@@ -644,11 +711,22 @@ class StudioDirtyStateTests(unittest.TestCase):
         beam_output = self.window.deduced_beam_output()
         beam_output.parent.mkdir(parents=True, exist_ok=True)
         beam_output.write_text("xlsx", encoding="utf-8")
+        ffs_path = Path(self.temp_dir.name) / "plot_sample.ffs"
+        ffs_path.write_text("ffs", encoding="utf-8")
+        self.window._add_ffs_files([{"path": str(ffs_path), "enabled": True, "port_label": "+45"}])
         self.window.beamwidth_3db_color.set_color("#aa0000")
         self.window.beamwidth_6db_color.set_color("#777777")
         self.window.beamwidth_10db_color.set_color("#111111")
         self.window.cartesian_figure_width.setValue(9.25)
         self.window.cartesian_figure_height.setValue(3.75)
+        self.window.polar_azimuth_line1.set_color("#121212")
+        self.window.polar_azimuth_line1.set_style("dashed")
+        self.window.polar_azimuth_line2.set_color("#232323")
+        self.window.polar_azimuth_line2.set_style("solid")
+        self.window.polar_elevation_line1.set_color("#343434")
+        self.window.polar_elevation_line1.set_style("solid")
+        self.window.polar_elevation_line2.set_color("#454545")
+        self.window.polar_elevation_line2.set_style("dashed")
         self.app.processEvents()
 
         queued: list[str] = []
@@ -673,6 +751,15 @@ class StudioDirtyStateTests(unittest.TestCase):
         )
         self.assertEqual(plot_args[plot_args.index("--cartesian-figure-width") + 1], "9.25")
         self.assertEqual(plot_args[plot_args.index("--cartesian-figure-height") + 1], "3.75")
+        self.assertEqual(plot_args[plot_args.index("--polar-line-colors") + 1], "#121212,#232323,#343434,#454545")
+        self.assertEqual(plot_args[plot_args.index("--polar-line-styles") + 1], "dashed,solid,solid,dashed")
+        self.assertIn("--polar-port-labels-json", plot_args)
+        port_labels = json.loads(plot_args[plot_args.index("--polar-port-labels-json") + 1])
+        self.assertEqual(port_labels["plot_sample"], "+45")
+        snapshot = self.window._stage_settings_snapshot("plot")
+        self.assertEqual(snapshot["polar_azimuth_line_1_color"], "#121212")
+        self.assertEqual(snapshot["polar_elevation_line_2_style"], "dashed")
+        self.assertEqual(self.window._current_stage_snapshot("plot")["ffs_items"][0]["port_label"], "+45")
 
     def test_run_full_uses_cached_google_sheet_workbook_for_datasheet(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "sample.ffs"
@@ -783,6 +870,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         polar_combined_legend = project_dir / "polar_combined" / f"{beam_output.stem}-polar-5_8ghz-combined-legend.svg"
         polar_az_output = project_dir / "polar_single" / "azimuth" / f"{beam_output.stem}-polar-azimuth-5_8ghz.svg"
         polar_el_output = project_dir / "polar_single" / "elevation" / f"{beam_output.stem}-polar-elevation-5_8ghz.svg"
+        polar_e_plane_output = project_dir / "polar_single" / "e-plane" / f"{beam_output.stem}-polar-e-plane-5_8ghz.svg"
+        polar_h_plane_output = project_dir / "polar_single" / "h-plane" / f"{beam_output.stem}-polar-h-plane-5_8ghz.svg"
         beamwidth_e_plane_output = project_dir / f"{beam_output.stem}-beamwidth-e-plane-h.svg"
         beamwidth_e_plane_legend = project_dir / f"{beam_output.stem}-beamwidth-e-plane-h-legend.svg"
         artifact_manifest = project_dir / f"{beam_output.stem}-artifacts.json"
@@ -806,6 +895,8 @@ class StudioDirtyStateTests(unittest.TestCase):
             polar_combined_legend,
             polar_az_output,
             polar_el_output,
+            polar_e_plane_output,
+            polar_h_plane_output,
             artifact_manifest,
         ):
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -831,6 +922,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertFalse(polar_combined_legend.exists())
         self.assertFalse(polar_az_output.exists())
         self.assertFalse(polar_el_output.exists())
+        self.assertFalse(polar_e_plane_output.exists())
+        self.assertFalse(polar_h_plane_output.exists())
         self.assertFalse(beamwidth_e_plane_output.exists())
         self.assertFalse(beamwidth_e_plane_legend.exists())
         self.assertFalse(artifact_manifest.exists())
@@ -910,7 +1003,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         loaded = self.window.project_store.load_project("Renamed_Project")
 
         self.assertEqual(self.window.active_project_slug, "Renamed_Project")
-        self.assertEqual(loaded.ffs_items, [{"path": "Input data/a.ffs", "enabled": True}])
+        self.assertEqual(loaded.ffs_items, [{"path": "Input data/a.ffs", "enabled": True, "port_label": ""}])
         self.assertEqual(loaded.touchstone_file, "Input data/a.s2p")
         self.assertEqual(loaded.technical_data_file, "Input data/tech.xlsx")
         self.assertTrue((self.window.project_store.projects_dir / "Renamed_Project" / "Renamed_Project.xlsx").exists())

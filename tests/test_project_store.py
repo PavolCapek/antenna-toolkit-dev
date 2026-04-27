@@ -43,8 +43,8 @@ class ProjectStoreTests(unittest.TestCase):
         self.assertEqual(
             project.ffs_items,
             [
-                {"path": "Input data/a.ffs", "enabled": True},
-                {"path": "Input data/b.ffs", "enabled": True},
+                {"path": "Input data/a.ffs", "enabled": True, "port_label": ""},
+                {"path": "Input data/b.ffs", "enabled": True, "port_label": ""},
             ],
         )
         self.assertEqual(project.run_state["history"][0]["action"], "imported")
@@ -54,7 +54,7 @@ class ProjectStoreTests(unittest.TestCase):
         project = ProjectRecord(
             name="Dish A",
             slug="dish_a",
-            ffs_items=[{"path": "Input data/a.ffs", "enabled": True}],
+            ffs_items=[{"path": "Input data/a.ffs", "enabled": True, "port_label": "Port 1"}],
             touchstone_file="Input data/a.s2p",
             technical_data_file="Input data/tech.xlsx",
             settings={"smooth": 7, "grid_color": "#4b5563"},
@@ -68,6 +68,7 @@ class ProjectStoreTests(unittest.TestCase):
 
         self.assertEqual(loaded.schema_version, CURRENT_PROJECT_SCHEMA_VERSION)
         self.assertEqual(loaded.active_preset, "Tight")
+        self.assertEqual(loaded.ffs_items[0]["port_label"], "Port 1")
         self.assertEqual(loaded.technical_data_file, "Input data/tech.xlsx")
         self.assertEqual(loaded.settings, {"smooth": 7, "grid_color": "#4b5563"})
         self.assertEqual(loaded.presets, {"Tight": {"smooth": 7, "grid_color": "#4b5563"}})
@@ -77,7 +78,7 @@ class ProjectStoreTests(unittest.TestCase):
         project = ProjectRecord(
             name="Dish B",
             slug="dish_b",
-            ffs_items=[{"path": "Input data/b.ffs", "enabled": False}],
+            ffs_items=[{"path": "Input data/b.ffs", "enabled": False, "port_label": "V"}],
             touchstone_file="Input data/b.s2p",
             technical_data_file="Input data/b-tech.xlsx",
             settings={"smooth": 3},
@@ -90,6 +91,7 @@ class ProjectStoreTests(unittest.TestCase):
 
         duplicate = self.store.duplicate_project("dish_b", "Dish B Copy")
         self.assertEqual(duplicate.slug, "Dish_B_Copy")
+        self.assertEqual(duplicate.ffs_items[0]["port_label"], "V")
         self.assertEqual(duplicate.technical_data_file, "Input data/b-tech.xlsx")
         self.assertEqual(duplicate.run_state["history"][0]["action"], "duplicated")
         self.assertTrue((duplicate.project_dir(self.root) / "Dish_B_Copy.xlsx").exists())

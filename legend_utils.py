@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import re
+from pathlib import Path
 
 
 def parse_legend_labels(raw: str | None) -> list[str]:
@@ -51,7 +52,27 @@ def beam_efficiency_legend_label(name: str) -> str:
     return f"Beam Efficiency {polarization}" if polarization else f"Beam Efficiency {name}"
 
 
-def polar_legend_label(name: str, plane: str, frequency_label: str) -> str:
+def clean_port_source_label(name: str) -> str:
+    stem = Path(str(name)).stem or str(name)
+    tokens = [token for token in re.split(r"[_\-\s]+", stem) if token]
+    removable = {"phi0", "phi90", "azimuth", "elevation"}
+    while tokens and tokens[-1].lower() in removable:
+        tokens.pop()
+    return " ".join(tokens) if tokens else stem
+
+
+def polar_legend_label(
+    name: str,
+    plane: str,
+    frequency_label: str = "",
+    *,
+    port_label: str | None = None,
+    single_source: bool = False,
+) -> str:
+    explicit = str(port_label or "").strip()
     polarization = detect_polarization(name)
-    prefix = polarization if polarization else str(name)
-    return f"{prefix} - Port Pattern {plane} {frequency_label}"
+    prefix = explicit or (polarization if polarization else "")
+    if not prefix and not single_source:
+        prefix = clean_port_source_label(name)
+    suffix = f" {frequency_label}" if str(frequency_label).strip() else ""
+    return f"{prefix} {plane}{suffix}".strip() if prefix else f"{plane}{suffix}".strip()

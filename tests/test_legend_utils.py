@@ -46,11 +46,23 @@ class LegendUtilsTests(unittest.TestCase):
     def test_default_polar_label_includes_plane_and_frequency(self) -> None:
         self.assertEqual(
             polar_legend_label("SH30WB_Horizontal", "Azimuth", "5.5 GHz"),
-            "H - Port Pattern Azimuth 5.5 GHz",
+            "H Azimuth 5.5 GHz",
         )
         self.assertEqual(
             polar_legend_label("SH30WB_Vertical", "Elevation", "5.5 GHz"),
-            "V - Port Pattern Elevation 5.5 GHz",
+            "V Elevation 5.5 GHz",
+        )
+        self.assertEqual(
+            polar_legend_label("SH30WB_Vertical", "Elevation"),
+            "V Elevation",
+        )
+        self.assertEqual(
+            polar_legend_label("SingleUnknown", "Azimuth", single_source=True),
+            "Azimuth",
+        )
+        self.assertEqual(
+            polar_legend_label("SingleUnknown", "Azimuth", port_label="Port 1", single_source=True),
+            "Port 1 Azimuth",
         )
 
 

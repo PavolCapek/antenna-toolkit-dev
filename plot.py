@@ -29,7 +29,9 @@ Outputs:
 - <book>-beam-efficiency.svg
 - <book>-beam-efficiency-legend.svg
 - polar_combined/<book>-polar-<f>-combined.svg
-- polar_combined/<book>-polar-<f>-combined-legend.svg
+- polar_combined/<book>-polar-combined-legend.svg
+- polar_combined/e-h-plane/<book>-polar-<f>-e-h-plane-combined.svg
+- polar_combined/e-h-plane/<book>-polar-e-h-plane-combined-legend.svg
 - polar_single/azimuth/<book>-polar-azimuth-<f>.svg   (solid)
 - polar_single/azimuth/<book>-polar-azimuth-<f>-legend.svg   (solid)
 - polar_single/elevation/<book>-polar-elevation-<f>.svg (dashed)
@@ -41,6 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import math
+import shutil
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -194,6 +197,19 @@ def parse_color_list(raw: str | None, default: list[str] | None = None) -> list[
     return [item.strip() for item in raw.split(",") if item.strip()] or fallback
 
 
+def parse_polar_line_styles(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    styles: list[str] = []
+    for item in raw.split(","):
+        token = item.strip().lower()
+        if token in {"solid", "-"}:
+            styles.append("-")
+        elif token in {"dashed", "dash", "--"}:
+            styles.append("--")
+    return styles
+
+
 def build_step_ticks(xmin: float, xmax: float, step: float) -> np.ndarray | None:
     if step is None or not np.isfinite(step) or step <= 0:
         return None
@@ -292,6 +308,12 @@ def beamwidth_plane_phi(polarization: str, plane: str) -> int:
     if pol == "H":
         return 0 if plane_key == "E" else 90
     raise ValueError(f"Unsupported beamwidth polarization: {polarization}")
+
+
+def polar_plane_phi_key(polarization: str, plane: str) -> str:
+    pol = str(polarization).strip().upper()
+    plot_polarization = pol if pol in {"H", "V"} else "V"
+    return "phi0" if beamwidth_plane_phi(plot_polarization, plane) == 0 else "phi90"
 
 
 def _legend_entry_box(
@@ -425,6 +447,7 @@ def export_stacked_line_legend(
     items: list[tuple[str, str, str]],
     out_path: str | Path,
     *,
+    legend_path: str | Path | None = None,
     ncol: int = 1,
     fontsize: float = DEFAULT_LEGEND_FONT_SIZE,
     text_color: str = STACKED_LEGEND_TEXT_COLOR,
@@ -436,7 +459,7 @@ def export_stacked_line_legend(
     if not items:
         return None
 
-    legend_path = legend_output_path(out_path)
+    legend_path = Path(legend_path) if legend_path is not None else legend_output_path(out_path)
     dpi = 120
     probe_fig = plt.figure(figsize=(2.0, 2.0), dpi=dpi)
     probe_ax = probe_fig.add_axes([0.0, 0.0, 1.0, 1.0])
@@ -567,13 +590,31 @@ def plot_xy(x, series_list, names, out_path, y_label,
 
 # ------------------ plotting: polar ------------------
 
+def polar_legend_items(datasets) -> list[tuple[str, str, str]]:
+    legend_items: list[tuple[str, str, str]] = []
+    solid_count, dashed_count = 0, 0
+    for d in datasets:
+        ls = d.get("linestyle", "-")
+        if ls == "-":
+            idx = solid_count
+            solid_count += 1
+        else:
+            idx = dashed_count
+            dashed_count += 1
+        color = d.get("color") or color_for_index(ls, idx) or "black"
+        legend_items.append((d.get("label", ""), color, ls))
+    return legend_items
+
+
 def save_polar(out_path, datasets, title,
                grid_color="#6f7a81", rings=(0,-7.5,-15,-22.5,-30),
                angle_tick_step=30, clip_db=-30.0, smooth_window: int = 5,
                legend_ncol: int = 2, font_size: float = DEFAULT_PLOT_FONT_SIZE,
                legend_font_size: float = DEFAULT_LEGEND_FONT_SIZE,
                grid_line_width: float = DEFAULT_GRID_LINE_WIDTH,
-               line_width: float = DEFAULT_PLOT_LINE_WIDTH):
+               line_width: float = DEFAULT_PLOT_LINE_WIDTH,
+               legend_out_path: str | Path | None = None,
+               export_legend: bool = True):
     """Draw one polar axes, possibly with multiple datasets.
     datasets: list of dicts {angles, series, label, linestyle}
     """
@@ -614,7 +655,7 @@ def save_polar(out_path, datasets, title,
                 ha="center", va="top", rotation=0, rotation_mode="anchor",
                 transform=base + offset, bbox=bbox_args)
 
-    legend_items: list[tuple[str, str, str]] = []
+    legend_items = polar_legend_items(datasets)
     solid_count, dashed_count = 0, 0
 
     for d in datasets:
@@ -627,25 +668,28 @@ def save_polar(out_path, datasets, title,
             idx = solid_count; solid_count += 1
         else:
             idx = dashed_count; dashed_count += 1
-        color = color_for_index(ls, idx) or "black"
+        color = d.get("color") or color_for_index(ls, idx) or "black"
         ax.plot(np.deg2rad(angles), s, linewidth=line_width + 0.3, solid_capstyle="round",
                 linestyle=ls, color=color)
-        legend_items.append((d.get("label", ""), color, ls))
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout(rect=[0, 0, 1, 0.97])
     fig.savefig(out_path, format="svg", bbox_inches="tight")
     plt.close(fig)
-    legend_path = export_stacked_line_legend(
-        legend_items,
-        out_path,
-        ncol=legend_ncol,
-        fontsize=legend_font_size,
-        linewidth=DEFAULT_LEGEND_LINE_WIDTH,
-        column_sep=STACKED_LEGEND_COLUMN_SEP,
-        row_sep=STACKED_LEGEND_ROW_SEP,
-        entry_sep=STACKED_LEGEND_ENTRY_SEP,
-    )
+    if export_legend:
+        legend_path = export_stacked_line_legend(
+            legend_items,
+            out_path,
+            legend_path=legend_out_path,
+            ncol=legend_ncol,
+            fontsize=legend_font_size,
+            linewidth=DEFAULT_LEGEND_LINE_WIDTH,
+            column_sep=STACKED_LEGEND_COLUMN_SEP,
+            row_sep=STACKED_LEGEND_ROW_SEP,
+            entry_sep=STACKED_LEGEND_ENTRY_SEP,
+        )
+    else:
+        legend_path = Path(legend_out_path) if legend_out_path is not None and legend_items else None
     return out_path, str(legend_path) if legend_path is not None else None
 
 
@@ -683,6 +727,9 @@ def main():
     parser.add_argument("--x-log", action="store_true", help="Use logarithmic scaling on the x-axis for cartesian plots.")
     parser.add_argument("--line-colors", default=None, help="Comma-separated line colors applied across the plots.")
     parser.add_argument("--beamwidth-db-colors", default=None, help="Comma-separated colors for 3 dB, 6 dB, and 10 dB beamwidth E/H plane plots.")
+    parser.add_argument("--polar-line-colors", default=None, help="Comma-separated colors for azimuth line 1/2 and elevation line 1/2.")
+    parser.add_argument("--polar-line-styles", default=None, help="Comma-separated styles for azimuth line 1/2 and elevation line 1/2; use solid or dashed.")
+    parser.add_argument("--polar-port-labels-json", default=None, help="JSON object mapping FFS file paths or stems to project-specific polar legend labels.")
     parser.add_argument("--line-width", type=float, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--cartesian-line-width", type=float, default=None, help="Line width used for cartesian plot traces and legends.")
     parser.add_argument("--cartesian-figure-width", type=float, default=None, help="Figure width in inches for cartesian plots.")
@@ -724,6 +771,29 @@ def main():
 
     set_line_colors(parse_color_list(args.line_colors))
     beamwidth_db_colors = parse_color_list(args.beamwidth_db_colors, DEFAULT_BEAMWIDTH_DB_COLORS)
+    polar_line_colors = parse_color_list(args.polar_line_colors, [SOLID_COLORS[0], SOLID_COLORS[1], DASHED_COLORS[0], DASHED_COLORS[1]])
+    polar_line_styles = parse_polar_line_styles(args.polar_line_styles) or ["-", "-", "--", "--"]
+    try:
+        raw_port_labels = json.loads(args.polar_port_labels_json) if args.polar_port_labels_json else {}
+    except json.JSONDecodeError:
+        raw_port_labels = {}
+    port_labels: dict[str, str] = {}
+    if isinstance(raw_port_labels, dict):
+        for key, value in raw_port_labels.items():
+            label = str(value or "").strip()
+            if not label:
+                continue
+            key_text = str(key or "").strip()
+            if not key_text:
+                continue
+            variants = {
+                key_text,
+                Path(key_text).stem,
+                Path(key_text).stem[:31],
+            }
+            for variant in variants:
+                if variant:
+                    port_labels[variant.lower()] = label
     gain_legend_labels = parse_legend_labels(args.gain_legend_labels)
     beamwidth_legend_labels = parse_legend_labels(args.beamwidth_legend_labels)
     beam_eff_legend_labels = parse_legend_labels(args.beam_eff_legend_labels)
@@ -743,6 +813,9 @@ def main():
     bookstem = Path(args.input_xlsx).stem
     out_dir = Path(args.out_dir) if args.out_dir else Path(args.input_xlsx).resolve().parent
     out_dir.mkdir(parents=True, exist_ok=True)
+    for generated_polar_dir in (out_dir / "polar_combined", out_dir / "polar_single"):
+        if generated_polar_dir.exists():
+            shutil.rmtree(generated_polar_dir)
     rings = tuple(float(x) for x in args.rings.split(","))
 
     # collect polar pattern sheets
@@ -762,6 +835,11 @@ def main():
             grouped[base]['phi0'] = xls.parse(s)
         else:
             grouped[base]['phi90'] = xls.parse(s)
+    single_polar_source = len(grouped) == 1
+
+    def port_label_for(base: str) -> str:
+        key = str(base).strip()
+        return port_labels.get(key.lower(), "") or port_labels.get(Path(key).stem.lower(), "") or port_labels.get(Path(key).stem[:31].lower(), "")
 
     # collect summary sheets for cartesian plots
     summary_sheets = sorted((s for s in sheet_names if s not in polar_sheets), key=polarization_sort_key)
@@ -775,7 +853,12 @@ def main():
     manifest_beam_efficiency: dict[str, object] | None = None
     manifest_beamwidth_planes: list[dict[str, object]] = []
     manifest_polar_combined: list[dict[str, object]] = []
+    manifest_polar_combined_planes: list[dict[str, object]] = []
     manifest_polar_single: list[dict[str, object]] = []
+    manifest_polar_planes: list[dict[str, object]] = []
+    shared_polar_legend_paths: dict[tuple[str, int, tuple[tuple[str, str, str], ...]], Path] = {}
+    shared_polar_legend_family_counts: dict[str, int] = {}
+    written_shared_polar_legends: set[Path] = set()
 
     for sheet in summary_sheets:
         df = xls.parse(sheet)
@@ -866,6 +949,8 @@ def main():
         for freq_col in considered_cols:
             has_az = False
             has_el = False
+            has_e = False
+            has_h = False
             for base in sorted(grouped.keys(), key=polarization_sort_key):
                 df_az = grouped[base].get("phi0")
                 if df_az is not None and freq_col in df_az.columns:
@@ -877,7 +962,20 @@ def main():
                     series = pd.to_numeric(df_el[freq_col], errors="coerce").to_numpy()
                     if not np.all(np.isnan(series)):
                         has_el = True
-            steps += int(has_az or has_el) + int(has_az) + int(has_el)
+                polarization = detect_polarization(base)
+                for plane_key, has_name in [("E", "has_e"), ("H", "has_h")]:
+                    phi_key = polar_plane_phi_key(polarization, plane_key)
+                    df_plane = grouped[base].get(phi_key)
+                    if df_plane is None or freq_col not in df_plane.columns:
+                        continue
+                    series = pd.to_numeric(df_plane[freq_col], errors="coerce").to_numpy()
+                    if np.all(np.isnan(series)):
+                        continue
+                    if has_name == "has_e":
+                        has_e = True
+                    else:
+                        has_h = True
+            steps += int(has_az or has_el) + int(has_e or has_h) + int(has_az) + int(has_el) + int(has_e) + int(has_h)
         return steps
 
     progress_total = int(bool(gain_series)) + int(bool(bw_series)) + len(beamwidth_plane_specs) + int(bool(be_series)) + _count_polar_progress_steps()
@@ -1142,12 +1240,36 @@ def main():
             if args.fmin <= val <= args.fmax:
                 yield c
 
-    # build datasets for a given phi across bases, limit to 2 curves, and with chosen linestyle
-    def build_phi_datasets(freq_col: str, phi_key: str, linestyle: str):
-        datasets = []
-        plane = "Azimuth" if phi_key == "phi0" else "Elevation"
-        frequency_label = format_frequency_label(freq_col)
-        count = 0
+    def polar_style_for(phi_key: str, line_index: int) -> tuple[str | None, str]:
+        slot_index = (0 if phi_key == "phi0" else 2) + min(max(line_index, 0), 1)
+        color = polar_line_colors[slot_index] if slot_index < len(polar_line_colors) else None
+        linestyle = polar_line_styles[slot_index] if slot_index < len(polar_line_styles) else ("-" if phi_key == "phi0" else "--")
+        return color, linestyle
+
+    def shared_polar_legend(
+        family: str,
+        directory: Path,
+        datasets: list[dict[str, object]],
+        ncol: int,
+    ) -> tuple[Path | None, bool]:
+        items = tuple(polar_legend_items(datasets))
+        if not items:
+            return None, False
+        key = (family, ncol, items)
+        legend_path = shared_polar_legend_paths.get(key)
+        if legend_path is None:
+            count = shared_polar_legend_family_counts.get(family, 0) + 1
+            shared_polar_legend_family_counts[family] = count
+            variant = "" if count == 1 else f"-{count}"
+            legend_path = directory / f"{bookstem}-polar-{family}-legend{variant}.svg"
+            shared_polar_legend_paths[key] = legend_path
+        should_export = legend_path not in written_shared_polar_legends
+        if should_export:
+            written_shared_polar_legends.add(legend_path)
+        return legend_path, should_export
+
+    def polar_entries(freq_col: str, phi_key: str) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        entries: list[tuple[str, np.ndarray, np.ndarray]] = []
         for base in sorted(grouped.keys(), key=polarization_sort_key):
             df = grouped[base].get(phi_key)
             if df is None or freq_col not in df.columns:
@@ -1158,14 +1280,57 @@ def main():
             angles = angles_map.get((base, phi_key))
             if angles is None:
                 continue
+            entries.append((base, angles, series))
+        return entries
+
+    # build datasets for a given phi across bases, limit to 2 curves
+    def build_phi_datasets(freq_col: str, phi_key: str, include_frequency: bool = False):
+        datasets = []
+        plane = "Azimuth" if phi_key == "phi0" else "Elevation"
+        frequency_label = format_frequency_label(freq_col)
+        for count, (base, angles, series) in enumerate(polar_entries(freq_col, phi_key)[:2]):
+            color, linestyle = polar_style_for(phi_key, count)
             datasets.append({
                 "angles": angles,
                 "series": series,
-                "label": polar_legend_label(base, plane, frequency_label),
+                "label": polar_legend_label(
+                    base,
+                    plane,
+                    frequency_label if include_frequency else "",
+                    port_label=port_label_for(base),
+                    single_source=single_polar_source,
+                ),
+                "color": color,
                 "linestyle": linestyle,
             })
-            count += 1
-            if count >= 2:
+        return datasets
+
+    def build_plane_datasets(freq_col: str, plane_key: str, plane_label: str, include_frequency: bool = False):
+        datasets = []
+        frequency_label = format_frequency_label(freq_col)
+        for base in sorted(grouped.keys(), key=polarization_sort_key):
+            phi_key = polar_plane_phi_key(detect_polarization(base), plane_key)
+            entries = polar_entries(freq_col, phi_key)
+            matched = next(((index, entry) for index, entry in enumerate(entries) if entry[0] == base), None)
+            if matched is None:
+                continue
+            source_index, entry = matched
+            color, linestyle = polar_style_for(phi_key, source_index)
+            _, angles, series = entry
+            datasets.append({
+                "angles": angles,
+                "series": series,
+                "label": polar_legend_label(
+                    base,
+                    plane_label,
+                    frequency_label if include_frequency else "",
+                    port_label=port_label_for(base),
+                    single_source=single_polar_source,
+                ),
+                "color": color,
+                "linestyle": linestyle,
+            })
+            if len(datasets) >= 2:
                 break
         return datasets
 
@@ -1173,21 +1338,14 @@ def main():
         frequency_label = format_frequency_label(freq_col)
         # Combined (Az solid, El dashed)
         datasets_combined = []
-        for phi_key, label_suffix, linestyle in [("phi0", "Azimuth", "-"), ("phi90", "Elevation", "--")]:
-            for base in sorted(grouped.keys(), key=polarization_sort_key):
-                df = grouped[base].get(phi_key)
-                if df is None or freq_col not in df.columns:
-                    continue
-                series = pd.to_numeric(df[freq_col], errors="coerce").to_numpy()
-                if np.all(np.isnan(series)):
-                    continue
-                angles = angles_map.get((base, phi_key))
-                if angles is None:
-                    continue
+        for phi_key, label_suffix in [("phi0", "Azimuth"), ("phi90", "Elevation")]:
+            for count, (base, angles, series) in enumerate(polar_entries(freq_col, phi_key)):
+                color, linestyle = polar_style_for(phi_key, count)
                 datasets_combined.append({
                     "angles": angles,
                     "series": series,
-                    "label": polar_legend_label(base, label_suffix, frequency_label),
+                    "label": polar_legend_label(base, label_suffix, port_label=port_label_for(base), single_source=single_polar_source),
+                    "color": color,
                     "linestyle": linestyle,
                 })
         if datasets_combined:
@@ -1195,6 +1353,12 @@ def main():
             title = f"Polar patterns @ {freq_col}"
             out_name_c = f"{bookstem}-polar-{sanitize(freq_col)}-combined.svg"
             out_path_c = str(out_dir / "polar_combined" / out_name_c)
+            legend_path_c, export_legend_c = shared_polar_legend(
+                "combined",
+                out_dir / "polar_combined",
+                datasets_combined,
+                2,
+            )
             out_path_c, out_path_c_legend = save_polar(
                 out_path_c,
                 datasets_combined,
@@ -1209,9 +1373,11 @@ def main():
                 legend_font_size=polar_legend_font_size,
                 grid_line_width=polar_grid_line_width,
                 line_width=polar_line_width,
+                legend_out_path=legend_path_c,
+                export_legend=export_legend_c,
             )
             print(out_path_c)
-            if out_path_c_legend:
+            if out_path_c_legend and export_legend_c:
                 print(out_path_c_legend)
             manifest_combined = build_asset_record(
                 out_path_c,
@@ -1221,8 +1387,51 @@ def main():
             if manifest_combined is not None:
                 manifest_polar_combined.append(manifest_combined)
 
+        datasets_eh_combined = []
+        for plane_key, plane_label in [("E", "E-plane"), ("H", "H-plane")]:
+            datasets_eh_combined.extend(build_plane_datasets(freq_col, plane_key, plane_label))
+        if datasets_eh_combined:
+            advance_plot_progress(f"Rendering combined E/H polar plot @ {frequency_label}")
+            title_eh = f"E/H plane polar patterns @ {freq_col}"
+            out_name_eh = f"{bookstem}-polar-{sanitize(freq_col)}-e-h-plane-combined.svg"
+            out_path_eh = str(out_dir / "polar_combined" / "e-h-plane" / out_name_eh)
+            legend_path_eh, export_legend_eh = shared_polar_legend(
+                "e-h-plane-combined",
+                out_dir / "polar_combined" / "e-h-plane",
+                datasets_eh_combined,
+                2,
+            )
+            out_path_eh, out_path_eh_legend = save_polar(
+                out_path_eh,
+                datasets_eh_combined,
+                title_eh,
+                grid_color=args.grid_color,
+                rings=rings,
+                angle_tick_step=args.angle_step,
+                clip_db=args.clip_db,
+                smooth_window=args.smooth_window,
+                legend_ncol=2,
+                font_size=polar_font_size,
+                legend_font_size=polar_legend_font_size,
+                grid_line_width=polar_grid_line_width,
+                line_width=polar_line_width,
+                legend_out_path=legend_path_eh,
+                export_legend=export_legend_eh,
+            )
+            print(out_path_eh)
+            if out_path_eh_legend and export_legend_eh:
+                print(out_path_eh_legend)
+            manifest_eh_combined = build_asset_record(
+                out_path_eh,
+                legend_path=out_path_eh_legend,
+                plane_mode="e-h-plane",
+                frequency_ghz=parse_freq_ghz_from_text(freq_col),
+            )
+            if manifest_eh_combined is not None:
+                manifest_polar_combined_planes.append(manifest_eh_combined)
+
         # Single-phi: Azimuth (solid)
-        ds_az = build_phi_datasets(freq_col, "phi0", linestyle='-')
+        ds_az = build_phi_datasets(freq_col, "phi0", include_frequency=True)
         if ds_az:
             advance_plot_progress(f"Rendering azimuth polar plot @ {frequency_label}")
             title_az = f"Azimuth (φ=0°) @ {freq_col}"
@@ -1256,7 +1465,7 @@ def main():
                 manifest_polar_single.append(manifest_az)
 
         # Single-phi: Elevation (dashed)
-        ds_el = build_phi_datasets(freq_col, "phi90", linestyle='--')
+        ds_el = build_phi_datasets(freq_col, "phi90", include_frequency=True)
         if ds_el:
             advance_plot_progress(f"Rendering elevation polar plot @ {frequency_label}")
             title_el = f"Elevation (φ=90°) @ {freq_col}"
@@ -1289,6 +1498,41 @@ def main():
             if manifest_el is not None:
                 manifest_polar_single.append(manifest_el)
 
+        for plane_key, plane_label, filename_plane in [("E", "E-plane", "e-plane"), ("H", "H-plane", "h-plane")]:
+            ds_plane = build_plane_datasets(freq_col, plane_key, plane_label, include_frequency=True)
+            if not ds_plane:
+                continue
+            advance_plot_progress(f"Rendering {plane_label} polar plot @ {frequency_label}")
+            title_plane = f"{plane_label} @ {freq_col}"
+            out_name_plane = f"{bookstem}-polar-{filename_plane}-{sanitize(freq_col)}.svg"
+            out_path_plane = str(out_dir / "polar_single" / filename_plane / out_name_plane)
+            out_path_plane, out_path_plane_legend = save_polar(
+                out_path_plane,
+                ds_plane,
+                title_plane,
+                grid_color=args.grid_color,
+                rings=rings,
+                angle_tick_step=args.angle_step,
+                clip_db=args.clip_db,
+                smooth_window=args.smooth_window,
+                legend_ncol=1,
+                font_size=polar_font_size,
+                legend_font_size=polar_legend_font_size,
+                grid_line_width=polar_grid_line_width,
+                line_width=polar_line_width,
+            )
+            print(out_path_plane)
+            if out_path_plane_legend:
+                print(out_path_plane_legend)
+            manifest_plane = build_asset_record(
+                out_path_plane,
+                legend_path=out_path_plane_legend,
+                plane=filename_plane,
+                frequency_ghz=parse_freq_ghz_from_text(freq_col),
+            )
+            if manifest_plane is not None:
+                manifest_polar_planes.append(manifest_plane)
+
     update_artifact_manifest(
         out_dir,
         bookstem,
@@ -1297,7 +1541,9 @@ def main():
         beam_efficiency=manifest_beam_efficiency,
         beamwidth_planes=manifest_beamwidth_planes,
         polar_combined=manifest_polar_combined,
+        polar_combined_planes=manifest_polar_combined_planes,
         polar_single=manifest_polar_single,
+        polar_planes=manifest_polar_planes,
     )
 
 if __name__ == "__main__":

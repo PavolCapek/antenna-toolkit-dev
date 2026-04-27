@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 import sys
 import tempfile
@@ -227,6 +228,138 @@ class BeamwidthPlanePlotTests(unittest.TestCase):
                 abs(self._first_handle_height(cartesian_legend) - self._first_handle_height(polar_legend)),
                 2,
             )
+
+    def test_save_polar_respects_explicit_dataset_colors_and_styles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = Path(temp_dir) / "polar.svg"
+
+            plot.save_polar(
+                out_path,
+                [
+                    {
+                        "angles": np.array([0.0, 90.0, 180.0, 270.0, 360.0]),
+                        "series": np.array([0.0, -3.0, -12.0, -3.0, 0.0]),
+                        "label": "Custom solid",
+                        "color": "#123456",
+                        "linestyle": "-",
+                    },
+                    {
+                        "angles": np.array([0.0, 90.0, 180.0, 270.0, 360.0]),
+                        "series": np.array([-1.0, -4.0, -14.0, -4.0, -1.0]),
+                        "label": "Custom dashed",
+                        "color": "#abcdef",
+                        "linestyle": "--",
+                    },
+                ],
+                "Polar",
+                legend_ncol=1,
+            )
+
+            svg_text = out_path.read_text(encoding="utf-8", errors="ignore").lower()
+            legend_text = plot.legend_output_path(out_path).read_text(encoding="utf-8", errors="ignore").lower()
+            combined = svg_text + legend_text
+
+            self.assertIn("#123456", combined)
+            self.assertIn("#abcdef", combined)
+            self.assertIn("stroke-dasharray", combined)
+
+    def test_polar_cli_styles_and_emits_e_h_plane_assets(self) -> None:
+        angles = pd.DataFrame(
+            {
+                "theta_deg": [0.0, 90.0, 180.0, 270.0, 360.0],
+                "5.0 GHz": [0.0, -3.0, -10.0, -3.0, 0.0],
+                "6.0 GHz": [0.0, -2.0, -9.0, -2.0, 0.0],
+            }
+        )
+        h_phi0 = angles.copy()
+        h_phi0["5.0 GHz"] = [1.0, 2.0, 3.0, 2.0, 1.0]
+        h_phi0["6.0 GHz"] = [1.5, 2.5, 3.5, 2.5, 1.5]
+        h_phi90 = angles.copy()
+        h_phi90["5.0 GHz"] = [4.0, 5.0, 6.0, 5.0, 4.0]
+        h_phi90["6.0 GHz"] = [4.5, 5.5, 6.5, 5.5, 4.5]
+        v_phi0 = angles.copy()
+        v_phi0["5.0 GHz"] = [7.0, 8.0, 9.0, 8.0, 7.0]
+        v_phi0["6.0 GHz"] = [7.5, 8.5, 9.5, 8.5, 7.5]
+        v_phi90 = angles.copy()
+        v_phi90["5.0 GHz"] = [10.0, 11.0, 12.0, 11.0, 10.0]
+        v_phi90["6.0 GHz"] = [10.5, 11.5, 12.5, 11.5, 10.5]
+
+        class FakeExcel:
+            sheet_names = ["Example_H_phi0", "Example_H_phi90", "Example_V_phi0", "Example_V_phi90"]
+
+            def parse(self, sheet_name: str) -> pd.DataFrame:
+                return {
+                    "Example_H_phi0": h_phi0,
+                    "Example_H_phi90": h_phi90,
+                    "Example_V_phi0": v_phi0,
+                    "Example_V_phi90": v_phi90,
+                }[sheet_name].copy()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "input.xlsx"
+            out_dir = Path(temp_dir) / "plots"
+            argv = [
+                "plot.py",
+                str(input_path),
+                "--out-dir",
+                str(out_dir),
+                "--polar-line-colors",
+                "#010101,#020202,#030303,#040404",
+                "--polar-line-styles",
+                "solid,dashed,dashed,solid",
+                "--polar-port-labels-json",
+                json.dumps({"Example_H": "Port 1", "Example_V": "Port 2"}),
+            ]
+            calls = []
+
+            def fake_save_polar(out_path, datasets, *args, **kwargs):
+                calls.append((Path(out_path), datasets, kwargs))
+                path = Path(out_path)
+                legend = Path(kwargs.get("legend_out_path") or path.with_name(f"{path.stem}-legend{path.suffix}"))
+                return str(path), str(legend)
+
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(plot.pd, "ExcelFile", return_value=FakeExcel()),
+                mock.patch.object(plot, "save_polar", side_effect=fake_save_polar),
+                redirect_stdout(io.StringIO()),
+            ):
+                plot.main()
+
+            by_name = {path.name: datasets for path, datasets, _kwargs in calls}
+            by_name_kwargs = {path.name: kwargs for path, _datasets, kwargs in calls}
+            self.assertIn("input-polar-e-plane-5.0-GHz.svg", by_name)
+            self.assertIn("input-polar-h-plane-5.0-GHz.svg", by_name)
+            self.assertIn("input-polar-5.0-GHz-e-h-plane-combined.svg", by_name)
+            self.assertIn("input-polar-e-plane-6.0-GHz.svg", by_name)
+            self.assertEqual(by_name["input-polar-azimuth-5.0-GHz.svg"][0]["label"], "Port 1 Azimuth 5.0 GHz")
+            self.assertEqual(by_name["input-polar-elevation-5.0-GHz.svg"][1]["label"], "Port 2 Elevation 5.0 GHz")
+            self.assertEqual(by_name["input-polar-azimuth-5.0-GHz.svg"][0]["color"], "#010101")
+            self.assertEqual(by_name["input-polar-azimuth-5.0-GHz.svg"][1]["color"], "#020202")
+            self.assertEqual(by_name["input-polar-elevation-5.0-GHz.svg"][0]["linestyle"], "--")
+            self.assertEqual(by_name["input-polar-elevation-5.0-GHz.svg"][1]["linestyle"], "-")
+            self.assertEqual(
+                Path(by_name_kwargs["input-polar-azimuth-5.0-GHz.svg"].get("legend_out_path") or "input-polar-azimuth-5.0-GHz-legend.svg").name,
+                "input-polar-azimuth-5.0-GHz-legend.svg",
+            )
+            self.assertEqual(
+                Path(by_name_kwargs["input-polar-azimuth-6.0-GHz.svg"].get("legend_out_path") or "input-polar-azimuth-6.0-GHz-legend.svg").name,
+                "input-polar-azimuth-6.0-GHz-legend.svg",
+            )
+            self.assertNotIn("export_legend", by_name_kwargs["input-polar-azimuth-5.0-GHz.svg"])
+            self.assertNotIn("export_legend", by_name_kwargs["input-polar-azimuth-6.0-GHz.svg"])
+            np.testing.assert_allclose(by_name["input-polar-e-plane-5.0-GHz.svg"][0]["series"], h_phi0["5.0 GHz"].to_numpy())
+            np.testing.assert_allclose(by_name["input-polar-e-plane-5.0-GHz.svg"][1]["series"], v_phi90["5.0 GHz"].to_numpy())
+            np.testing.assert_allclose(by_name["input-polar-h-plane-5.0-GHz.svg"][0]["series"], h_phi90["5.0 GHz"].to_numpy())
+            np.testing.assert_allclose(by_name["input-polar-h-plane-5.0-GHz.svg"][1]["series"], v_phi0["5.0 GHz"].to_numpy())
+
+            manifest = json.loads((out_dir / "input-artifacts.json").read_text(encoding="utf-8"))
+            polar_planes = manifest["charts"]["polar_planes"]
+            self.assertEqual({record["plane"] for record in polar_planes}, {"e-plane", "h-plane"})
+            self.assertEqual(len(polar_planes), 4)
+            polar_combined_planes = manifest["charts"]["polar_combined_planes"]
+            self.assertEqual(len(polar_combined_planes), 2)
+            self.assertEqual({record["plane_mode"] for record in polar_combined_planes}, {"e-h-plane"})
 
 
 if __name__ == "__main__":

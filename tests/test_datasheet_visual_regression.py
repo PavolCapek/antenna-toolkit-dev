@@ -175,6 +175,9 @@ class DatasheetVisualRegressionTests(unittest.TestCase):
             self.assertEqual(len(replacements), 7)
             for replacement in replacements:
                 self.assertGreater(_non_white_ratio(page_two, replacement.erase_rect or replacement.rect), 0.01)
+                if replacement.kind.startswith("radiation_"):
+                    self.assertIsNotNone(replacement.legend_rect)
+                    self.assertGreater(_non_white_ratio(page_two, replacement.legend_rect), 0.01)
 
 
 if __name__ == "__main__":

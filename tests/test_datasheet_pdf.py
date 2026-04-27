@@ -79,8 +79,11 @@ class DatasheetPdfTests(unittest.TestCase):
         self.elevation_legend_svg = self.polar_elevation_dir / "extract-polar-elevation-5.500-GHz-legend.svg"
         self.polar_combined_dir = self.root / "polar_combined"
         self.combined_low_svg = self.polar_combined_dir / "extract-polar-4.900-GHz-combined.svg"
+        self.combined_low_legend_svg = self.polar_combined_dir / "extract-polar-4.900-GHz-combined-legend.svg"
         self.combined_mid_svg = self.polar_combined_dir / "extract-polar-6.000-GHz-combined.svg"
+        self.combined_mid_legend_svg = self.polar_combined_dir / "extract-polar-6.000-GHz-combined-legend.svg"
         self.combined_high_svg = self.polar_combined_dir / "extract-polar-7.125-GHz-combined.svg"
+        self.combined_high_legend_svg = self.polar_combined_dir / "extract-polar-7.125-GHz-combined-legend.svg"
         self.page2_gain_rect = fitz.Rect(24.0, 120.0, 324.0, 240.0)
         self.page2_beamwidth_rect = fitz.Rect(24.0, 280.0, 324.0, 400.0)
         self.page2_azimuth_rect = fitz.Rect(24.0, 460.0, 164.0, 600.0)
@@ -107,8 +110,11 @@ class DatasheetPdfTests(unittest.TestCase):
         self._write_svg(self.elevation_svg, "#ff00ff", width=140, height=140)
         self._write_svg(self.elevation_legend_svg, "#ffffff", width=150, height=70)
         self._write_svg(self.combined_low_svg, "#11aaee", width=140, height=140)
+        self._write_svg(self.combined_low_legend_svg, "#ffffff", width=150, height=70)
         self._write_svg(self.combined_mid_svg, "#22bb88", width=140, height=140)
+        self._write_svg(self.combined_mid_legend_svg, "#ffffff", width=150, height=70)
         self._write_svg(self.combined_high_svg, "#aa44dd", width=140, height=140)
+        self._write_svg(self.combined_high_legend_svg, "#ffffff", width=150, height=70)
         self._write_template_pdf()
         self._write_extract_workbook()
 
@@ -1050,9 +1056,9 @@ class DatasheetPdfTests(unittest.TestCase):
                 build_asset_record(self.beamwidth_h_plane_h_svg, legend_path=self.beamwidth_h_plane_h_legend_svg, plane="h-plane", polarization="H"),
             ],
             polar_combined=[
-                build_asset_record(self.combined_low_svg, frequency_ghz=4.9),
-                build_asset_record(self.combined_mid_svg, frequency_ghz=6.0),
-                build_asset_record(self.combined_high_svg, frequency_ghz=7.125),
+                build_asset_record(self.combined_low_svg, legend_path=self.combined_low_legend_svg, frequency_ghz=4.9),
+                build_asset_record(self.combined_mid_svg, legend_path=self.combined_mid_legend_svg, frequency_ghz=6.0),
+                build_asset_record(self.combined_high_svg, legend_path=self.combined_high_legend_svg, frequency_ghz=7.125),
             ],
         )
         manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
@@ -1075,6 +1081,10 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(by_kind["radiation_low"].asset_path, self.combined_low_svg)
         self.assertEqual(by_kind["radiation_mid"].asset_path, self.combined_mid_svg)
         self.assertEqual(by_kind["radiation_high"].asset_path, self.combined_high_svg)
+        self.assertEqual(by_kind["radiation_low"].legend_asset_path, self.combined_low_legend_svg)
+        self.assertEqual(by_kind["radiation_mid"].legend_asset_path, self.combined_mid_legend_svg)
+        self.assertEqual(by_kind["radiation_high"].legend_asset_path, self.combined_high_legend_svg)
+        self.assertLess(by_kind["radiation_low"].rect.y1, by_kind["radiation_low"].legend_rect.y0)
 
     def test_netqui_1pol_frequency_triplet_uses_closest_unique_combined_assets(self) -> None:
         with pd.ExcelWriter(self.extract_workbook) as writer:

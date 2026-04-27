@@ -2067,6 +2067,21 @@ def _netqui_beamwidth_rects(slot_rect: fitz.Rect) -> tuple[fitz.Rect, fitz.Rect]
     return plot, legend
 
 
+def _netqui_polar_rects(slot_rect: fitz.Rect) -> tuple[fitz.Rect, fitz.Rect]:
+    full = fitz.Rect(slot_rect)
+    legend_height = min(max(full.height * 0.24, 30.0), 40.0)
+    legend = fitz.Rect(full.x0 + 2.0, full.y1 - legend_height, full.x1 - 2.0, full.y1)
+    plot_area = fitz.Rect(full.x0, full.y0, full.x1, legend.y0 - 2.0)
+    plot_size = max(1.0, min(plot_area.width, plot_area.height))
+    plot = fitz.Rect(
+        (plot_area.x0 + plot_area.x1 - plot_size) / 2.0,
+        plot_area.y0,
+        (plot_area.x0 + plot_area.x1 + plot_size) / 2.0,
+        plot_area.y0 + plot_size,
+    )
+    return plot, legend
+
+
 def _build_netqui_chart_replacements(
     ordered_slots: list[ChartSlot],
     output: Path,
@@ -2168,6 +2183,19 @@ def _build_manifest_chart_replacements(
         if slot_spec.legend_mode == "netqui_side":
             legend_asset = _legend_asset_path(asset, artifact_manifest)
             plot_rect, legend_rect = _netqui_beamwidth_rects(slot_rect)
+            replacements.append(
+                ChartReplacement(
+                    slot_spec.kind,
+                    plot_rect,
+                    asset,
+                    legend_rect=legend_rect if legend_asset.exists() else None,
+                    legend_asset_path=legend_asset if legend_asset.exists() else None,
+                    erase_rect=slot_rect,
+                )
+            )
+        elif slot_spec.legend_mode == "netqui_bottom":
+            legend_asset = _legend_asset_path(asset, artifact_manifest)
+            plot_rect, legend_rect = _netqui_polar_rects(slot_rect)
             replacements.append(
                 ChartReplacement(
                     slot_spec.kind,
@@ -2386,6 +2414,8 @@ def _center_rect_with_size(container_rect: fitz.Rect, width: float, height: floa
 def _shared_side_legend_scale(replacements: list[ChartReplacement]) -> float | None:
     scales: list[float] = []
     for replacement in replacements:
+        if replacement.kind.startswith("radiation_"):
+            continue
         if replacement.legend_rect is None or replacement.legend_asset_path is None:
             continue
         native_width, native_height = _svg_drawing_size(str(replacement.legend_asset_path.resolve()))
@@ -2460,7 +2490,8 @@ def _replace_chart_images(
     for replacement in replacements:
         _place_svg_as_vector(page, replacement.rect, replacement.asset_path)
         if replacement.legend_rect is not None and replacement.legend_asset_path is not None:
-            _place_svg_as_vector(page, _legend_target_rect(replacement, shared_side_scale), replacement.legend_asset_path)
+            legend_scale = None if replacement.kind.startswith("radiation_") else shared_side_scale
+            _place_svg_as_vector(page, _legend_target_rect(replacement, legend_scale), replacement.legend_asset_path)
 
 
 def build_datasheet_pdf(

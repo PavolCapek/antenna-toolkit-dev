@@ -25,7 +25,9 @@ def _empty_manifest(bookstem: str) -> dict[str, Any]:
             "vswr": None,
             "beamwidth_planes": [],
             "polar_combined": [],
+            "polar_combined_planes": [],
             "polar_single": [],
+            "polar_planes": [],
         },
     }
 
@@ -51,7 +53,9 @@ def load_artifact_manifest(path: str | Path, *, bookstem: str | None = None) -> 
             "vswr": charts.get("vswr"),
             "beamwidth_planes": list(charts.get("beamwidth_planes") or []),
             "polar_combined": list(charts.get("polar_combined") or []),
+            "polar_combined_planes": list(charts.get("polar_combined_planes") or []),
             "polar_single": list(charts.get("polar_single") or []),
+            "polar_planes": list(charts.get("polar_planes") or []),
         }
     payload["schema_version"] = int(payload.get("schema_version") or ARTIFACT_MANIFEST_SCHEMA_VERSION)
     payload["bookstem"] = str(payload.get("bookstem") or bookstem or "")
@@ -97,7 +101,9 @@ def update_artifact_manifest(
     vswr: dict[str, Any] | None = None,
     beamwidth_planes: list[dict[str, Any]] | None = None,
     polar_combined: list[dict[str, Any]] | None = None,
+    polar_combined_planes: list[dict[str, Any]] | None = None,
     polar_single: list[dict[str, Any]] | None = None,
+    polar_planes: list[dict[str, Any]] | None = None,
 ) -> Path:
     manifest_path = artifact_manifest_path(out_dir, bookstem)
     manifest = load_artifact_manifest(manifest_path, bookstem=bookstem)
@@ -114,8 +120,12 @@ def update_artifact_manifest(
         charts["beamwidth_planes"] = beamwidth_planes
     if polar_combined is not None:
         charts["polar_combined"] = polar_combined
+    if polar_combined_planes is not None:
+        charts["polar_combined_planes"] = polar_combined_planes
     if polar_single is not None:
         charts["polar_single"] = polar_single
+    if polar_planes is not None:
+        charts["polar_planes"] = polar_planes
     manifest["bookstem"] = str(bookstem)
     manifest["schema_version"] = ARTIFACT_MANIFEST_SCHEMA_VERSION
     return save_artifact_manifest(manifest_path, manifest)
