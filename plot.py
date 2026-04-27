@@ -29,9 +29,9 @@ Outputs:
 - <book>-beam-efficiency.svg
 - <book>-beam-efficiency-legend.svg
 - polar_combined/<book>-polar-<f>-combined.svg
-- polar_combined/<book>-polar-combined-legend.svg
+- polar_combined/<book>-polar-<f>-combined-legend.svg
 - polar_combined/e-h-plane/<book>-polar-<f>-e-h-plane-combined.svg
-- polar_combined/e-h-plane/<book>-polar-e-h-plane-combined-legend.svg
+- polar_combined/e-h-plane/<book>-polar-<f>-e-h-plane-combined-legend.svg
 - polar_single/azimuth/<book>-polar-azimuth-<f>.svg   (solid)
 - polar_single/azimuth/<book>-polar-azimuth-<f>-legend.svg   (solid)
 - polar_single/elevation/<book>-polar-elevation-<f>.svg (dashed)
@@ -856,9 +856,6 @@ def main():
     manifest_polar_combined_planes: list[dict[str, object]] = []
     manifest_polar_single: list[dict[str, object]] = []
     manifest_polar_planes: list[dict[str, object]] = []
-    shared_polar_legend_paths: dict[tuple[str, int, tuple[tuple[str, str, str], ...]], Path] = {}
-    shared_polar_legend_family_counts: dict[str, int] = {}
-    written_shared_polar_legends: set[Path] = set()
 
     for sheet in summary_sheets:
         df = xls.parse(sheet)
@@ -1246,28 +1243,6 @@ def main():
         linestyle = polar_line_styles[slot_index] if slot_index < len(polar_line_styles) else ("-" if phi_key == "phi0" else "--")
         return color, linestyle
 
-    def shared_polar_legend(
-        family: str,
-        directory: Path,
-        datasets: list[dict[str, object]],
-        ncol: int,
-    ) -> tuple[Path | None, bool]:
-        items = tuple(polar_legend_items(datasets))
-        if not items:
-            return None, False
-        key = (family, ncol, items)
-        legend_path = shared_polar_legend_paths.get(key)
-        if legend_path is None:
-            count = shared_polar_legend_family_counts.get(family, 0) + 1
-            shared_polar_legend_family_counts[family] = count
-            variant = "" if count == 1 else f"-{count}"
-            legend_path = directory / f"{bookstem}-polar-{family}-legend{variant}.svg"
-            shared_polar_legend_paths[key] = legend_path
-        should_export = legend_path not in written_shared_polar_legends
-        if should_export:
-            written_shared_polar_legends.add(legend_path)
-        return legend_path, should_export
-
     def polar_entries(freq_col: str, phi_key: str) -> list[tuple[str, np.ndarray, np.ndarray]]:
         entries: list[tuple[str, np.ndarray, np.ndarray]] = []
         for base in sorted(grouped.keys(), key=polarization_sort_key):
@@ -1344,7 +1319,13 @@ def main():
                 datasets_combined.append({
                     "angles": angles,
                     "series": series,
-                    "label": polar_legend_label(base, label_suffix, port_label=port_label_for(base), single_source=single_polar_source),
+                    "label": polar_legend_label(
+                        base,
+                        label_suffix,
+                        frequency_label,
+                        port_label=port_label_for(base),
+                        single_source=single_polar_source,
+                    ),
                     "color": color,
                     "linestyle": linestyle,
                 })
@@ -1353,12 +1334,6 @@ def main():
             title = f"Polar patterns @ {freq_col}"
             out_name_c = f"{bookstem}-polar-{sanitize(freq_col)}-combined.svg"
             out_path_c = str(out_dir / "polar_combined" / out_name_c)
-            legend_path_c, export_legend_c = shared_polar_legend(
-                "combined",
-                out_dir / "polar_combined",
-                datasets_combined,
-                2,
-            )
             out_path_c, out_path_c_legend = save_polar(
                 out_path_c,
                 datasets_combined,
@@ -1373,11 +1348,9 @@ def main():
                 legend_font_size=polar_legend_font_size,
                 grid_line_width=polar_grid_line_width,
                 line_width=polar_line_width,
-                legend_out_path=legend_path_c,
-                export_legend=export_legend_c,
             )
             print(out_path_c)
-            if out_path_c_legend and export_legend_c:
+            if out_path_c_legend:
                 print(out_path_c_legend)
             manifest_combined = build_asset_record(
                 out_path_c,
@@ -1389,18 +1362,12 @@ def main():
 
         datasets_eh_combined = []
         for plane_key, plane_label in [("E", "E-plane"), ("H", "H-plane")]:
-            datasets_eh_combined.extend(build_plane_datasets(freq_col, plane_key, plane_label))
+            datasets_eh_combined.extend(build_plane_datasets(freq_col, plane_key, plane_label, include_frequency=True))
         if datasets_eh_combined:
             advance_plot_progress(f"Rendering combined E/H polar plot @ {frequency_label}")
             title_eh = f"E/H plane polar patterns @ {freq_col}"
             out_name_eh = f"{bookstem}-polar-{sanitize(freq_col)}-e-h-plane-combined.svg"
             out_path_eh = str(out_dir / "polar_combined" / "e-h-plane" / out_name_eh)
-            legend_path_eh, export_legend_eh = shared_polar_legend(
-                "e-h-plane-combined",
-                out_dir / "polar_combined" / "e-h-plane",
-                datasets_eh_combined,
-                2,
-            )
             out_path_eh, out_path_eh_legend = save_polar(
                 out_path_eh,
                 datasets_eh_combined,
@@ -1415,11 +1382,9 @@ def main():
                 legend_font_size=polar_legend_font_size,
                 grid_line_width=polar_grid_line_width,
                 line_width=polar_line_width,
-                legend_out_path=legend_path_eh,
-                export_legend=export_legend_eh,
             )
             print(out_path_eh)
-            if out_path_eh_legend and export_legend_eh:
+            if out_path_eh_legend:
                 print(out_path_eh_legend)
             manifest_eh_combined = build_asset_record(
                 out_path_eh,
