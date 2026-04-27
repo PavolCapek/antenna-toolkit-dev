@@ -233,6 +233,8 @@ class StudioDirtyStateTests(unittest.TestCase):
             path = project_dir / f"{stem}-{suffix}.svg"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("<svg />", encoding="utf-8")
+        artifact_manifest = project_dir / f"{stem}-artifacts.json"
+        artifact_manifest.write_text("{}", encoding="utf-8")
 
         legacy_snapshot = dict(self.window._current_stage_snapshot("plot"))
         legacy_snapshot.pop("tool_versions", None)
@@ -764,6 +766,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         polar_el_output = project_dir / "polar_single" / "elevation" / f"{beam_output.stem}-polar-elevation-5_8ghz.svg"
         beamwidth_e_plane_output = project_dir / f"{beam_output.stem}-beamwidth-e-plane-h.svg"
         beamwidth_e_plane_legend = project_dir / f"{beam_output.stem}-beamwidth-e-plane-h-legend.svg"
+        artifact_manifest = project_dir / f"{beam_output.stem}-artifacts.json"
         project_dir.mkdir(parents=True, exist_ok=True)
         for path in (
             beam_output,
@@ -784,6 +787,7 @@ class StudioDirtyStateTests(unittest.TestCase):
             polar_combined_legend,
             polar_az_output,
             polar_el_output,
+            artifact_manifest,
         ):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("generated", encoding="utf-8")
@@ -810,6 +814,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertFalse(polar_el_output.exists())
         self.assertFalse(beamwidth_e_plane_output.exists())
         self.assertFalse(beamwidth_e_plane_legend.exists())
+        self.assertFalse(artifact_manifest.exists())
         self.assertFalse((project_dir / "ant_files").exists())
         self.assertFalse((project_dir / "polar_combined").exists())
         self.assertFalse((project_dir / "polar_single").exists())

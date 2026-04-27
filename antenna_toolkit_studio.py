@@ -34,6 +34,7 @@ from project_store import (
     CURRENT_PROJECT_SCHEMA_VERSION, ProjectRecord, ProjectStore, resolve_project_path,
     sanitize_project_slug, serialize_workspace_path, utc_now_iso,
 )
+from datasheet_artifacts import artifact_manifest_path
 
 APP_TITLE = "Antenna Toolkit Studio"
 STATE_FILE = resolve_state_file(".nova_qt_studio_state.json", THIS_DIR / ".nova_qt_studio_state.json")
@@ -2509,6 +2510,7 @@ class ModernMainWindow(QMainWindow):
                 out_dir / f"{stem}-beamwidth-legend.svg",
                 out_dir / f"{stem}-beam-efficiency.svg",
                 out_dir / f"{stem}-beam-efficiency-legend.svg",
+                artifact_manifest_path(out_dir, stem),
             ]
             files.extend(path for path in out_dir.glob(f"{stem}-beamwidth-*-plane-*.svg") if path.is_file())
             for folder_name in ("polar_combined", "polar_single"):
