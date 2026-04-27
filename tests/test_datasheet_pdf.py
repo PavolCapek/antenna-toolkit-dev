@@ -17,6 +17,7 @@ from datasheet_pdf import (
     _layout_split_chart_rects,
     _find_beamwidth_plane_asset,
     _normalize_plot_widths,
+    _redraw_template_table_separators,
     _separate_plot_and_legend_rects,
     _shared_side_legend_scale,
     _svg_to_pdf_bytes,
@@ -1056,6 +1057,27 @@ class DatasheetPdfTests(unittest.TestCase):
             adapter = resolve_template_adapter(template_path, doc)
 
         self.assertEqual(adapter.key, "netqui_1pol")
+
+    def test_netqui_separator_redraw_does_not_join_blank_bottom_rules(self) -> None:
+        self._write_netqui_technical_template_pdf()
+        with fitz.open(self.template_pdf) as doc:
+            page = doc[0]
+            y = 570.0
+            page.draw_line((36.638, y), (138.0, y), color=(0.14, 0.12, 0.12), width=0.25)
+            page.draw_line((138.4, y), (300.0, y), color=(0.14, 0.12, 0.12), width=0.25)
+
+            _redraw_template_table_separators(page, NETQUI_1POL_TEMPLATE_ADAPTER)
+
+            joined = [
+                drawing
+                for drawing in page.get_drawings()
+                if (rect := drawing.get("rect")) is not None
+                and abs(float(rect.y0) - y) <= 0.2
+                and float(rect.x0) <= 37.0
+                and float(rect.x1) >= 299.0
+            ]
+
+        self.assertFalse(joined)
 
     def test_netqui_1pol_manifest_assigns_seven_chart_slots(self) -> None:
         self._write_netqui_chart_template_pdf()

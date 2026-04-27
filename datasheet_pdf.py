@@ -557,8 +557,11 @@ def _redraw_netqui_table_separators(page: fitz.Page, layout_mode: str) -> None:
 
 
 def _redraw_template_table_separators(page: fitz.Page, adapter: DatasheetTemplateAdapter | None) -> None:
-    _redraw_split_table_separators(page)
     layout_mode = adapter.technical_layout_mode if adapter is not None else "auto"
+    if layout_mode in {"netqui", "netqui_1pol"}:
+        _redraw_netqui_table_separators(page, layout_mode)
+        return
+    _redraw_split_table_separators(page)
     _redraw_netqui_table_separators(page, layout_mode)
 
 
