@@ -1804,16 +1804,20 @@ def _find_combined_polar_triplet_assets(
     if not assets:
         for directory in _candidate_dirs(output, extract_workbook):
             for prefix in _candidate_prefixes(output, extract_workbook):
-                combined_dir = directory / "polar_combined"
+                combined_dirs = (
+                    directory / "polar_combined" / "azimuth-elevation",
+                    directory / "polar_combined",
+                )
                 for pattern in (
                     f"{prefix}-polar-*-GHz-combined.svg",
                     f"{prefix}_polar_*_GHz_combined.svg",
                 ):
-                    for candidate in sorted(combined_dir.glob(pattern)):
-                        checked.append(candidate)
-                        frequency = _parse_frequency_from_combined_polar_asset(candidate)
-                        if frequency is not None:
-                            assets.setdefault(frequency, candidate)
+                    for combined_dir in combined_dirs:
+                        checked.append(combined_dir / pattern)
+                        for candidate in sorted(combined_dir.glob(pattern)):
+                            frequency = _parse_frequency_from_combined_polar_asset(candidate)
+                            if frequency is not None:
+                                assets.setdefault(frequency, candidate)
     if not assets:
         checked_list = ", ".join(str(path) for path in checked) if checked else "none"
         raise ValueError(

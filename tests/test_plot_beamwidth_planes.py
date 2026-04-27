@@ -328,10 +328,13 @@ class BeamwidthPlanePlotTests(unittest.TestCase):
 
             by_name = {path.name: datasets for path, datasets, _kwargs in calls}
             by_name_kwargs = {path.name: kwargs for path, _datasets, kwargs in calls}
+            by_name_path = {path.name: path for path, _datasets, _kwargs in calls}
             self.assertIn("input-polar-e-plane-5.0-GHz.svg", by_name)
             self.assertIn("input-polar-h-plane-5.0-GHz.svg", by_name)
             self.assertIn("input-polar-5.0-GHz-e-h-plane-combined.svg", by_name)
             self.assertIn("input-polar-e-plane-6.0-GHz.svg", by_name)
+            self.assertEqual(by_name_path["input-polar-5.0-GHz-combined.svg"].parent.name, "azimuth-elevation")
+            self.assertEqual(by_name_path["input-polar-5.0-GHz-e-h-plane-combined.svg"].parent.name, "e-h-plane")
             self.assertEqual(by_name["input-polar-5.0-GHz-combined.svg"][0]["label"], "Port 1 Azimuth 5.0 GHz")
             self.assertEqual(by_name["input-polar-5.0-GHz-e-h-plane-combined.svg"][0]["label"], "Port 1 E-plane 5.0 GHz")
             self.assertEqual(by_name["input-polar-azimuth-5.0-GHz.svg"][0]["label"], "Port 1 Azimuth 5.0 GHz")

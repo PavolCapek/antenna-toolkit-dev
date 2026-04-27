@@ -28,8 +28,8 @@ Outputs:
 - <book>-beamwidth-legend.svg
 - <book>-beam-efficiency.svg
 - <book>-beam-efficiency-legend.svg
-- polar_combined/<book>-polar-<f>-combined.svg
-- polar_combined/<book>-polar-<f>-combined-legend.svg
+- polar_combined/azimuth-elevation/<book>-polar-<f>-combined.svg
+- polar_combined/azimuth-elevation/<book>-polar-<f>-combined-legend.svg
 - polar_combined/e-h-plane/<book>-polar-<f>-e-h-plane-combined.svg
 - polar_combined/e-h-plane/<book>-polar-<f>-e-h-plane-combined-legend.svg
 - polar_single/azimuth/<book>-polar-azimuth-<f>.svg   (solid)
@@ -1333,7 +1333,7 @@ def main():
             advance_plot_progress(f"Rendering combined polar plot @ {frequency_label}")
             title = f"Polar patterns @ {freq_col}"
             out_name_c = f"{bookstem}-polar-{sanitize(freq_col)}-combined.svg"
-            out_path_c = str(out_dir / "polar_combined" / out_name_c)
+            out_path_c = str(out_dir / "polar_combined" / "azimuth-elevation" / out_name_c)
             out_path_c, out_path_c_legend = save_polar(
                 out_path_c,
                 datasets_combined,
