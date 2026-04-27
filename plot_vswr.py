@@ -223,8 +223,10 @@ def plot_xy(x, series_list, names, out_path, y_label,
             x_log: bool = False, x_min: float | None = None, x_max: float | None = None,
             font_size: float = DEFAULT_PLOT_FONT_SIZE, legend_font_size: float = DEFAULT_LEGEND_FONT_SIZE,
             grid_line_width: float = DEFAULT_GRID_LINE_WIDTH,
-            line_width: float = DEFAULT_PLOT_LINE_WIDTH):
-    fig, ax = plt.subplots(figsize=(CARTESIAN_FIGURE_WIDTH_IN, CARTESIAN_FIGURE_HEIGHT_IN), dpi=120)
+            line_width: float = DEFAULT_PLOT_LINE_WIDTH,
+            figure_width: float = CARTESIAN_FIGURE_WIDTH_IN,
+            figure_height: float = CARTESIAN_FIGURE_HEIGHT_IN):
+    fig, ax = plt.subplots(figsize=(figure_width, figure_height), dpi=120)
     ax.set_facecolor("white")
     ax.grid(True, which="both", axis="both", color=grid_color, linewidth=grid_line_width)
     ax.set_axisbelow(True)
@@ -349,6 +351,8 @@ def main():
     p.add_argument("--line-colors", default=None, help="Comma-separated colors for the port traces.")
     p.add_argument("--line-width", type=float, default=None, help=argparse.SUPPRESS)
     p.add_argument("--cartesian-line-width", type=float, default=None, help="Line width used for VSWR traces and legend.")
+    p.add_argument("--cartesian-figure-width", type=float, default=None, help="Figure width in inches for the VSWR plot.")
+    p.add_argument("--cartesian-figure-height", type=float, default=None, help="Figure height in inches for the VSWR plot.")
     p.add_argument("--font-size", type=float, default=None, help=argparse.SUPPRESS)
     p.add_argument("--cartesian-font-size", type=float, default=None, help="Base font size used for VSWR labels and tick labels.")
     p.add_argument("--legend-font-size", type=float, default=None, help=argparse.SUPPRESS)
@@ -359,6 +363,8 @@ def main():
     set_line_colors(parse_color_list(args.line_colors))
     cartesian_grid_line_width = float(args.cartesian_grid_line_width if args.cartesian_grid_line_width is not None else (args.grid_line_width if args.grid_line_width is not None else DEFAULT_GRID_LINE_WIDTH))
     cartesian_line_width = float(args.cartesian_line_width if args.cartesian_line_width is not None else (args.line_width if args.line_width is not None else DEFAULT_PLOT_LINE_WIDTH))
+    cartesian_figure_width = float(args.cartesian_figure_width if args.cartesian_figure_width is not None else CARTESIAN_FIGURE_WIDTH_IN)
+    cartesian_figure_height = float(args.cartesian_figure_height if args.cartesian_figure_height is not None else CARTESIAN_FIGURE_HEIGHT_IN)
     cartesian_font_size = float(args.cartesian_font_size if args.cartesian_font_size is not None else (args.font_size if args.font_size is not None else DEFAULT_PLOT_FONT_SIZE))
     cartesian_legend_font_size = float(args.cartesian_legend_font_size if args.cartesian_legend_font_size is not None else (args.legend_font_size if args.legend_font_size is not None else DEFAULT_LEGEND_FONT_SIZE))
 
@@ -416,6 +422,8 @@ def main():
         legend_font_size=cartesian_legend_font_size,
         grid_line_width=cartesian_grid_line_width,
         line_width=cartesian_line_width,
+        figure_width=cartesian_figure_width,
+        figure_height=cartesian_figure_height,
     )
     emit_progress("vswr", 2, 2, f"Saving {out_path.name}")
     bookstem = out_path.stem[:-5] if out_path.stem.endswith("-vswr") else out_path.stem

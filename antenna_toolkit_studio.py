@@ -1496,6 +1496,8 @@ class ModernMainWindow(QMainWindow):
         self.beamwidth_6db_color = StudioColorSelector(self.store, "beamwidth_6db_color", DEFAULT_BEAMWIDTH_DB_COLORS[1][1], presets=DEFAULT_BEAMWIDTH_DB_COLORS)
         self.beamwidth_10db_color = StudioColorSelector(self.store, "beamwidth_10db_color", DEFAULT_BEAMWIDTH_DB_COLORS[2][1], presets=DEFAULT_BEAMWIDTH_DB_COLORS)
         self.cartesian_line_width = TrimmedDoubleSpinBox(); self.cartesian_line_width.setRange(0.1, 20.0); self.cartesian_line_width.setDecimals(2); self.cartesian_line_width.setSingleStep(0.1); self.cartesian_line_width.setValue(float(self.store.get("cartesian_line_width", self.store.get("plot_line_width", 2.0)))); self.cartesian_line_width.valueChanged.connect(lambda v: self.store.set("cartesian_line_width", float(v)))
+        self.cartesian_figure_width = TrimmedDoubleSpinBox(); self.cartesian_figure_width.setRange(2.0, 24.0); self.cartesian_figure_width.setDecimals(2); self.cartesian_figure_width.setSingleStep(0.25); self.cartesian_figure_width.setValue(float(self.store.get("cartesian_figure_width", 12.0))); self.cartesian_figure_width.valueChanged.connect(lambda v: self.store.set("cartesian_figure_width", float(v)))
+        self.cartesian_figure_height = TrimmedDoubleSpinBox(); self.cartesian_figure_height.setRange(1.0, 18.0); self.cartesian_figure_height.setDecimals(2); self.cartesian_figure_height.setSingleStep(0.25); self.cartesian_figure_height.setValue(float(self.store.get("cartesian_figure_height", 5.04))); self.cartesian_figure_height.valueChanged.connect(lambda v: self.store.set("cartesian_figure_height", float(v)))
         self.polar_line_width = TrimmedDoubleSpinBox(); self.polar_line_width.setRange(0.1, 20.0); self.polar_line_width.setDecimals(2); self.polar_line_width.setSingleStep(0.1); self.polar_line_width.setValue(float(self.store.get("polar_line_width", self.store.get("plot_line_width", 2.0)))); self.polar_line_width.valueChanged.connect(lambda v: self.store.set("polar_line_width", float(v)))
         self.cartesian_font_size = TrimmedDoubleSpinBox(); self.cartesian_font_size.setRange(1.0, 72.0); self.cartesian_font_size.setDecimals(1); self.cartesian_font_size.setSingleStep(0.5); self.cartesian_font_size.setValue(float(self.store.get("cartesian_font_size", self.store.get("plot_font_size", 10.5)))); self.cartesian_font_size.valueChanged.connect(lambda v: self.store.set("cartesian_font_size", float(v)))
         self.polar_font_size = TrimmedDoubleSpinBox(); self.polar_font_size.setRange(1.0, 72.0); self.polar_font_size.setDecimals(1); self.polar_font_size.setSingleStep(0.5); self.polar_font_size.setValue(float(self.store.get("polar_font_size", self.store.get("plot_font_size", 10.5)))); self.polar_font_size.valueChanged.connect(lambda v: self.store.set("polar_font_size", float(v)))
@@ -1544,6 +1546,8 @@ class ModernMainWindow(QMainWindow):
         cartesian_metrics_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         add_form_row(cartesian_metrics_form, "Grid width", StepperField(self.cartesian_grid_line_width), "Line width used by cartesian grid lines, axes, and tick marks.")
         add_form_row(cartesian_metrics_form, "Line width", StepperField(self.cartesian_line_width), "Trace thickness used by the workbook cartesian plots and the VSWR plot.")
+        add_form_row(cartesian_metrics_form, "Figure width", StepperField(self.cartesian_figure_width), "Width used when rendering cartesian SVG plots.")
+        add_form_row(cartesian_metrics_form, "Figure height", StepperField(self.cartesian_figure_height), "Height used when rendering cartesian SVG plots.")
         add_form_row(cartesian_metrics_form, "Font size", StepperField(self.cartesian_font_size), "Base font size used by cartesian plot labels and tick labels.")
         add_form_row(cartesian_metrics_form, "Legend font", StepperField(self.cartesian_legend_font_size), "Font size used by exported cartesian and VSWR legends.")
         cartesian_metrics_card.body.addLayout(cartesian_metrics_form)
@@ -1813,6 +1817,8 @@ class ModernMainWindow(QMainWindow):
         self.cartesian_grid_line_width.setValue(0.9)
         self.polar_grid_line_width.setValue(0.9)
         self.cartesian_line_width.setValue(2.0)
+        self.cartesian_figure_width.setValue(12.0)
+        self.cartesian_figure_height.setValue(5.04)
         self.polar_line_width.setValue(2.0)
         self.cartesian_font_size.setValue(10.5)
         self.polar_font_size.setValue(10.5)
@@ -1869,6 +1875,8 @@ class ModernMainWindow(QMainWindow):
             "cartesian_grid_line_width": 0.9,
             "polar_grid_line_width": 0.9,
             "cartesian_line_width": 2.0,
+            "cartesian_figure_width": 12.0,
+            "cartesian_figure_height": 5.04,
             "polar_line_width": 2.0,
             "cartesian_font_size": 10.5,
             "polar_font_size": 10.5,
@@ -2351,6 +2359,8 @@ class ModernMainWindow(QMainWindow):
             self.cartesian_grid_line_width.valueChanged,
             self.polar_grid_line_width.valueChanged,
             self.cartesian_line_width.valueChanged,
+            self.cartesian_figure_width.valueChanged,
+            self.cartesian_figure_height.valueChanged,
             self.polar_line_width.valueChanged,
             self.cartesian_font_size.valueChanged,
             self.polar_font_size.valueChanged,
@@ -2426,6 +2436,7 @@ class ModernMainWindow(QMainWindow):
                 "grid_color",
                 "cartesian_grid_line_width", "polar_grid_line_width",
                 "cartesian_line_width", "polar_line_width",
+                "cartesian_figure_width", "cartesian_figure_height",
                 "cartesian_font_size", "polar_font_size",
                 "cartesian_legend_font_size", "polar_legend_font_size",
                 "plot_line_1", "plot_line_2",
@@ -2437,7 +2448,9 @@ class ModernMainWindow(QMainWindow):
                 "shared_xstep", "shared_fmin", "shared_fmax", "shared_xlog",
                 "vswr_ymin", "vswr_ymax", "vswr_ystep", "vswr_smooth",
                 "grid_color",
-                "cartesian_grid_line_width", "cartesian_line_width", "cartesian_font_size", "cartesian_legend_font_size",
+                "cartesian_grid_line_width", "cartesian_line_width",
+                "cartesian_figure_width", "cartesian_figure_height",
+                "cartesian_font_size", "cartesian_legend_font_size",
                 "plot_line_1", "plot_line_2", "vswr_legend_labels",
             ],
         }
@@ -3765,6 +3778,8 @@ class ModernMainWindow(QMainWindow):
             "cartesian_grid_line_width": float(self.cartesian_grid_line_width.value()),
             "polar_grid_line_width": float(self.polar_grid_line_width.value()),
             "cartesian_line_width": float(self.cartesian_line_width.value()),
+            "cartesian_figure_width": float(self.cartesian_figure_width.value()),
+            "cartesian_figure_height": float(self.cartesian_figure_height.value()),
             "polar_line_width": float(self.polar_line_width.value()),
             "cartesian_font_size": float(self.cartesian_font_size.value()),
             "polar_font_size": float(self.polar_font_size.value()),
@@ -3823,6 +3838,8 @@ class ModernMainWindow(QMainWindow):
         if polar_grid_line_width is not None: self.polar_grid_line_width.setValue(float(polar_grid_line_width))
         cartesian_line_width = value_or_legacy("cartesian_line_width", "plot_line_width")
         if cartesian_line_width is not None: self.cartesian_line_width.setValue(float(cartesian_line_width))
+        if "cartesian_figure_width" in values: self.cartesian_figure_width.setValue(float(values["cartesian_figure_width"]))
+        if "cartesian_figure_height" in values: self.cartesian_figure_height.setValue(float(values["cartesian_figure_height"]))
         polar_line_width = value_or_legacy("polar_line_width", "plot_line_width")
         if polar_line_width is not None: self.polar_line_width.setValue(float(polar_line_width))
         cartesian_font_size = value_or_legacy("cartesian_font_size", "plot_font_size")
@@ -4610,6 +4627,8 @@ class ModernMainWindow(QMainWindow):
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
                 "--beamwidth-db-colors", ",".join([self.beamwidth_3db_color.color(), self.beamwidth_6db_color.color(), self.beamwidth_10db_color.color()]),
                 "--cartesian-line-width", str(self.cartesian_line_width.value()),
+                "--cartesian-figure-width", str(self.cartesian_figure_width.value()),
+                "--cartesian-figure-height", str(self.cartesian_figure_height.value()),
                 "--polar-line-width", str(self.polar_line_width.value()),
                 "--cartesian-font-size", str(self.cartesian_font_size.value()),
                 "--polar-font-size", str(self.polar_font_size.value()),
@@ -4671,6 +4690,8 @@ class ModernMainWindow(QMainWindow):
                 "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
                 "--cartesian-line-width", str(self.cartesian_line_width.value()),
+                "--cartesian-figure-width", str(self.cartesian_figure_width.value()),
+                "--cartesian-figure-height", str(self.cartesian_figure_height.value()),
                 "--cartesian-font-size", str(self.cartesian_font_size.value()),
                 "--cartesian-legend-font-size", str(self.cartesian_legend_font_size.value()),
                 "--x-step", str(self.shared_xstep.value()),
@@ -4749,6 +4770,8 @@ class ModernMainWindow(QMainWindow):
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
                 "--beamwidth-db-colors", ",".join([self.beamwidth_3db_color.color(), self.beamwidth_6db_color.color(), self.beamwidth_10db_color.color()]),
                 "--cartesian-line-width", str(self.cartesian_line_width.value()),
+                "--cartesian-figure-width", str(self.cartesian_figure_width.value()),
+                "--cartesian-figure-height", str(self.cartesian_figure_height.value()),
                 "--polar-line-width", str(self.polar_line_width.value()),
                 "--cartesian-font-size", str(self.cartesian_font_size.value()),
                 "--polar-font-size", str(self.polar_font_size.value()),
@@ -4795,6 +4818,8 @@ class ModernMainWindow(QMainWindow):
                 "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
                 "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
                 "--cartesian-line-width", str(self.cartesian_line_width.value()),
+                "--cartesian-figure-width", str(self.cartesian_figure_width.value()),
+                "--cartesian-figure-height", str(self.cartesian_figure_height.value()),
                 "--cartesian-font-size", str(self.cartesian_font_size.value()),
                 "--cartesian-legend-font-size", str(self.cartesian_legend_font_size.value()),
                 "--x-step", str(self.shared_xstep.value()),

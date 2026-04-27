@@ -12,6 +12,7 @@ from datasheet_artifacts import build_asset_record, load_artifact_manifest, upda
 from datasheet_pdf import (
     ChartReplacement,
     _build_chart_replacements,
+    _find_combined_polar_triplet_assets,
     _legend_target_rect,
     _layout_split_chart_rects,
     _find_beamwidth_plane_asset,
@@ -25,7 +26,7 @@ from datasheet_pdf import (
     build_replacements_from_workbook,
     load_technical_data_workbook,
 )
-from datasheet_templates import NETQUI_TEMPLATE_ADAPTER, RFE_TEMPLATE_ADAPTER
+from datasheet_templates import NETQUI_1POL_TEMPLATE_ADAPTER, NETQUI_TEMPLATE_ADAPTER, RFE_TEMPLATE_ADAPTER, resolve_template_adapter
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -76,6 +77,10 @@ class DatasheetPdfTests(unittest.TestCase):
         self.azimuth_legend_svg = self.polar_azimuth_dir / "extract-polar-azimuth-5.500-GHz-legend.svg"
         self.elevation_svg = self.polar_elevation_dir / "extract-polar-elevation-5.500-GHz.svg"
         self.elevation_legend_svg = self.polar_elevation_dir / "extract-polar-elevation-5.500-GHz-legend.svg"
+        self.polar_combined_dir = self.root / "polar_combined"
+        self.combined_low_svg = self.polar_combined_dir / "extract-polar-4.900-GHz-combined.svg"
+        self.combined_mid_svg = self.polar_combined_dir / "extract-polar-6.000-GHz-combined.svg"
+        self.combined_high_svg = self.polar_combined_dir / "extract-polar-7.125-GHz-combined.svg"
         self.page2_gain_rect = fitz.Rect(24.0, 120.0, 324.0, 240.0)
         self.page2_beamwidth_rect = fitz.Rect(24.0, 280.0, 324.0, 400.0)
         self.page2_azimuth_rect = fitz.Rect(24.0, 460.0, 164.0, 600.0)
@@ -101,6 +106,9 @@ class DatasheetPdfTests(unittest.TestCase):
         self._write_svg(self.azimuth_legend_svg, "#ffffff", width=150, height=70)
         self._write_svg(self.elevation_svg, "#ff00ff", width=140, height=140)
         self._write_svg(self.elevation_legend_svg, "#ffffff", width=150, height=70)
+        self._write_svg(self.combined_low_svg, "#11aaee", width=140, height=140)
+        self._write_svg(self.combined_mid_svg, "#22bb88", width=140, height=140)
+        self._write_svg(self.combined_high_svg, "#aa44dd", width=140, height=140)
         self._write_template_pdf()
         self._write_extract_workbook()
 
@@ -1019,6 +1027,87 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertAlmostEqual(by_kind["vswr"].rect.x1, vswr_rect.x1, delta=0.1)
         self.assertAlmostEqual(by_kind["beamwidth_e_plane"].erase_rect.x0, e_plane_rect.x0, delta=0.1)
         self.assertAlmostEqual(by_kind["beamwidth_h_plane"].erase_rect.x0, h_plane_rect.x0, delta=0.1)
+
+    def test_netqui_1pol_template_resolves_before_generic_netqui(self) -> None:
+        template_path = self.root / "Datasheet - Netqui - 1Pol.pdf"
+        self._write_netqui_chart_template_pdf()
+        self.template_pdf.replace(template_path)
+
+        with fitz.open(template_path) as doc:
+            adapter = resolve_template_adapter(template_path, doc)
+
+        self.assertEqual(adapter.key, "netqui_1pol")
+
+    def test_netqui_1pol_manifest_assigns_seven_chart_slots(self) -> None:
+        self._write_netqui_chart_template_pdf()
+        update_artifact_manifest(
+            self.root,
+            "extract",
+            gain=build_asset_record(self.gain_svg, legend_path=self.gain_legend_svg),
+            vswr=build_asset_record(self.vswr_svg),
+            beamwidth_planes=[
+                build_asset_record(self.beamwidth_e_plane_h_svg, legend_path=self.beamwidth_e_plane_h_legend_svg, plane="e-plane", polarization="H"),
+                build_asset_record(self.beamwidth_h_plane_h_svg, legend_path=self.beamwidth_h_plane_h_legend_svg, plane="h-plane", polarization="H"),
+            ],
+            polar_combined=[
+                build_asset_record(self.combined_low_svg, frequency_ghz=4.9),
+                build_asset_record(self.combined_mid_svg, frequency_ghz=6.0),
+                build_asset_record(self.combined_high_svg, frequency_ghz=7.125),
+            ],
+        )
+        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
+
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_chart_replacements(
+                doc[1],
+                self.output_pdf,
+                self.extract_workbook,
+                adapter=NETQUI_1POL_TEMPLATE_ADAPTER,
+                artifact_manifest=manifest,
+            )
+
+        by_kind = {replacement.kind: replacement for replacement in replacements}
+        self.assertEqual(len(replacements), 7)
+        self.assertEqual(by_kind["gain"].asset_path, self.gain_svg)
+        self.assertEqual(by_kind["vswr"].asset_path, self.vswr_svg)
+        self.assertEqual(by_kind["beamwidth_e_plane"].asset_path, self.beamwidth_e_plane_h_svg)
+        self.assertEqual(by_kind["beamwidth_h_plane"].asset_path, self.beamwidth_h_plane_h_svg)
+        self.assertEqual(by_kind["radiation_low"].asset_path, self.combined_low_svg)
+        self.assertEqual(by_kind["radiation_mid"].asset_path, self.combined_mid_svg)
+        self.assertEqual(by_kind["radiation_high"].asset_path, self.combined_high_svg)
+
+    def test_netqui_1pol_frequency_triplet_uses_closest_unique_combined_assets(self) -> None:
+        with pd.ExcelWriter(self.extract_workbook) as writer:
+            pd.DataFrame(
+                [
+                    {
+                        "source_file": "sample.ffs",
+                        "polarization": "Vertical",
+                        "freq_min_GHz": 0.3,
+                        "freq_max_GHz": 3.0,
+                    }
+                ]
+            ).to_excel(writer, sheet_name="ffs_summary", index=False)
+        assets = [
+            (self.root / "polar_combined" / "extract-polar-0.300-GHz-combined.svg", 0.3),
+            (self.root / "polar_combined" / "extract-polar-1.400-GHz-combined.svg", 1.4),
+            (self.root / "polar_combined" / "extract-polar-1.700-GHz-combined.svg", 1.7),
+            (self.root / "polar_combined" / "extract-polar-3.000-GHz-combined.svg", 3.0),
+        ]
+        for path, _frequency in assets:
+            self._write_svg(path, "#2266aa", width=140, height=140)
+        update_artifact_manifest(
+            self.root,
+            "extract",
+            polar_combined=[build_asset_record(path, frequency_ghz=frequency) for path, frequency in assets],
+        )
+        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
+
+        triplet = _find_combined_polar_triplet_assets(self.output_pdf, self.extract_workbook, manifest)
+
+        self.assertEqual(triplet["low"], assets[0][0])
+        self.assertEqual(triplet["mid"], assets[2][0])
+        self.assertEqual(triplet["high"], assets[3][0])
 
     def test_build_chart_replacements_prefers_artifact_manifest_assets(self) -> None:
         manifest_gain_legend = self.root / "manifest-legends" / "gain-key.svg"

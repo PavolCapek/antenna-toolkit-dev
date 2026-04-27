@@ -101,6 +101,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.window.cartesian_grid_line_width.setValue(1.4)
         self.window.polar_grid_line_width.setValue(1.1)
         self.window.cartesian_line_width.setValue(3.4)
+        self.window.cartesian_figure_width.setValue(10.5)
+        self.window.cartesian_figure_height.setValue(4.2)
         self.window.polar_line_width.setValue(2.8)
         self.window.cartesian_font_size.setValue(12.5)
         self.window.polar_font_size.setValue(11.5)
@@ -117,6 +119,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_grid_line_width"], 1.4)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_grid_line_width"], 1.1)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_line_width"], 3.4)
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_figure_width"], 10.5)
+        self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_figure_height"], 4.2)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_line_width"], 2.8)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_font_size"], 12.5)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_font_size"], 11.5)
@@ -124,6 +128,11 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_legend_font_size"], 13.0)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["datasheet_template"], "Datasheet - RFE.pdf")
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["pdf_metadata_author"], "Custom Datasheet Author")
+        self.window.cartesian_figure_width.setValue(12.0)
+        self.window.cartesian_figure_height.setValue(5.04)
+        self.window.apply_preset_values(self.window.preset_store.load_presets()["Preset A"])
+        self.assertEqual(self.window.cartesian_figure_width.value(), 10.5)
+        self.assertEqual(self.window.cartesian_figure_height.value(), 4.2)
         loaded_before_second_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_before_second_save.presets, {})
         self.assertEqual(loaded_before_second_save.settings, first_saved_settings)
@@ -603,6 +612,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.window._set_touchstone(str(s2p_path))
         self.window._set_technical_data(str(technical_data_path))
         self.window.pdf_metadata_author.setText("Pipeline Author")
+        self.window.cartesian_figure_width.setValue(9.75)
+        self.window.cartesian_figure_height.setValue(4.5)
         self.app.processEvents()
 
         queued: list[str] = []
@@ -620,6 +631,10 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.assertEqual(queued, ["beam", "extract", "plot", "vswr", "datasheet"])
         self.assertIn("--beamwidth-db-colors", queued_args["plot"])
+        self.assertEqual(queued_args["plot"][queued_args["plot"].index("--cartesian-figure-width") + 1], "9.75")
+        self.assertEqual(queued_args["plot"][queued_args["plot"].index("--cartesian-figure-height") + 1], "4.5")
+        self.assertEqual(queued_args["vswr"][queued_args["vswr"].index("--cartesian-figure-width") + 1], "9.75")
+        self.assertEqual(queued_args["vswr"][queued_args["vswr"].index("--cartesian-figure-height") + 1], "4.5")
         self.assertIn("--template", queued_args["datasheet"])
         self.assertEqual(Path(queued_args["datasheet"][queued_args["datasheet"].index("--template") + 1]).name, "Datasheet - RFE.pdf")
         self.assertIn("--metadata-author", queued_args["datasheet"])
@@ -632,6 +647,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.window.beamwidth_3db_color.set_color("#aa0000")
         self.window.beamwidth_6db_color.set_color("#777777")
         self.window.beamwidth_10db_color.set_color("#111111")
+        self.window.cartesian_figure_width.setValue(9.25)
+        self.window.cartesian_figure_height.setValue(3.75)
         self.app.processEvents()
 
         queued: list[str] = []
@@ -654,6 +671,8 @@ class StudioDirtyStateTests(unittest.TestCase):
             plot_args[plot_args.index("--beamwidth-db-colors") + 1],
             "#aa0000,#777777,#111111",
         )
+        self.assertEqual(plot_args[plot_args.index("--cartesian-figure-width") + 1], "9.25")
+        self.assertEqual(plot_args[plot_args.index("--cartesian-figure-height") + 1], "3.75")
 
     def test_run_full_uses_cached_google_sheet_workbook_for_datasheet(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "sample.ffs"

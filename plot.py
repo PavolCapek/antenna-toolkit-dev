@@ -508,8 +508,10 @@ def plot_xy(x, series_list, names, out_path, y_label,
             smooth_window: int = 5, x_step: float = None, x_ticks=None, x_log: bool = False,
             font_size: float = DEFAULT_PLOT_FONT_SIZE, legend_font_size: float = DEFAULT_LEGEND_FONT_SIZE,
             grid_line_width: float = DEFAULT_GRID_LINE_WIDTH,
-            line_width: float = DEFAULT_PLOT_LINE_WIDTH):
-    fig, ax = plt.subplots(figsize=(CARTESIAN_FIGURE_WIDTH_IN, CARTESIAN_FIGURE_HEIGHT_IN), dpi=120)
+            line_width: float = DEFAULT_PLOT_LINE_WIDTH,
+            figure_width: float = CARTESIAN_FIGURE_WIDTH_IN,
+            figure_height: float = CARTESIAN_FIGURE_HEIGHT_IN):
+    fig, ax = plt.subplots(figsize=(figure_width, figure_height), dpi=120)
     ax.set_facecolor("white")
     ax.grid(True, which="both", axis="both", color=grid_color, linewidth=grid_line_width)
     ax.set_axisbelow(True)
@@ -683,6 +685,8 @@ def main():
     parser.add_argument("--beamwidth-db-colors", default=None, help="Comma-separated colors for 3 dB, 6 dB, and 10 dB beamwidth E/H plane plots.")
     parser.add_argument("--line-width", type=float, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--cartesian-line-width", type=float, default=None, help="Line width used for cartesian plot traces and legends.")
+    parser.add_argument("--cartesian-figure-width", type=float, default=None, help="Figure width in inches for cartesian plots.")
+    parser.add_argument("--cartesian-figure-height", type=float, default=None, help="Figure height in inches for cartesian plots.")
     parser.add_argument("--polar-line-width", type=float, default=None, help="Line width used for polar plot traces and legends.")
     parser.add_argument("--font-size", type=float, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--cartesian-font-size", type=float, default=None, help="Base font size used for cartesian plot labels and tick labels.")
@@ -726,6 +730,8 @@ def main():
     cartesian_grid_line_width = float(args.cartesian_grid_line_width if args.cartesian_grid_line_width is not None else (args.grid_line_width if args.grid_line_width is not None else DEFAULT_GRID_LINE_WIDTH))
     polar_grid_line_width = float(args.polar_grid_line_width if args.polar_grid_line_width is not None else (args.grid_line_width if args.grid_line_width is not None else DEFAULT_GRID_LINE_WIDTH))
     cartesian_line_width = float(args.cartesian_line_width if args.cartesian_line_width is not None else (args.line_width if args.line_width is not None else DEFAULT_PLOT_LINE_WIDTH))
+    cartesian_figure_width = float(args.cartesian_figure_width if args.cartesian_figure_width is not None else CARTESIAN_FIGURE_WIDTH_IN)
+    cartesian_figure_height = float(args.cartesian_figure_height if args.cartesian_figure_height is not None else CARTESIAN_FIGURE_HEIGHT_IN)
     polar_line_width = float(args.polar_line_width if args.polar_line_width is not None else (args.line_width if args.line_width is not None else DEFAULT_PLOT_LINE_WIDTH))
     cartesian_font_size = float(args.cartesian_font_size if args.cartesian_font_size is not None else (args.font_size if args.font_size is not None else DEFAULT_PLOT_FONT_SIZE))
     polar_font_size = float(args.polar_font_size if args.polar_font_size is not None else (args.font_size if args.font_size is not None else DEFAULT_PLOT_FONT_SIZE))
@@ -931,6 +937,8 @@ def main():
                     legend_font_size=cartesian_legend_font_size,
                     grid_line_width=cartesian_grid_line_width,
                     line_width=cartesian_line_width,
+                    figure_width=cartesian_figure_width,
+                    figure_height=cartesian_figure_height,
                 )
                 print(out_gain)
                 if out_gain_legend:
@@ -980,6 +988,8 @@ def main():
                     legend_font_size=cartesian_legend_font_size,
                     grid_line_width=cartesian_grid_line_width,
                     line_width=cartesian_line_width,
+                    figure_width=cartesian_figure_width,
+                    figure_height=cartesian_figure_height,
                 )
                 print(out_bw)
                 if out_bw_legend:
@@ -1029,6 +1039,8 @@ def main():
             legend_font_size=cartesian_legend_font_size,
             grid_line_width=cartesian_grid_line_width,
             line_width=cartesian_line_width,
+            figure_width=cartesian_figure_width,
+            figure_height=cartesian_figure_height,
         )
         print(out_plane)
         if out_plane_legend:
@@ -1081,6 +1093,8 @@ def main():
                     legend_font_size=cartesian_legend_font_size,
                     grid_line_width=cartesian_grid_line_width,
                     line_width=cartesian_line_width,
+                    figure_width=cartesian_figure_width,
+                    figure_height=cartesian_figure_height,
                 )
                 print(out_be)
                 if out_be_legend:

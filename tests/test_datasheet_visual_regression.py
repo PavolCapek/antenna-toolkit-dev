@@ -39,6 +39,21 @@ def _span_for_text(page: fitz.Page, text: str) -> fitz.Rect:
     raise AssertionError(f"Text not found in rendered page: {text}")
 
 
+def _has_left_table_line_below(page: fitz.Page, text: str) -> bool:
+    span = _span_for_text(page, text)
+    for drawing in page.get_drawings():
+        rect = drawing.get("rect")
+        if rect is None:
+            continue
+        if abs(rect.y1 - rect.y0) > 0.3:
+            continue
+        if not (span.y1 <= rect.y0 <= span.y1 + 8.0):
+            continue
+        if rect.x0 <= 40.0 and rect.x1 >= 290.0:
+            return True
+    return False
+
+
 class DatasheetVisualRegressionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -117,6 +132,49 @@ class DatasheetVisualRegressionTests(unittest.TestCase):
             self.assertGreater(frequency_value.x0, frequency_label.x1)
             self.assertAlmostEqual(frequency_value.y0, frequency_label.y0, delta=2.0)
             self.assertGreater(_non_white_ratio(page, frequency_value + (-1, -1, 1, 1), scale=2.0), 0.01)
+
+    def test_netqui_1pol_real_template_keeps_table_lines_and_all_chart_slots(self) -> None:
+        template = REPO_ROOT / "Templates" / "Datasheet - Netqui - 1Pol.pdf"
+        project_dir = REPO_ROOT / "Projects" / "LPDA_0_3_3"
+        extract_workbook = project_dir / "LPDA_0_3_3-extracted-data.xlsx"
+        technical_workbook = REPO_ROOT / "Input data" / "Technical Data.xlsx"
+        _require_paths(
+            self,
+            [
+                template,
+                extract_workbook,
+                technical_workbook,
+                project_dir / "LPDA_0_3_3-gain.svg",
+                project_dir / "LPDA_0_3_3-vswr.svg",
+                project_dir / "LPDA_0_3_3-beamwidth-e-plane.svg",
+                project_dir / "LPDA_0_3_3-beamwidth-h-plane.svg",
+                project_dir / "polar_combined",
+            ],
+        )
+        output = self.output_dir / "lpda-netqui-1pol.pdf"
+
+        build_datasheet_pdf(output, template, extract_workbook, technical_workbook)
+
+        with fitz.open(output) as rendered_doc, fitz.open(template) as template_doc:
+            adapter = resolve_template_adapter(template, template_doc)
+            self.assertEqual(adapter.key, "netqui_1pol")
+            replacements = _build_chart_replacements(
+                template_doc[1],
+                output,
+                extract_workbook,
+                adapter=adapter,
+            )
+            page_one = rendered_doc[0]
+            page_two = rendered_doc[1]
+            text = page_one.get_text("text")
+
+            self.assertIn("300 - 3000 MHz", text)
+            self.assertIn("text_placeholder", text)
+            self.assertTrue(_has_left_table_line_below(page_one, "VSWR"))
+            self.assertTrue(_has_left_table_line_below(page_one, "Nominal Impedance"))
+            self.assertEqual(len(replacements), 7)
+            for replacement in replacements:
+                self.assertGreater(_non_white_ratio(page_two, replacement.erase_rect or replacement.rect), 0.01)
 
 
 if __name__ == "__main__":

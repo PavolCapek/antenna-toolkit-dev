@@ -13,6 +13,7 @@ class TemplateChartSlot:
     asset_key: str
     required: bool = True
     plane: str | None = None
+    frequency_role: str | None = None
     legend_mode: str = "auto"
 
 
@@ -89,6 +90,25 @@ NETQUI_TEMPLATE_MANIFEST = TemplateManifest(
     technical_layout_mode="netqui",
 )
 
+NETQUI_1POL_TEMPLATE_MANIFEST = TemplateManifest(
+    key="netqui_1pol",
+    chart_layout=TemplateChartManifest(
+        page_index=1,
+        min_image_slots=7,
+        slots=(
+            TemplateChartSlot("gain", 0, "gain", legend_mode="none"),
+            TemplateChartSlot("vswr", 1, "vswr", required=False, legend_mode="none"),
+            TemplateChartSlot("beamwidth_e_plane", 2, "beamwidth_plane", plane="e-plane", legend_mode="netqui_side"),
+            TemplateChartSlot("beamwidth_h_plane", 3, "beamwidth_plane", plane="h-plane", legend_mode="netqui_side"),
+            TemplateChartSlot("radiation_low", 4, "polar_combined_triplet", frequency_role="low", legend_mode="none"),
+            TemplateChartSlot("radiation_mid", 5, "polar_combined_triplet", frequency_role="mid", legend_mode="none"),
+            TemplateChartSlot("radiation_high", 6, "polar_combined_triplet", frequency_role="high", legend_mode="none"),
+        ),
+        slot_order="rows",
+    ),
+    technical_layout_mode="netqui_1pol",
+)
+
 RFE_TEMPLATE_MANIFEST = TemplateManifest(
     key="rfe",
     chart_layout=TemplateChartManifest(
@@ -121,6 +141,16 @@ NETQUI_TEMPLATE_ADAPTER = DatasheetTemplateAdapter(
     manifest=NETQUI_TEMPLATE_MANIFEST,
 )
 
+NETQUI_1POL_TEMPLATE_ADAPTER = DatasheetTemplateAdapter(
+    key="netqui_1pol",
+    display_name="Netqui 1Pol Datasheet",
+    filename_tokens=("netqui - 1pol", "netqui-1pol", "netqui_1pol"),
+    required_text_markers=("ANTENNA GAIN", "ANTENNA BEAMWIDTH", "RADIATION PATTERNS"),
+    chart_layout_mode="netqui_1pol",
+    technical_layout_mode="netqui_1pol",
+    manifest=NETQUI_1POL_TEMPLATE_MANIFEST,
+)
+
 RFE_TEMPLATE_ADAPTER = DatasheetTemplateAdapter(
     key="rfe",
     display_name="RFE Datasheet",
@@ -129,6 +159,7 @@ RFE_TEMPLATE_ADAPTER = DatasheetTemplateAdapter(
 )
 
 KNOWN_TEMPLATE_ADAPTERS = (
+    NETQUI_1POL_TEMPLATE_ADAPTER,
     NETQUI_TEMPLATE_ADAPTER,
     RFE_TEMPLATE_ADAPTER,
 )

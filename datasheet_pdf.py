@@ -531,6 +531,37 @@ def _redraw_split_table_separators(page: fitz.Page) -> None:
         )
 
 
+def _redraw_netqui_table_separators(page: fitz.Page, layout_mode: str) -> None:
+    if layout_mode not in {"netqui", "netqui_1pol"}:
+        return
+    slots = _technical_data_row_slots(page, layout_mode=layout_mode)
+    if not slots:
+        return
+
+    line_color = (0.13669031858444214, 0.12195010483264923, 0.1252918243408203)
+    seen: set[tuple[float, float, float]] = set()
+    for slot in slots:
+        line_left = 36.638 if slot.label_rect.x0 < 280.0 else 285.0
+        line_right = slot.table_right
+        key = (round(line_left, 3), round(slot.row_bottom, 3), round(line_right, 3))
+        if key in seen:
+            continue
+        seen.add(key)
+        page.draw_line(
+            (line_left, slot.row_bottom),
+            (line_right, slot.row_bottom),
+            color=line_color,
+            width=0.25,
+            overlay=True,
+        )
+
+
+def _redraw_template_table_separators(page: fitz.Page, adapter: DatasheetTemplateAdapter | None) -> None:
+    _redraw_split_table_separators(page)
+    layout_mode = adapter.technical_layout_mode if adapter is not None else "auto"
+    _redraw_netqui_table_separators(page, layout_mode)
+
+
 def _technical_data_row_slots(page: fitz.Page, *, layout_mode: str = "auto") -> list[TechnicalDataRowSlot]:
     spans = _extract_page_spans(page)
     region = _technical_data_region(page, spans) if layout_mode in {"auto", "generic"} else None
@@ -596,7 +627,7 @@ def _technical_data_row_slots(page: fitz.Page, *, layout_mode: str = "auto") -> 
             )
         return slots
 
-    netqui_bounds = _netqui_technical_data_bounds(page, spans) if layout_mode in {"auto", "netqui"} else None
+    netqui_bounds = _netqui_technical_data_bounds(page, spans) if layout_mode in {"auto", "netqui", "netqui_1pol"} else None
     if netqui_bounds is None:
         return []
 
@@ -1583,6 +1614,30 @@ def _find_manifest_polar_assets(
     return by_plane["azimuth"][selected], by_plane["elevation"][selected]
 
 
+def _manifest_combined_polar_assets(artifact_manifest: dict[str, object] | None) -> dict[float, Path]:
+    if not isinstance(artifact_manifest, dict):
+        return {}
+    charts = artifact_manifest.get("charts")
+    if not isinstance(charts, dict):
+        return {}
+    records = charts.get("polar_combined")
+    if not isinstance(records, list):
+        return {}
+
+    assets: dict[float, Path] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        try:
+            frequency = float(record.get("frequency_ghz"))
+        except (TypeError, ValueError):
+            continue
+        path = _manifest_svg_path(record)
+        if path is not None:
+            assets.setdefault(frequency, path)
+    return assets
+
+
 def _find_optional_plot_asset(output: Path, extract_workbook: Path, suffix: str) -> Path | None:
     try:
         return _find_plot_asset(output, extract_workbook, suffix)
@@ -1611,6 +1666,14 @@ def _extract_frequency_ghz(text: str) -> float | None:
 
 def _parse_frequency_from_polar_asset(path: Path, plane: str) -> float | None:
     pattern = rf"[-_]polar[-_]{re.escape(plane)}[-_](\d+(?:\.\d+)?)[-_]GHz\.svg$"
+    match = re.search(pattern, path.name, re.IGNORECASE)
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def _parse_frequency_from_combined_polar_asset(path: Path) -> float | None:
+    pattern = r"[-_]polar[-_](\d+(?:\.\d+)?)[-_]GHz[-_]combined\.svg$"
     match = re.search(pattern, path.name, re.IGNORECASE)
     if not match:
         return None
@@ -1692,6 +1755,72 @@ def _find_polar_plot_assets(
         template_frequency = sum(common_frequencies) / len(common_frequencies)
     selected_frequency = min(common_frequencies, key=lambda value: (abs(value - template_frequency), value))
     return plane_assets["azimuth"][selected_frequency], plane_assets["elevation"][selected_frequency]
+
+
+def _frequency_triplet_targets(extract_workbook: Path) -> tuple[float, float, float]:
+    ffs_summary = _load_sheet(extract_workbook, "ffs_summary")
+    min_values = [
+        value
+        for value in (_as_float(item) for item in ffs_summary.get("freq_min_GHz", []))
+        if value is not None
+    ]
+    max_values = [
+        value
+        for value in (_as_float(item) for item in ffs_summary.get("freq_max_GHz", []))
+        if value is not None
+    ]
+    if not min_values or not max_values:
+        raise ValueError("Workbook is missing frequency range values needed for Netqui 1Pol radiation plots.")
+    fmin = min(min_values)
+    fmax = max(max_values)
+    return fmin, (fmin + fmax) / 2.0, fmax
+
+
+def _select_unique_frequency_triplet(assets: dict[float, Path], targets: tuple[float, float, float]) -> dict[str, Path]:
+    if len(assets) < 3:
+        raise ValueError("Netqui 1Pol requires at least three combined polar radiation plot frequencies.")
+
+    selected: dict[str, Path] = {}
+    used: set[float] = set()
+    for role, target in zip(("low", "mid", "high"), targets):
+        remaining = [frequency for frequency in assets if frequency not in used]
+        if not remaining:
+            break
+        frequency = min(remaining, key=lambda value: (abs(value - target), value))
+        used.add(frequency)
+        selected[role] = assets[frequency]
+    if set(selected) != {"low", "mid", "high"}:
+        raise ValueError("Netqui 1Pol could not select three unique combined polar radiation plots.")
+    return selected
+
+
+def _find_combined_polar_triplet_assets(
+    output: Path,
+    extract_workbook: Path,
+    artifact_manifest: dict[str, object] | None = None,
+) -> dict[str, Path]:
+    assets = _manifest_combined_polar_assets(artifact_manifest)
+    checked: list[Path] = []
+    if not assets:
+        for directory in _candidate_dirs(output, extract_workbook):
+            for prefix in _candidate_prefixes(output, extract_workbook):
+                combined_dir = directory / "polar_combined"
+                for pattern in (
+                    f"{prefix}-polar-*-GHz-combined.svg",
+                    f"{prefix}_polar_*_GHz_combined.svg",
+                ):
+                    for candidate in sorted(combined_dir.glob(pattern)):
+                        checked.append(candidate)
+                        frequency = _parse_frequency_from_combined_polar_asset(candidate)
+                        if frequency is not None:
+                            assets.setdefault(frequency, candidate)
+    if not assets:
+        checked_list = ", ".join(str(path) for path in checked) if checked else "none"
+        raise ValueError(
+            "Missing required combined polar radiation plot assets for Netqui 1Pol. "
+            f"Rerun Plots only for this project. Checked: {checked_list}"
+        )
+    return _select_unique_frequency_triplet(assets, _frequency_triplet_targets(extract_workbook))
 
 
 def _beamwidth_polarization_suffixes(extract_workbook: Path) -> list[str]:
@@ -1998,6 +2127,11 @@ def _manifest_slot_asset(
     if slot_spec.asset_key in {"polar_azimuth", "polar_elevation"}:
         azimuth_asset, elevation_asset = _find_polar_plot_assets(page, output, extract_workbook, spans, artifact_manifest=artifact_manifest)
         return azimuth_asset if slot_spec.asset_key == "polar_azimuth" else elevation_asset
+    if slot_spec.asset_key == "polar_combined_triplet":
+        role = str(slot_spec.frequency_role or "").strip().lower()
+        if role not in {"low", "mid", "high"}:
+            raise ValueError(f"Template chart slot '{slot_spec.kind}' is missing a combined polar frequency role.")
+        return _find_combined_polar_triplet_assets(output, extract_workbook, artifact_manifest=artifact_manifest)[role]
     raise ValueError(f"Unknown template chart asset key '{slot_spec.asset_key}'.")
 
 
@@ -2385,7 +2519,7 @@ def build_datasheet_pdf(
             text = replacements[label]
             _insert_replacement_slot_text(page, slot, text, registered_fonts=registered_fonts)
 
-        _redraw_split_table_separators(doc[0])
+        _redraw_template_table_separators(doc[0], adapter)
         emit_progress("datasheet", next_step, total_steps, "Embedding chart assets")
         _replace_chart_images(
             doc,
