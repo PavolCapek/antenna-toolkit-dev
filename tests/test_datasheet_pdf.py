@@ -84,6 +84,13 @@ class DatasheetPdfTests(unittest.TestCase):
         self.combined_mid_legend_svg = self.polar_combined_dir / "extract-polar-6.000-GHz-combined-legend.svg"
         self.combined_high_svg = self.polar_combined_dir / "extract-polar-7.125-GHz-combined.svg"
         self.combined_high_legend_svg = self.polar_combined_dir / "extract-polar-7.125-GHz-combined-legend.svg"
+        self.polar_combined_eh_dir = self.polar_combined_dir / "e-h-plane"
+        self.combined_eh_low_svg = self.polar_combined_eh_dir / "extract-polar-4.900-GHz-e-h-plane-combined.svg"
+        self.combined_eh_low_legend_svg = self.polar_combined_eh_dir / "extract-polar-4.900-GHz-e-h-plane-combined-legend.svg"
+        self.combined_eh_mid_svg = self.polar_combined_eh_dir / "extract-polar-6.000-GHz-e-h-plane-combined.svg"
+        self.combined_eh_mid_legend_svg = self.polar_combined_eh_dir / "extract-polar-6.000-GHz-e-h-plane-combined-legend.svg"
+        self.combined_eh_high_svg = self.polar_combined_eh_dir / "extract-polar-7.125-GHz-e-h-plane-combined.svg"
+        self.combined_eh_high_legend_svg = self.polar_combined_eh_dir / "extract-polar-7.125-GHz-e-h-plane-combined-legend.svg"
         self.page2_gain_rect = fitz.Rect(24.0, 120.0, 324.0, 240.0)
         self.page2_beamwidth_rect = fitz.Rect(24.0, 280.0, 324.0, 400.0)
         self.page2_azimuth_rect = fitz.Rect(24.0, 460.0, 164.0, 600.0)
@@ -115,6 +122,12 @@ class DatasheetPdfTests(unittest.TestCase):
         self._write_svg(self.combined_mid_legend_svg, "#ffffff", width=150, height=70)
         self._write_svg(self.combined_high_svg, "#aa44dd", width=140, height=140)
         self._write_svg(self.combined_high_legend_svg, "#ffffff", width=150, height=70)
+        self._write_svg(self.combined_eh_low_svg, "#1188ee", width=140, height=140)
+        self._write_svg(self.combined_eh_low_legend_svg, "#ffffff", width=150, height=70)
+        self._write_svg(self.combined_eh_mid_svg, "#228866", width=140, height=140)
+        self._write_svg(self.combined_eh_mid_legend_svg, "#ffffff", width=150, height=70)
+        self._write_svg(self.combined_eh_high_svg, "#8844dd", width=140, height=140)
+        self._write_svg(self.combined_eh_high_legend_svg, "#ffffff", width=150, height=70)
         self._write_template_pdf()
         self._write_extract_workbook()
 
@@ -1060,6 +1073,11 @@ class DatasheetPdfTests(unittest.TestCase):
                 build_asset_record(self.combined_mid_svg, legend_path=self.combined_mid_legend_svg, frequency_ghz=6.0),
                 build_asset_record(self.combined_high_svg, legend_path=self.combined_high_legend_svg, frequency_ghz=7.125),
             ],
+            polar_combined_planes=[
+                build_asset_record(self.combined_eh_low_svg, legend_path=self.combined_eh_low_legend_svg, frequency_ghz=4.9, plane_mode="e-h-plane"),
+                build_asset_record(self.combined_eh_mid_svg, legend_path=self.combined_eh_mid_legend_svg, frequency_ghz=6.0, plane_mode="e-h-plane"),
+                build_asset_record(self.combined_eh_high_svg, legend_path=self.combined_eh_high_legend_svg, frequency_ghz=7.125, plane_mode="e-h-plane"),
+            ],
         )
         manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
 
@@ -1078,12 +1096,12 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(by_kind["vswr"].asset_path, self.vswr_svg)
         self.assertEqual(by_kind["beamwidth_e_plane"].asset_path, self.beamwidth_e_plane_h_svg)
         self.assertEqual(by_kind["beamwidth_h_plane"].asset_path, self.beamwidth_h_plane_h_svg)
-        self.assertEqual(by_kind["radiation_low"].asset_path, self.combined_low_svg)
-        self.assertEqual(by_kind["radiation_mid"].asset_path, self.combined_mid_svg)
-        self.assertEqual(by_kind["radiation_high"].asset_path, self.combined_high_svg)
-        self.assertEqual(by_kind["radiation_low"].legend_asset_path, self.combined_low_legend_svg)
-        self.assertEqual(by_kind["radiation_mid"].legend_asset_path, self.combined_mid_legend_svg)
-        self.assertEqual(by_kind["radiation_high"].legend_asset_path, self.combined_high_legend_svg)
+        self.assertEqual(by_kind["radiation_low"].asset_path, self.combined_eh_low_svg)
+        self.assertEqual(by_kind["radiation_mid"].asset_path, self.combined_eh_mid_svg)
+        self.assertEqual(by_kind["radiation_high"].asset_path, self.combined_eh_high_svg)
+        self.assertEqual(by_kind["radiation_low"].legend_asset_path, self.combined_eh_low_legend_svg)
+        self.assertEqual(by_kind["radiation_mid"].legend_asset_path, self.combined_eh_mid_legend_svg)
+        self.assertEqual(by_kind["radiation_high"].legend_asset_path, self.combined_eh_high_legend_svg)
         self.assertLess(by_kind["radiation_low"].rect.y1, by_kind["radiation_low"].legend_rect.y0)
 
     def test_netqui_1pol_frequency_triplet_uses_closest_unique_combined_assets(self) -> None:

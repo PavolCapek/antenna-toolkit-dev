@@ -1614,13 +1614,16 @@ def _find_manifest_polar_assets(
     return by_plane["azimuth"][selected], by_plane["elevation"][selected]
 
 
-def _manifest_combined_polar_assets(artifact_manifest: dict[str, object] | None) -> dict[float, Path]:
+def _manifest_combined_polar_assets(
+    artifact_manifest: dict[str, object] | None,
+    chart_key: str = "polar_combined",
+) -> dict[float, Path]:
     if not isinstance(artifact_manifest, dict):
         return {}
     charts = artifact_manifest.get("charts")
     if not isinstance(charts, dict):
         return {}
-    records = charts.get("polar_combined")
+    records = charts.get(chart_key)
     if not isinstance(records, list):
         return {}
 
@@ -1673,7 +1676,7 @@ def _parse_frequency_from_polar_asset(path: Path, plane: str) -> float | None:
 
 
 def _parse_frequency_from_combined_polar_asset(path: Path) -> float | None:
-    pattern = r"[-_]polar[-_](\d+(?:\.\d+)?)[-_]GHz[-_]combined\.svg$"
+    pattern = r"[-_]polar[-_](\d+(?:\.\d+)?)[-_]GHz(?:[-_]e[-_]h[-_]plane)?[-_]combined\.svg$"
     match = re.search(pattern, path.name, re.IGNORECASE)
     if not match:
         return None
@@ -1798,20 +1801,30 @@ def _find_combined_polar_triplet_assets(
     output: Path,
     extract_workbook: Path,
     artifact_manifest: dict[str, object] | None = None,
+    *,
+    chart_key: str = "polar_combined",
 ) -> dict[str, Path]:
-    assets = _manifest_combined_polar_assets(artifact_manifest)
+    assets = _manifest_combined_polar_assets(artifact_manifest, chart_key=chart_key)
     checked: list[Path] = []
     if not assets:
         for directory in _candidate_dirs(output, extract_workbook):
             for prefix in _candidate_prefixes(output, extract_workbook):
-                combined_dirs = (
-                    directory / "polar_combined" / "azimuth-elevation",
-                    directory / "polar_combined",
-                )
-                for pattern in (
-                    f"{prefix}-polar-*-GHz-combined.svg",
-                    f"{prefix}_polar_*_GHz_combined.svg",
-                ):
+                if chart_key == "polar_combined_planes":
+                    combined_dirs = (directory / "polar_combined" / "e-h-plane",)
+                    patterns = (
+                        f"{prefix}-polar-*-GHz-e-h-plane-combined.svg",
+                        f"{prefix}_polar_*_GHz_e_h_plane_combined.svg",
+                    )
+                else:
+                    combined_dirs = (
+                        directory / "polar_combined" / "azimuth-elevation",
+                        directory / "polar_combined",
+                    )
+                    patterns = (
+                        f"{prefix}-polar-*-GHz-combined.svg",
+                        f"{prefix}_polar_*_GHz_combined.svg",
+                    )
+                for pattern in patterns:
                     for combined_dir in combined_dirs:
                         checked.append(combined_dir / pattern)
                         for candidate in sorted(combined_dir.glob(pattern)):
@@ -2151,6 +2164,16 @@ def _manifest_slot_asset(
         if role not in {"low", "mid", "high"}:
             raise ValueError(f"Template chart slot '{slot_spec.kind}' is missing a combined polar frequency role.")
         return _find_combined_polar_triplet_assets(output, extract_workbook, artifact_manifest=artifact_manifest)[role]
+    if slot_spec.asset_key == "polar_combined_planes_triplet":
+        role = str(slot_spec.frequency_role or "").strip().lower()
+        if role not in {"low", "mid", "high"}:
+            raise ValueError(f"Template chart slot '{slot_spec.kind}' is missing a combined E/H polar frequency role.")
+        return _find_combined_polar_triplet_assets(
+            output,
+            extract_workbook,
+            artifact_manifest=artifact_manifest,
+            chart_key="polar_combined_planes",
+        )[role]
     raise ValueError(f"Unknown template chart asset key '{slot_spec.asset_key}'.")
 
 
