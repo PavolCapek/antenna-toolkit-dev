@@ -459,6 +459,69 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.current_preset_name(), "Preset B")
         self.assertEqual(self.window.beam_smooth.value(), 11)
 
+    def test_switching_presets_prompts_to_save_or_cancel_preset_changes(self) -> None:
+        preset_a = dict(self.window.collect_preset_values())
+        preset_b = dict(self.window.collect_preset_values())
+        preset_a["smooth"] = 5
+        preset_b["smooth"] = 11
+        self.window.global_presets = {"Preset A": preset_a, "Preset B": preset_b}
+        self.window.project_active_preset = "Preset A"
+        self.window.global_active_preset = "Preset A"
+        self.window._persist_global_presets()
+        self.window.refresh_preset_list(select_name="Preset A")
+        self.window.apply_preset_values(preset_a)
+        self.window.save_project_changes()
+        self.app.processEvents()
+
+        self.window.beam_smooth.setValue(9)
+        self.app.processEvents()
+        self.assertTrue(self.window.has_unsaved_preset_changes())
+
+        with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Cancel):
+            self.window.preset_combo.setCurrentIndex(self.window.preset_combo.findData("Preset B"))
+        self.app.processEvents()
+
+        self.assertEqual(self.window.current_preset_name(), "Preset A")
+        self.assertEqual(self.window.beam_smooth.value(), 9)
+        self.assertEqual(self.window.global_presets["Preset A"]["smooth"], 5)
+
+        with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Save):
+            self.window.preset_combo.setCurrentIndex(self.window.preset_combo.findData("Preset B"))
+        self.app.processEvents()
+
+        self.assertEqual(self.window.global_presets["Preset A"]["smooth"], 9)
+        self.assertEqual(self.window.current_preset_name(), "Preset B")
+        self.assertEqual(self.window.beam_smooth.value(), 11)
+
+    def test_switching_projects_can_save_dirty_preset_and_project(self) -> None:
+        preset_a = dict(self.window.collect_preset_values())
+        preset_a["smooth"] = 5
+        self.window.global_presets = {"Preset A": preset_a}
+        self.window.project_active_preset = "Preset A"
+        self.window.global_active_preset = "Preset A"
+        self.window._persist_global_presets()
+        self.window.refresh_preset_list(select_name="Preset A")
+        self.window.apply_preset_values(preset_a)
+        self.window.save_project_changes()
+        self.app.processEvents()
+
+        second = ProjectRecord(name="Second Project", slug="second_project")
+        self.window.project_store.save_project(second)
+        self.window.refresh_project_list(select_slug=self.project.slug)
+        self.window.beam_smooth.setValue(9)
+        self.window._add_ffs_files(["Input data/a.ffs"])
+        self.app.processEvents()
+
+        with mock.patch("antenna_toolkit_studio.QMessageBox.question", side_effect=[QMessageBox.Save, QMessageBox.Save]):
+            self.window.project_combo.setCurrentIndex(self.window.project_combo.findData(second.slug))
+        self.app.processEvents()
+
+        saved_first = self.window.project_store.load_project(self.project.slug)
+        self.assertEqual(self.window.global_presets["Preset A"]["smooth"], 9)
+        self.assertEqual(saved_first.settings["smooth"], 9)
+        self.assertEqual(saved_first.ffs_items[0]["path"], "Input data/a.ffs")
+        self.assertEqual(self.window.active_project_slug, second.slug)
+
     def test_exit_prompt_can_save_or_cancel_dirty_project(self) -> None:
         self.window._add_ffs_files(["Input data/a.ffs"])
         self.app.processEvents()

@@ -933,6 +933,8 @@ class ModernMainWindow(QMainWindow):
         self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
         self._saved_project_signature = ""
         self._reverting_project_selection = False
+        self._reverting_preset_selection = False
+        self._suppress_project_selection_prompt = False
         self.active_project_slug = ""
         self.active_project_name = ""
         self.preset_store = PresetFileStore(preset_storage_dir(STATE_FILE), legacy_preset_storage_dirs(STATE_FILE))
@@ -2016,17 +2018,59 @@ class ModernMainWindow(QMainWindow):
             return False
         return self._project_signature() != self._saved_project_signature
 
+    def _active_preset_for_dirty_check(self) -> str:
+        return str(self.project_active_preset or self.global_active_preset or self.current_preset_name()).strip()
+
+    def has_unsaved_preset_changes(self) -> bool:
+        if self._loading_project:
+            return False
+        name = self._active_preset_for_dirty_check()
+        if not name:
+            return False
+        preset = self.global_presets.get(name)
+        return isinstance(preset, dict) and preset != self.collect_preset_values()
+
     def _mark_project_dirty(self) -> None:
         if self._loading_project or not self.active_project_slug:
             return
         self.refresh_derived_paths()
+
+    def _save_active_preset(self, *, refresh: bool = False) -> bool:
+        name = self._active_preset_for_dirty_check()
+        if not name or name not in self.global_presets:
+            return False
+        self.global_presets[name] = self.collect_preset_values()
+        self.project_active_preset = name
+        self.global_active_preset = name
+        self._persist_global_presets()
+        self._mark_project_dirty()
+        if refresh:
+            self.refresh_preset_list(select_name=name)
+        return True
+
+    def _confirm_pending_preset_changes(self, action: str) -> bool:
+        if not self.has_unsaved_preset_changes():
+            return True
+        name = self._active_preset_for_dirty_check()
+        answer = QMessageBox.question(
+            self,
+            "Unsaved Preset Changes",
+            f"Preset '{name}' has unsaved changes. Save before {action}?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+        if answer == QMessageBox.Cancel:
+            return False
+        if answer == QMessageBox.Save:
+            self._save_active_preset(refresh=False)
+        return True
 
     def _confirm_pending_project_changes(self, action: str) -> bool:
         if not self.has_unsaved_project_changes():
             return True
         answer = QMessageBox.question(
             self,
-            "Unsaved Changes",
+            "Unsaved Project Changes",
             f"The current project has unsaved changes. Save before {action}?",
             QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
             QMessageBox.Save,
@@ -2035,6 +2079,13 @@ class ModernMainWindow(QMainWindow):
             return False
         if answer == QMessageBox.Save:
             self.save_active_project()
+        return True
+
+    def _confirm_pending_changes(self, action: str, *, include_preset: bool = True, include_project: bool = True) -> bool:
+        if include_preset and not self._confirm_pending_preset_changes(action):
+            return False
+        if include_project and not self._confirm_pending_project_changes(action):
+            return False
         return True
 
     def _save_project_if_dirty(self) -> None:
@@ -3602,7 +3653,7 @@ class ModernMainWindow(QMainWindow):
                 f"Current controls differ from preset '{self.project_active_preset}'. Save to update it or create a new preset."
             )
 
-    def refresh_project_list(self, select_slug: str = "") -> None:
+    def refresh_project_list(self, select_slug: str = "", *, confirm_changes: bool = False) -> None:
         projects = self.project_store.list_projects()
         self.project_combo.blockSignals(True)
         self.project_combo.clear()
@@ -3614,13 +3665,22 @@ class ModernMainWindow(QMainWindow):
             index = 1 if select_slug else 0
         self.project_combo.setCurrentIndex(max(0, index))
         self.project_combo.blockSignals(False)
-        self.on_project_selected(self.project_combo.currentIndex())
+        previous = self._suppress_project_selection_prompt
+        self._suppress_project_selection_prompt = not confirm_changes
+        try:
+            self.on_project_selected(self.project_combo.currentIndex())
+        finally:
+            self._suppress_project_selection_prompt = previous
 
     def on_project_selected(self, _index: int) -> None:
         if self._reverting_project_selection:
             return
         slug = str(self.project_combo.currentData() or "")
-        if slug != self.active_project_slug and not self._confirm_pending_project_changes("switching projects"):
+        if (
+            slug != self.active_project_slug
+            and not self._suppress_project_selection_prompt
+            and not self._confirm_pending_changes("switching projects")
+        ):
             self._reverting_project_selection = True
             self.project_combo.blockSignals(True)
             restore_index = self.project_combo.findData(self.active_project_slug)
@@ -3727,6 +3787,8 @@ class ModernMainWindow(QMainWindow):
         self.refresh_derived_paths()
 
     def create_project(self) -> None:
+        if not self._confirm_pending_changes("creating a new project"):
+            return
         seed_ffs = [str(item["path"]) for item in self.collect_ffs_items()]
         suggested_name = deduce_project_name(seed_ffs or [self.selected_s2p()]) if (seed_ffs or self.selected_s2p()) else "New project"
         dialog = ProjectDialog(
@@ -4023,7 +4085,19 @@ class ModernMainWindow(QMainWindow):
         if "clip" in values: self.clip_db.setValue(float(values["clip"]))
 
     def on_preset_selected(self, _text: str) -> None:
+        if self._reverting_preset_selection or self._loading_project:
+            return
         name = self.current_preset_name()
+        previous_name = self._active_preset_for_dirty_check()
+        if name != previous_name and not self._confirm_pending_changes("switching presets", include_project=False):
+            self._reverting_preset_selection = True
+            self.preset_combo.blockSignals(True)
+            restore_index = self.preset_combo.findData(previous_name)
+            self.preset_combo.setCurrentIndex(restore_index if restore_index >= 0 else 0)
+            self.preset_combo.blockSignals(False)
+            self._reverting_preset_selection = False
+            self._update_preset_action_state()
+            return
         self.project_active_preset = name
         self.global_active_preset = name if name in self.global_presets else ""
         self._persist_global_presets()
@@ -4057,12 +4131,7 @@ class ModernMainWindow(QMainWindow):
         if not name:
             self.create_preset()
             return
-        self.global_presets[name] = self.collect_preset_values()
-        self.project_active_preset = name
-        self.global_active_preset = name
-        self._persist_global_presets()
-        self._mark_project_dirty()
-        self.refresh_preset_list(select_name=name)
+        self._save_active_preset(refresh=True)
 
     def rename_preset(self) -> None:
         name = self.current_preset_name()
@@ -5086,7 +5155,7 @@ class ModernMainWindow(QMainWindow):
             pass
 
     def closeEvent(self, e):
-        if not self._confirm_pending_project_changes("exiting"):
+        if not self._confirm_pending_changes("exiting"):
             e.ignore()
             return
         self._closing_app = True
