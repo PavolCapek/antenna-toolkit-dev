@@ -7,8 +7,8 @@ from pathlib import Path
 import fitz
 import pandas as pd
 
-from datasheet_artifacts import artifact_manifest_path, build_asset_record, load_artifact_manifest, update_artifact_manifest
-from datasheet_service import build_render_context
+from datasheet.artifacts import artifact_manifest_path, build_asset_record, load_artifact_manifest, update_artifact_manifest
+from datasheet.service import build_render_context
 
 
 class DatasheetPipelineTests(unittest.TestCase):

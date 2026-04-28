@@ -35,7 +35,7 @@ from plot import (
     STACKED_LEGEND_ROW_SEP,
     export_stacked_line_legend,
 )
-from datasheet_artifacts import build_asset_record, update_artifact_manifest
+from datasheet.artifacts import build_asset_record, update_artifact_manifest
 from legend_utils import apply_legend_labels, parse_legend_labels
 
 # ------------------ global color scheme (kept from gain plot) ------------------

@@ -70,8 +70,8 @@ class ProjectStoreTests(unittest.TestCase):
         self.assertEqual(loaded.active_preset, "Tight")
         self.assertEqual(loaded.ffs_items[0]["port_label"], "Port 1")
         self.assertEqual(loaded.technical_data_file, "Input data/tech.xlsx")
-        self.assertEqual(loaded.settings, {"smooth": 7, "grid_color": "#4b5563"})
-        self.assertEqual(loaded.presets, {"Tight": {"smooth": 7, "grid_color": "#4b5563"}})
+        self.assertEqual(loaded.settings, {})
+        self.assertEqual(loaded.presets, {})
         self.assertEqual(loaded.run_state["stages"]["beam"]["status"], "success")
 
     def test_duplicate_export_and_import_bundle(self) -> None:
@@ -122,8 +122,8 @@ class ProjectStoreTests(unittest.TestCase):
 
         self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA_VERSION)
         self.assertIn("technical_data_file", payload)
-        self.assertIn("settings", payload)
-        self.assertIn("presets", payload)
+        self.assertNotIn("settings", payload)
+        self.assertNotIn("presets", payload)
 
     def test_google_sheet_url_paths_are_preserved(self) -> None:
         url = "https://docs.google.com/spreadsheets/d/sheet123/edit#gid=0"

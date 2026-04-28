@@ -12,7 +12,7 @@
     "gain_ymax": 10.0,
     "gain_y_step": 1.0,
     "beamwidth_ymin": 0.0,
-    "beamwidth_ymax": 120.0,
+    "beamwidth_ymax": 180.0,
     "beamwidth_y_step": 10.0,
     "beam_eff_ymin": 0.0,
     "beam_eff_ymax": 100.0,

@@ -35,7 +35,21 @@ from project_store import (
     sanitize_project_slug, serialize_workspace_path, utc_now_iso,
 )
 from legend_utils import detect_polarization
-from datasheet_artifacts import artifact_manifest_path
+from pipeline.commands import build_plot_command, build_vswr_command
+from pipeline.settings import (
+    DEFAULT_DATASHEET_TEMPLATE_NAME,
+    DEFAULT_PDF_METADATA_AUTHOR,
+    PresetSettings,
+    default_preset_settings,
+)
+from pipeline.stages import (
+    stage_generated_directories,
+    stage_is_applicable,
+    stage_output_files,
+    stage_settings_snapshot,
+    stage_stale_detail,
+    stage_tool_versions,
+)
 
 APP_TITLE = "Antenna Toolkit Studio"
 STATE_FILE = resolve_state_file(".nova_qt_studio_state.json", THIS_DIR / ".nova_qt_studio_state.json")
@@ -59,12 +73,10 @@ STAGE_LABELS = dict(STAGE_DEFINITIONS)
 PLOT_ASSET_STYLE_VERSION = 3
 DATASHEET_RENDER_VERSION = 2
 DATASHEET_TEMPLATE_DIR = THIS_DIR / "Templates"
-DEFAULT_DATASHEET_TEMPLATE_NAME = "Datasheet - RFE.pdf"
 LEGACY_DATASHEET_TEMPLATE_ALIASES = {
     "Datasheet.pdf": "Datasheet - RFE.pdf",
     "Datasheet Netqui.pdf": "Datasheet - Netqui.pdf",
 }
-DEFAULT_PDF_METADATA_AUTHOR = "RF elements"
 GOOGLE_SHEETS_OAUTH_CLIENT_KEY = "google_sheets_oauth_client_json"
 GOOGLE_SHEETS_TOKEN_FILENAME = "google_sheets_token.json"
 GOOGLE_SHEETS_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -116,6 +128,15 @@ THEME_STYLES = {
         "badge_bg": "rgba(211,116,54,0.10)",
         "badge_border": "#e2b290",
         "badge_text": "#7c4929",
+        "state_saved_bg": "rgba(47,158,91,0.13)",
+        "state_saved_border": "#84c89f",
+        "state_saved_text": "#17633f",
+        "state_unsaved_bg": "rgba(230,139,34,0.16)",
+        "state_unsaved_border": "#e0a15a",
+        "state_unsaved_text": "#8a4a00",
+        "state_neutral_bg": "rgba(95,113,130,0.12)",
+        "state_neutral_border": "#c2ccd6",
+        "state_neutral_text": "#5f7182",
         "eyebrow_color": "#19706a",
     },
     "dark": {
@@ -156,6 +177,15 @@ THEME_STYLES = {
         "badge_bg": "rgba(241,154,91,0.16)",
         "badge_border": "#8b5630",
         "badge_text": "#ffe0cb",
+        "state_saved_bg": "rgba(74,194,120,0.18)",
+        "state_saved_border": "#3f8f60",
+        "state_saved_text": "#b8f0c8",
+        "state_unsaved_bg": "rgba(245,166,35,0.20)",
+        "state_unsaved_border": "#9a6a22",
+        "state_unsaved_text": "#ffd28a",
+        "state_neutral_bg": "rgba(159,178,194,0.12)",
+        "state_neutral_border": "#425464",
+        "state_neutral_text": "#b4c3cf",
         "eyebrow_color": "#72ccb4",
     },
     "graphite": {
@@ -196,6 +226,15 @@ THEME_STYLES = {
         "badge_bg": "rgba(117,174,218,0.16)",
         "badge_border": "#53789b",
         "badge_text": "#dbefff",
+        "state_saved_bg": "rgba(74,194,120,0.18)",
+        "state_saved_border": "#4f9168",
+        "state_saved_text": "#baf0cb",
+        "state_unsaved_bg": "rgba(245,166,35,0.18)",
+        "state_unsaved_border": "#9c722c",
+        "state_unsaved_text": "#ffd58e",
+        "state_neutral_bg": "rgba(165,175,187,0.12)",
+        "state_neutral_border": "#4a5360",
+        "state_neutral_text": "#b6c0cb",
         "eyebrow_color": "#87c5d4",
     },
     "sage": {
@@ -236,6 +275,15 @@ THEME_STYLES = {
         "badge_bg": "rgba(75,130,112,0.12)",
         "badge_border": "#9ebcae",
         "badge_text": "#2f5a4d",
+        "state_saved_bg": "rgba(47,158,91,0.13)",
+        "state_saved_border": "#82bf99",
+        "state_saved_text": "#1e6240",
+        "state_unsaved_bg": "rgba(215,129,31,0.15)",
+        "state_unsaved_border": "#d59c56",
+        "state_unsaved_text": "#804600",
+        "state_neutral_bg": "rgba(101,124,116,0.12)",
+        "state_neutral_border": "#c1d0c6",
+        "state_neutral_text": "#657c74",
         "eyebrow_color": "#2f7863",
     },
     "sepia": {
@@ -276,6 +324,15 @@ THEME_STYLES = {
         "badge_bg": "rgba(166,97,47,0.12)",
         "badge_border": "#c89d76",
         "badge_text": "#7a431f",
+        "state_saved_bg": "rgba(47,158,91,0.12)",
+        "state_saved_border": "#8ab986",
+        "state_saved_text": "#28623b",
+        "state_unsaved_bg": "rgba(214,125,28,0.16)",
+        "state_unsaved_border": "#c9904d",
+        "state_unsaved_text": "#7b4300",
+        "state_neutral_bg": "rgba(122,105,88,0.12)",
+        "state_neutral_border": "#d2bea5",
+        "state_neutral_text": "#7a6958",
         "eyebrow_color": "#896038",
     },
 }
@@ -1212,17 +1269,9 @@ class ModernMainWindow(QMainWindow):
         self.project_health.setObjectName("helper")
         self.project_health.setWordWrap(True)
         project_card.body.addWidget(self.project_health)
-        badge_grid = QGridLayout()
-        badge_grid.setContentsMargins(0, 0, 0, 0)
-        badge_grid.setHorizontalSpacing(8)
-        badge_grid.setVerticalSpacing(8)
-        self.count_badge = QLabel("0 far-field files")
-        self.count_badge.setObjectName("summaryBadge")
-        self.preset_badge = QLabel("Preset: none")
-        self.preset_badge.setObjectName("summaryBadge")
-        badge_grid.addWidget(self.count_badge, 0, 0)
-        badge_grid.addWidget(self.preset_badge, 0, 1)
-        project_card.body.addLayout(badge_grid)
+        self.project_save_state_indicator = QLabel("No project selected")
+        self.project_save_state_indicator.setObjectName("saveStateIndicator")
+        project_card.body.addWidget(self.project_save_state_indicator, 0, Qt.AlignLeft)
 
         command_left = QWidget()
         self.command_left = command_left
@@ -1314,6 +1363,9 @@ class ModernMainWindow(QMainWindow):
         self.preset_state_label.setObjectName("helper")
         self.preset_state_label.setWordWrap(True)
         preset_card.body.addWidget(self.preset_state_label)
+        self.preset_save_state_indicator = QLabel("No preset selected")
+        self.preset_save_state_indicator.setObjectName("saveStateIndicator")
+        preset_card.body.addWidget(self.preset_save_state_indicator, 0, Qt.AlignLeft)
         self.preset_new_button = QPushButton("New"); self.preset_new_button.clicked.connect(self.create_preset)
         self.preset_save_button = QPushButton("Save"); self.preset_save_button.clicked.connect(self.save_preset)
         self.preset_new_button.setToolTip("Create a new preset from the current GUI settings. Use Save project to persist it.")
@@ -1934,6 +1986,8 @@ class ModernMainWindow(QMainWindow):
         self.rings.setText("0,-7.5,-15,-22.5,-30")
         self.angle_step.setValue(30)
         self.clip_db.setValue(-30.0)
+        if self.global_active_preset in self.global_presets:
+            self.apply_preset_values(self.global_presets.get(self.global_active_preset, {}))
         self.workflow_tabs.setCurrentIndex(0)
         self.refresh_preset_list(select_name=self.global_active_preset)
         self.project_combo.blockSignals(True)
@@ -1945,61 +1999,7 @@ class ModernMainWindow(QMainWindow):
         self.refresh_derived_paths()
 
     def _default_project_settings(self) -> dict[str, object]:
-        return {
-            "smooth": 5,
-            "theta": 8.0,
-            "smooth2": 5,
-            "shared_xstep": 0.2,
-            "shared_fmin": 0.0,
-            "shared_fmax": 0.0,
-            "shared_xlog": False,
-            "gain_ymin": 0.0,
-            "gain_ymax": 0.0,
-            "gain_y_step": 0.0,
-            "beamwidth_ymin": 0.0,
-            "beamwidth_ymax": 0.0,
-            "beamwidth_y_step": 0.0,
-            "beam_eff_ymin": 0.0,
-            "beam_eff_ymax": 0.0,
-            "beam_eff_y_step": 0.0,
-            "vswr_ymin": 1.0,
-            "vswr_ymax": 10.0,
-            "vswr_ystep": 1.0,
-            "vswr_smooth": 5,
-            "grid_color": DEFAULT_GRID_COLOR,
-            "cartesian_grid_line_width": 0.9,
-            "polar_grid_line_width": 0.9,
-            "cartesian_line_width": 2.0,
-            "cartesian_figure_width": 12.0,
-            "cartesian_figure_height": 5.04,
-            "polar_line_width": 2.0,
-            "cartesian_font_size": 10.5,
-            "polar_font_size": 10.5,
-            "cartesian_legend_font_size": 10.5,
-            "polar_legend_font_size": 10.5,
-            "plot_line_1": DEFAULT_LINE_COLORS[0][1],
-            "plot_line_2": DEFAULT_LINE_COLORS[1][1],
-            "polar_azimuth_line_1_color": DEFAULT_LINE_COLORS[0][1],
-            "polar_azimuth_line_1_style": "solid",
-            "polar_azimuth_line_2_color": DEFAULT_LINE_COLORS[1][1],
-            "polar_azimuth_line_2_style": "solid",
-            "polar_elevation_line_1_color": DEFAULT_LINE_COLORS[0][1],
-            "polar_elevation_line_1_style": "dashed",
-            "polar_elevation_line_2_color": DEFAULT_LINE_COLORS[1][1],
-            "polar_elevation_line_2_style": "dashed",
-            "beamwidth_3db_color": DEFAULT_BEAMWIDTH_DB_COLORS[0][1],
-            "beamwidth_6db_color": DEFAULT_BEAMWIDTH_DB_COLORS[1][1],
-            "beamwidth_10db_color": DEFAULT_BEAMWIDTH_DB_COLORS[2][1],
-            "gain_legend_labels": "",
-            "beamwidth_legend_labels": "",
-            "beam_eff_legend_labels": "",
-            "vswr_legend_labels": "",
-            "datasheet_template": DEFAULT_DATASHEET_TEMPLATE_NAME,
-            "pdf_metadata_author": DEFAULT_PDF_METADATA_AUTHOR,
-            "rings": "0,-7.5,-15,-22.5,-30",
-            "angle": 30,
-            "clip": -30.0,
-        }
+        return default_preset_settings()
 
     def _apply_default_project_settings(self) -> None:
         self.apply_preset_values(self._default_project_settings())
@@ -2021,6 +2021,13 @@ class ModernMainWindow(QMainWindow):
     def _active_preset_for_dirty_check(self) -> str:
         return str(self.project_active_preset or self.global_active_preset or self.current_preset_name()).strip()
 
+    def _normalized_preset_values(self, values: dict[str, object] | None) -> dict[str, object]:
+        coerced = PresetSettings.from_mapping(values if isinstance(values, dict) else {}).to_dict()
+        for key in list(coerced):
+            if key.endswith("_color") or key.startswith("plot_line_") or key == "grid_color":
+                coerced[key] = str(coerced[key]).strip().upper()
+        return coerced
+
     def has_unsaved_preset_changes(self) -> bool:
         if self._loading_project:
             return False
@@ -2028,7 +2035,7 @@ class ModernMainWindow(QMainWindow):
         if not name:
             return False
         preset = self.global_presets.get(name)
-        return isinstance(preset, dict) and preset != self.collect_preset_values()
+        return isinstance(preset, dict) and self._normalized_preset_values(preset) != self._normalized_preset_values(self.collect_preset_values())
 
     def _mark_project_dirty(self) -> None:
         if self._loading_project or not self.active_project_slug:
@@ -2043,9 +2050,10 @@ class ModernMainWindow(QMainWindow):
         self.project_active_preset = name
         self.global_active_preset = name
         self._persist_global_presets()
-        self._mark_project_dirty()
         if refresh:
             self.refresh_preset_list(select_name=name)
+        else:
+            self.refresh_derived_paths()
         return True
 
     def _confirm_pending_preset_changes(self, action: str) -> bool:
@@ -2414,6 +2422,21 @@ class ModernMainWindow(QMainWindow):
                 "pill_padding_h": metrics["pill_padding"][1],
             })
 
+    def _set_save_state_indicator(self, label: QLabel, text: str, state: str) -> None:
+        theme = THEME_STYLES.get(self.theme, THEME_STYLES["light"])
+        key = state if state in {"saved", "unsaved", "neutral"} else "neutral"
+        label.setText(text)
+        label.setStyleSheet(
+            "QLabel#saveStateIndicator { "
+            f"background: {theme[f'state_{key}_bg']}; "
+            f"color: {theme[f'state_{key}_text']}; "
+            f"border: 1px solid {theme[f'state_{key}_border']}; "
+            "border-radius: 12px; "
+            "padding: 5px 10px; "
+            "font-weight: 700; "
+            "}"
+        )
+
     def _sync_theme_selector(self):
         if not hasattr(self, "theme_selector"):
             return
@@ -2481,6 +2504,8 @@ class ModernMainWindow(QMainWindow):
         self._sync_theme_selector()
         self._apply_style()
         self._refresh_stage_labels()
+        self.refresh_derived_paths()
+        self._update_preset_action_state()
 
     def toggle_console(self, checked: bool = False):
         self._set_console_visible(checked)
@@ -2544,6 +2569,11 @@ class ModernMainWindow(QMainWindow):
             signal.connect(self.on_project_configuration_changed)
 
     def on_project_configuration_changed(self, *_args) -> None:
+        if self._loading_project:
+            return
+        if self._active_preset_for_dirty_check():
+            self.refresh_derived_paths()
+            return
         self._mark_project_dirty()
 
     def collect_ffs_items(self) -> list[dict[str, object]]:
@@ -2583,50 +2613,14 @@ class ModernMainWindow(QMainWindow):
         return payload
 
     def _stage_settings_snapshot(self, stage_key: str) -> dict[str, object]:
-        values = self.collect_preset_values()
-        setting_keys = {
-            "beam": ["smooth", "theta"],
-            "extract": ["smooth", "theta", "shared_fmin", "shared_fmax"],
-            "datasheet": ["smooth", "theta", "shared_fmin", "shared_fmax", "datasheet_template", "pdf_metadata_author"],
-            "plot": [
-                "smooth2", "shared_xstep", "shared_fmin", "shared_fmax", "shared_xlog",
-                "gain_ymin", "gain_ymax", "gain_y_step",
-                "beamwidth_ymin", "beamwidth_ymax", "beamwidth_y_step",
-                "beam_eff_ymin", "beam_eff_ymax", "beam_eff_y_step",
-                "grid_color",
-                "cartesian_grid_line_width", "polar_grid_line_width",
-                "cartesian_line_width", "polar_line_width",
-                "cartesian_figure_width", "cartesian_figure_height",
-                "cartesian_font_size", "polar_font_size",
-                "cartesian_legend_font_size", "polar_legend_font_size",
-                "plot_line_1", "plot_line_2",
-                "polar_azimuth_line_1_color", "polar_azimuth_line_1_style",
-                "polar_azimuth_line_2_color", "polar_azimuth_line_2_style",
-                "polar_elevation_line_1_color", "polar_elevation_line_1_style",
-                "polar_elevation_line_2_color", "polar_elevation_line_2_style",
-                "beamwidth_3db_color", "beamwidth_6db_color", "beamwidth_10db_color",
-                "gain_legend_labels", "beamwidth_legend_labels", "beam_eff_legend_labels",
-                "rings", "angle", "clip",
-            ],
-            "vswr": [
-                "shared_xstep", "shared_fmin", "shared_fmax", "shared_xlog",
-                "vswr_ymin", "vswr_ymax", "vswr_ystep", "vswr_smooth",
-                "grid_color",
-                "cartesian_grid_line_width", "cartesian_line_width",
-                "cartesian_figure_width", "cartesian_figure_height",
-                "cartesian_font_size", "cartesian_legend_font_size",
-                "plot_line_1", "plot_line_2", "vswr_legend_labels",
-            ],
-        }
-        return {key: values[key] for key in setting_keys.get(stage_key, []) if key in values}
+        return stage_settings_snapshot(stage_key, self.collect_preset_values())
 
     def _stage_tool_versions(self, stage_key: str) -> dict[str, int]:
-        versions: dict[str, int] = {}
-        if stage_key in {"plot", "datasheet"}:
-            versions["plot_assets"] = PLOT_ASSET_STYLE_VERSION
-        if stage_key == "datasheet":
-            versions["datasheet_render"] = DATASHEET_RENDER_VERSION
-        return versions
+        return stage_tool_versions(
+            stage_key,
+            plot_asset_style_version=PLOT_ASSET_STYLE_VERSION,
+            datasheet_render_version=DATASHEET_RENDER_VERSION,
+        )
 
     def _current_stage_snapshot(self, stage_key: str) -> dict[str, object]:
         snapshot: dict[str, object] = {
@@ -2662,49 +2656,17 @@ class ModernMainWindow(QMainWindow):
         return snapshot
 
     def _stage_output_files(self, stage_key: str) -> list[Path]:
-        if stage_key == "beam":
-            files = [self.deduced_beam_output()]
-            ant_dir = self.project_results_dir() / "ant_files"
-            if ant_dir.exists():
-                files.extend(path for path in ant_dir.rglob("*") if path.is_file())
-            return files
-        if stage_key == "extract":
-            return [self.deduced_extract_output()]
-        if stage_key == "datasheet":
-            return [self.deduced_datasheet_output()]
-        if stage_key == "vswr":
-            vswr_output = self.deduced_vswr_output()
-            return [
-                vswr_output,
-                vswr_output.with_name(f"{vswr_output.stem}-legend{vswr_output.suffix}"),
-            ]
-        if stage_key == "plot":
-            stem = self.deduced_beam_output().stem
-            out_dir = self.project_results_dir()
-            files = [
-                out_dir / f"{stem}-gain.svg",
-                out_dir / f"{stem}-gain-legend.svg",
-                out_dir / f"{stem}-beamwidth.svg",
-                out_dir / f"{stem}-beamwidth-legend.svg",
-                out_dir / f"{stem}-beam-efficiency.svg",
-                out_dir / f"{stem}-beam-efficiency-legend.svg",
-                artifact_manifest_path(out_dir, stem),
-            ]
-            files.extend(path for path in out_dir.glob(f"{stem}-beamwidth-*-plane-*.svg") if path.is_file())
-            for folder_name in ("polar_combined", "polar_single"):
-                folder = out_dir / folder_name
-                if folder.exists():
-                    files.extend(path for path in folder.rglob("*") if path.is_file())
-            return files
-        return []
+        return stage_output_files(
+            stage_key,
+            project_dir=self.project_results_dir(),
+            beam_output=self.deduced_beam_output(),
+            extract_output=self.deduced_extract_output(),
+            datasheet_output=self.deduced_datasheet_output(),
+            vswr_output=self.deduced_vswr_output(),
+        )
 
     def _stage_generated_directories(self, stage_key: str) -> list[Path]:
-        out_dir = self.project_results_dir()
-        if stage_key == "beam":
-            return [out_dir / "ant_files"]
-        if stage_key == "plot":
-            return [out_dir / "polar_combined", out_dir / "polar_single"]
-        return []
+        return stage_generated_directories(stage_key, project_dir=self.project_results_dir())
 
     def _stage_output_target(self, stage_key: str) -> Path:
         if stage_key == "plot":
@@ -2777,20 +2739,12 @@ class ModernMainWindow(QMainWindow):
         del history[20:]
 
     def _stage_is_applicable(self, stage_key: str) -> bool:
-        enabled_ffs = bool(self.selected_ffs())
-        has_touchstone = bool(self.selected_s2p())
-        has_technical_data = bool(self.selected_technical_data())
-        if stage_key == "beam":
-            return enabled_ffs
-        if stage_key == "extract":
-            return enabled_ffs or has_touchstone
-        if stage_key == "datasheet":
-            return enabled_ffs and has_touchstone and has_technical_data
-        if stage_key == "plot":
-            return enabled_ffs
-        if stage_key == "vswr":
-            return has_touchstone
-        return False
+        return stage_is_applicable(
+            stage_key,
+            has_enabled_ffs=bool(self.selected_ffs()),
+            has_touchstone=bool(self.selected_s2p()),
+            has_technical_data=bool(self.selected_technical_data()),
+        )
 
     def _stage_is_stale(self, stage_key: str) -> bool:
         if not self._stage_output_exists(stage_key):
@@ -2811,14 +2765,7 @@ class ModernMainWindow(QMainWindow):
         current_versions = self._stage_tool_versions(stage_key)
         if not current_versions:
             return ""
-        previous_versions = snapshot.get("tool_versions")
-        if previous_versions == current_versions:
-            return ""
-        if stage_key == "plot":
-            return "App plot styling changed. Rerun Plots only."
-        if stage_key == "datasheet":
-            return "App plot or datasheet styling changed. Rerun Plots only, then Datasheet only."
-        return "App generation rules changed. Rerun this output."
+        return stage_stale_detail(stage_key, snapshot.get("tool_versions"), current_versions)
 
     def _stale_stage_keys(self) -> list[str]:
         return [
@@ -2832,7 +2779,7 @@ class ModernMainWindow(QMainWindow):
         if not name:
             return False
         preset = self.global_presets.get(name)
-        return isinstance(preset, dict) and preset == self.collect_preset_values()
+        return isinstance(preset, dict) and self._normalized_preset_values(preset) == self._normalized_preset_values(self.collect_preset_values())
 
     def _validation_messages(self) -> list[str]:
         if not self.active_project_slug:
@@ -3219,6 +3166,7 @@ class ModernMainWindow(QMainWindow):
         disabled_ffs = max(0, total_ffs - enabled_ffs)
         if not has_project:
             self.project_health.setText("Create a project to keep inputs, presets, settings, and outputs together.")
+            self._set_save_state_indicator(self.project_save_state_indicator, "No project selected", "neutral")
             self.validation_label.setText(messages[0])
             self.project_stats_label.setText("No project stats yet.")
             self.artifact_summary_label.setText("Artifacts will appear here after the first run.")
@@ -3250,8 +3198,11 @@ class ModernMainWindow(QMainWindow):
         self.artifact_summary_label.setText(" | ".join(artifact_bits))
         unsaved_changes = self.has_unsaved_project_changes()
         if unsaved_changes:
+            self._set_save_state_indicator(self.project_save_state_indicator, "Project has unsaved changes", "unsaved")
             self.project_health.setText("Unsaved project or preset changes are pending.")
             self.run_summary.setText("Current edits are not saved yet.")
+        else:
+            self._set_save_state_indicator(self.project_save_state_indicator, "Project saved", "saved")
         blocking_messages = [msg for msg in messages if not msg.startswith("VSWR stage is unavailable")]
         if not unsaved_changes and blocking_messages:
             self.validation_label.setText("\n".join(messages))
@@ -3440,17 +3391,6 @@ class ModernMainWindow(QMainWindow):
     def current_project(self) -> ProjectRecord | None:
         if not self.active_project_slug:
             return None
-        existing_presets: dict[str, dict[str, object]] = {}
-        try:
-            existing_project = self.project_store.load_project(self.active_project_slug)
-        except Exception:
-            existing_project = None
-        if existing_project is not None:
-            existing_presets = {
-                str(name): dict(values)
-                for name, values in existing_project.presets.items()
-                if isinstance(values, dict)
-            }
         return ProjectRecord(
             name=self.active_project_name or self.active_project_slug,
             slug=self.active_project_slug,
@@ -3465,8 +3405,8 @@ class ModernMainWindow(QMainWindow):
             ],
             touchstone_file=serialize_workspace_path(THIS_DIR, self.selected_s2p()),
             technical_data_file=serialize_workspace_path(THIS_DIR, self.selected_technical_data()),
-            settings=self.collect_preset_values(),
-            presets=existing_presets,
+            settings={},
+            presets={},
             active_preset=self.project_active_preset,
             run_state=clean_run_state(dict(self.project_run_state)),
         )
@@ -3499,9 +3439,6 @@ class ModernMainWindow(QMainWindow):
         else:
             self.project_name.setText("No project selected")
             self.project_meta.setText("Create a project to keep inputs, presets, and generated results together.")
-        total_ffs = len(self.collect_ffs_items()) if self.active_project_slug else 0
-        enabled_ffs = len(self.selected_ffs()) if self.active_project_slug else 0
-        self.count_badge.setText(f"{enabled_ffs}/{total_ffs} far-field enabled" if total_ffs else "0 far-field files")
         if self.active_project_slug:
             suffix = " *" if self.has_unsaved_project_changes() else ""
             self.project_name.setText(f"{(self.active_project_name or self.active_project_slug)}{suffix}")
@@ -3633,25 +3570,33 @@ class ModernMainWindow(QMainWindow):
         self.preset_delete_action.setEnabled(has_preset)
         self.preset_import_action.setEnabled(True)
         self.preset_export_action.setEnabled(bool(self.global_presets))
-        preset_label = self.project_active_preset or self.global_active_preset or ("Manual" if has_project else "none")
-        self.preset_badge.setText(f"Preset: {preset_label}")
+        preset_dirty = self.has_unsaved_preset_changes()
         if not has_project:
             if has_preset:
                 self.preset_state_label.setText(f"Preset '{self.current_preset_name()}' is available globally. Select a project to save that choice with it.")
+                if preset_dirty:
+                    self._set_save_state_indicator(self.preset_save_state_indicator, "Preset has unsaved changes", "unsaved")
+                else:
+                    self._set_save_state_indicator(self.preset_save_state_indicator, "Preset saved", "saved")
             else:
                 self.preset_state_label.setText("Choose a preset or keep working manually.")
+                self._set_save_state_indicator(self.preset_save_state_indicator, "No preset selected", "neutral")
         elif self.project_active_preset and self.project_active_preset not in self.global_presets:
             self.preset_state_label.setText(
                 f"Project preset '{self.project_active_preset}' is missing. Select an existing preset or save the current controls as a new one."
             )
+            self._set_save_state_indicator(self.preset_save_state_indicator, "Preset missing", "unsaved")
         elif not has_preset:
             self.preset_state_label.setText("Manual settings only. Save them as a preset if you want to reuse them.")
+            self._set_save_state_indicator(self.preset_save_state_indicator, "No preset selected", "neutral")
         elif self._preset_matches_selected():
             self.preset_state_label.setText(f"Preset '{self.project_active_preset}' matches the current controls.")
+            self._set_save_state_indicator(self.preset_save_state_indicator, "Preset saved", "saved")
         else:
             self.preset_state_label.setText(
                 f"Current controls differ from preset '{self.project_active_preset}'. Save to update it or create a new preset."
             )
+            self._set_save_state_indicator(self.preset_save_state_indicator, "Preset has unsaved changes", "unsaved")
 
     def refresh_project_list(self, select_slug: str = "", *, confirm_changes: bool = False) -> None:
         projects = self.project_store.list_projects()
@@ -3749,13 +3694,11 @@ class ModernMainWindow(QMainWindow):
         self.project_active_preset = project.active_preset.strip()
         missing_preset = bool(self.project_active_preset and self.project_active_preset not in self.global_presets)
         self._apply_default_project_settings()
-        if project.settings:
-            self.apply_preset_values(project.settings)
         if not missing_preset and self.project_active_preset:
             self.global_active_preset = self.project_active_preset
             self.apply_preset_values(self.global_presets.get(self.project_active_preset, {}))
         elif missing_preset:
-            self.status(f"Preset '{self.project_active_preset}' is missing; using saved project settings")
+            self.status(f"Preset '{self.project_active_preset}' is missing; using default settings")
         self._persist_global_presets()
         self.refresh_preset_list(select_name=self.project_active_preset)
         self.store.set("beam_ffs", self.selected_ffs())
@@ -3950,7 +3893,7 @@ class ModernMainWindow(QMainWindow):
         self._update_preset_action_state()
 
     def collect_preset_values(self) -> dict[str, object]:
-        return {
+        return PresetSettings.from_mapping({
             "smooth": int(self.beam_smooth.value()),
             "theta": float(self.theta_window.value()),
             "smooth2": int(self.plot_smooth.value()),
@@ -4004,7 +3947,10 @@ class ModernMainWindow(QMainWindow):
             "rings": self.rings.text().strip(),
             "angle": int(self.angle_step.value()),
             "clip": float(self.clip_db.value()),
-        }
+        }).to_dict()
+
+    def current_preset_settings(self) -> PresetSettings:
+        return PresetSettings.from_mapping(self.collect_preset_values())
 
     def apply_preset_values(self, values: dict[str, object]) -> None:
         if not values:
@@ -4101,14 +4047,15 @@ class ModernMainWindow(QMainWindow):
         self.project_active_preset = name
         self.global_active_preset = name if name in self.global_presets else ""
         self._persist_global_presets()
-        self._update_preset_action_state()
         if not name:
             self._mark_project_dirty()
+            self._update_preset_action_state()
             return
         values = self.global_presets.get(name, {})
         if isinstance(values, dict):
             self.apply_preset_values(values)
         self._mark_project_dirty()
+        self._update_preset_action_state()
 
     def create_preset(self) -> None:
         suggested = suggest_preset_name(self.preset_names(), self.active_project_name or "Preset")
@@ -4892,57 +4839,14 @@ class ModernMainWindow(QMainWindow):
         if not xlsx.exists():
             self.status("Generate the workbook first")
             return
-        args = [which_python(), "-u", SCRIPT_PLOT, str(xlsx),
-                "--out-dir", str(self.project_results_dir()),
-                "--grid-color", self.plot_grid.color(),
-                "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
-                "--polar-grid-line-width", str(self.polar_grid_line_width.value()),
-                "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
-                "--beamwidth-db-colors", ",".join([self.beamwidth_3db_color.color(), self.beamwidth_6db_color.color(), self.beamwidth_10db_color.color()]),
-                "--polar-line-colors", ",".join([self.polar_azimuth_line1.color(), self.polar_azimuth_line2.color(), self.polar_elevation_line1.color(), self.polar_elevation_line2.color()]),
-                "--polar-line-styles", ",".join([self.polar_azimuth_line1.style(), self.polar_azimuth_line2.style(), self.polar_elevation_line1.style(), self.polar_elevation_line2.style()]),
-                "--polar-port-labels-json", self.polar_port_labels_json(),
-                "--cartesian-line-width", str(self.cartesian_line_width.value()),
-                "--cartesian-figure-width", str(self.cartesian_figure_width.value()),
-                "--cartesian-figure-height", str(self.cartesian_figure_height.value()),
-                "--polar-line-width", str(self.polar_line_width.value()),
-                "--cartesian-font-size", str(self.cartesian_font_size.value()),
-                "--polar-font-size", str(self.polar_font_size.value()),
-                "--cartesian-legend-font-size", str(self.cartesian_legend_font_size.value()),
-                "--polar-legend-font-size", str(self.polar_legend_font_size.value()),
-                "--rings", self.rings.text().strip(),
-                "--angle-step", str(self.angle_step.value()),
-                "--clip-db", str(self.clip_db.value()),
-                "--smooth-window", str(self.plot_smooth.value()),
-                "--x-step", str(self.shared_xstep.value())]
-        if self.gain_legend_labels.text().strip():
-            args += ["--gain-legend-labels", self.gain_legend_labels.text().strip()]
-        if self.beamwidth_legend_labels.text().strip():
-            args += ["--beamwidth-legend-labels", self.beamwidth_legend_labels.text().strip()]
-        if self.beam_eff_legend_labels.text().strip():
-            args += ["--beam-eff-legend-labels", self.beam_eff_legend_labels.text().strip()]
-        if self.gain_ymin.value() != 0:
-            args += ["--gain-ymin", f"{self.gain_ymin.value()}"]
-        if self.gain_ymax.value() != 0:
-            args += ["--gain-ymax", f"{self.gain_ymax.value()}"]
-        if self.gain_y_step.value() != 0:
-            args += ["--gain-y-step", f"{self.gain_y_step.value()}"]
-        if self.beamwidth_ymin.value() != 0:
-            args += ["--beamwidth-ymin", f"{self.beamwidth_ymin.value()}"]
-        if self.beamwidth_ymax.value() != 0:
-            args += ["--beamwidth-ymax", f"{self.beamwidth_ymax.value()}"]
-        if self.beamwidth_y_step.value() != 0:
-            args += ["--beamwidth-y-step", f"{self.beamwidth_y_step.value()}"]
-        if self.beam_eff_ymin.value() != 0:
-            args += ["--beam-eff-ymin", f"{self.beam_eff_ymin.value()}"]
-        if self.beam_eff_ymax.value() != 0:
-            args += ["--beam-eff-ymax", f"{self.beam_eff_ymax.value()}"]
-        if self.beam_eff_y_step.value() != 0:
-            args += ["--beam-eff-y-step", f"{self.beam_eff_y_step.value()}"]
-        if self.shared_xlog.isChecked():
-            args.append("--x-log")
-        if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
-            args += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
+        args = build_plot_command(
+            python_executable=which_python(),
+            script_path=SCRIPT_PLOT,
+            input_workbook=xlsx,
+            out_dir=self.project_results_dir(),
+            settings=self.current_preset_settings(),
+            polar_port_labels_json=self.polar_port_labels_json(),
+        )
         self._save_project_if_dirty()
         self._enqueue_stage("plot", args)
 
@@ -4960,27 +4864,13 @@ class ModernMainWindow(QMainWindow):
         if not Path(s2p).exists():
             self.status("Selected Touchstone file is missing")
             return
-        args = [which_python(), "-u", SCRIPT_VSWR, s2p,
-                "--output", str(self.deduced_vswr_output()),
-                "--grid-color", self.plot_grid.color(),
-                "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
-                "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
-                "--cartesian-line-width", str(self.cartesian_line_width.value()),
-                "--cartesian-figure-width", str(self.cartesian_figure_width.value()),
-                "--cartesian-figure-height", str(self.cartesian_figure_height.value()),
-                "--cartesian-font-size", str(self.cartesian_font_size.value()),
-                "--cartesian-legend-font-size", str(self.cartesian_legend_font_size.value()),
-                "--x-step", str(self.shared_xstep.value()),
-                "--ymin", str(self.vswr_ymin.value()),
-                "--ymax", str(self.vswr_ymax.value()),
-                "--y-step", str(self.vswr_ystep.value()),
-                "--smooth-window", str(self.vswr_smooth.value())]
-        if self.vswr_legend_labels.text().strip():
-            args += ["--legend-labels", self.vswr_legend_labels.text().strip()]
-        if self.shared_xlog.isChecked():
-            args.append("--x-log")
-        if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
-            args += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
+        args = build_vswr_command(
+            python_executable=which_python(),
+            script_path=SCRIPT_VSWR,
+            touchstone_path=s2p,
+            output_path=self.deduced_vswr_output(),
+            settings=self.current_preset_settings(),
+        )
         self._save_project_if_dirty()
         self._enqueue_stage("vswr", args)
 
@@ -5038,80 +4928,24 @@ class ModernMainWindow(QMainWindow):
         if args_extract:
             self._enqueue_stage("extract", args_extract)
 
-        args_plot = [which_python(), "-u", SCRIPT_PLOT, out,
-                "--out-dir", str(self.project_results_dir()),
-                "--grid-color", self.plot_grid.color(),
-                "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
-                "--polar-grid-line-width", str(self.polar_grid_line_width.value()),
-                "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
-                "--beamwidth-db-colors", ",".join([self.beamwidth_3db_color.color(), self.beamwidth_6db_color.color(), self.beamwidth_10db_color.color()]),
-                "--polar-line-colors", ",".join([self.polar_azimuth_line1.color(), self.polar_azimuth_line2.color(), self.polar_elevation_line1.color(), self.polar_elevation_line2.color()]),
-                "--polar-line-styles", ",".join([self.polar_azimuth_line1.style(), self.polar_azimuth_line2.style(), self.polar_elevation_line1.style(), self.polar_elevation_line2.style()]),
-                "--polar-port-labels-json", self.polar_port_labels_json(),
-                "--cartesian-line-width", str(self.cartesian_line_width.value()),
-                "--cartesian-figure-width", str(self.cartesian_figure_width.value()),
-                "--cartesian-figure-height", str(self.cartesian_figure_height.value()),
-                "--polar-line-width", str(self.polar_line_width.value()),
-                "--cartesian-font-size", str(self.cartesian_font_size.value()),
-                "--polar-font-size", str(self.polar_font_size.value()),
-                "--cartesian-legend-font-size", str(self.cartesian_legend_font_size.value()),
-                "--polar-legend-font-size", str(self.polar_legend_font_size.value()),
-                "--rings", self.rings.text().strip(),
-                "--angle-step", str(self.angle_step.value()),
-                "--clip-db", str(self.clip_db.value()),
-                "--smooth-window", str(self.plot_smooth.value()),
-                "--x-step", str(self.shared_xstep.value())]
-        if self.gain_legend_labels.text().strip():
-            args_plot += ["--gain-legend-labels", self.gain_legend_labels.text().strip()]
-        if self.beamwidth_legend_labels.text().strip():
-            args_plot += ["--beamwidth-legend-labels", self.beamwidth_legend_labels.text().strip()]
-        if self.beam_eff_legend_labels.text().strip():
-            args_plot += ["--beam-eff-legend-labels", self.beam_eff_legend_labels.text().strip()]
-        if self.gain_ymin.value() != 0:
-            args_plot += ["--gain-ymin", f"{self.gain_ymin.value()}"]
-        if self.gain_ymax.value() != 0:
-            args_plot += ["--gain-ymax", f"{self.gain_ymax.value()}"]
-        if self.gain_y_step.value() != 0:
-            args_plot += ["--gain-y-step", f"{self.gain_y_step.value()}"]
-        if self.beamwidth_ymin.value() != 0:
-            args_plot += ["--beamwidth-ymin", f"{self.beamwidth_ymin.value()}"]
-        if self.beamwidth_ymax.value() != 0:
-            args_plot += ["--beamwidth-ymax", f"{self.beamwidth_ymax.value()}"]
-        if self.beamwidth_y_step.value() != 0:
-            args_plot += ["--beamwidth-y-step", f"{self.beamwidth_y_step.value()}"]
-        if self.beam_eff_ymin.value() != 0:
-            args_plot += ["--beam-eff-ymin", f"{self.beam_eff_ymin.value()}"]
-        if self.beam_eff_ymax.value() != 0:
-            args_plot += ["--beam-eff-ymax", f"{self.beam_eff_ymax.value()}"]
-        if self.beam_eff_y_step.value() != 0:
-            args_plot += ["--beam-eff-y-step", f"{self.beam_eff_y_step.value()}"]
-        if self.shared_xlog.isChecked():
-            args_plot.append("--x-log")
-        if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
-            args_plot += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
+        settings = self.current_preset_settings()
+        args_plot = build_plot_command(
+            python_executable=which_python(),
+            script_path=SCRIPT_PLOT,
+            input_workbook=out,
+            out_dir=self.project_results_dir(),
+            settings=settings,
+            polar_port_labels_json=self.polar_port_labels_json(),
+        )
         self._enqueue_stage("plot", args_plot)
 
-        args_vswr = [which_python(), "-u", SCRIPT_VSWR, s2p,
-                "--output", str(self.deduced_vswr_output()),
-                "--grid-color", self.plot_grid.color(),
-                "--cartesian-grid-line-width", str(self.cartesian_grid_line_width.value()),
-                "--line-colors", ",".join([self.plot_line1.color(), self.plot_line2.color()]),
-                "--cartesian-line-width", str(self.cartesian_line_width.value()),
-                "--cartesian-figure-width", str(self.cartesian_figure_width.value()),
-                "--cartesian-figure-height", str(self.cartesian_figure_height.value()),
-                "--cartesian-font-size", str(self.cartesian_font_size.value()),
-                "--cartesian-legend-font-size", str(self.cartesian_legend_font_size.value()),
-                "--x-step", str(self.shared_xstep.value()),
-                "--ymin", str(self.vswr_ymin.value()),
-                "--ymax", str(self.vswr_ymax.value()),
-                "--y-step", str(self.vswr_ystep.value()),
-                "--smooth-window", str(self.vswr_smooth.value())]
-        if self.vswr_legend_labels.text().strip():
-            args_vswr += ["--legend-labels", self.vswr_legend_labels.text().strip()]
-        if self.shared_xlog.isChecked():
-            args_vswr.append("--x-log")
-        if self.shared_fmin.value() > 0 and self.shared_fmax.value() > self.shared_fmin.value():
-            args_vswr += ["--fmin", f"{self.shared_fmin.value()}", "--fmax", f"{self.shared_fmax.value()}"]
+        args_vswr = build_vswr_command(
+            python_executable=which_python(),
+            script_path=SCRIPT_VSWR,
+            touchstone_path=s2p,
+            output_path=self.deduced_vswr_output(),
+            settings=settings,
+        )
         self._enqueue_stage("vswr", args_vswr)
         if args_extract:
             self._enqueue_stage(

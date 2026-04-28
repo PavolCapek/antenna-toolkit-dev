@@ -8,7 +8,7 @@ from pathlib import Path
 import fitz
 import pandas as pd
 
-from datasheet_artifacts import build_asset_record, load_artifact_manifest, update_artifact_manifest
+from datasheet.artifacts import build_asset_record, load_artifact_manifest, update_artifact_manifest
 from datasheet_pdf import (
     ChartReplacement,
     _build_chart_replacements,
@@ -27,7 +27,7 @@ from datasheet_pdf import (
     build_replacements_from_workbook,
     load_technical_data_workbook,
 )
-from datasheet_templates import NETQUI_1POL_TEMPLATE_ADAPTER, NETQUI_TEMPLATE_ADAPTER, RFE_TEMPLATE_ADAPTER, resolve_template_adapter
+from datasheet.templates import NETQUI_1POL_TEMPLATE_ADAPTER, NETQUI_TEMPLATE_ADAPTER, RFE_TEMPLATE_ADAPTER, resolve_template_adapter
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -58,6 +58,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.gain_svg = self.root / "extract-gain.svg"
         self.gain_legend_svg = self.root / "extract-gain-legend.svg"
         self.vswr_svg = self.root / "extract-vswr.svg"
+        self.vswr_legend_svg = self.root / "extract-vswr-legend.svg"
         self.beamwidth_svg = self.root / "extract-beamwidth.svg"
         self.beamwidth_legend_svg = self.root / "extract-beamwidth-legend.svg"
         self.beamwidth_e_plane_h_svg = self.root / "extract-beamwidth-e-plane-h.svg"
@@ -99,6 +100,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self._write_svg(self.gain_svg, "#00ff00", width=300, height=120)
         self._write_svg(self.gain_legend_svg, "#ffffff", width=140, height=70)
         self._write_svg(self.vswr_svg, "#ff8800", width=300, height=120)
+        self._write_svg(self.vswr_legend_svg, "#ffffff", width=90, height=70)
         self._write_svg(self.beamwidth_svg, "#ffff00", width=300, height=120)
         self._write_svg(self.beamwidth_legend_svg, "#ffffff", width=180, height=110)
         self._write_svg(self.beamwidth_e_plane_h_svg, "#990000", width=300, height=120)
@@ -1019,6 +1021,10 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(by_kind["beamwidth_e_plane"].asset_path, self.beamwidth_e_plane_h_svg)
         self.assertEqual(by_kind["beamwidth_h_plane"].asset_path, self.beamwidth_h_plane_h_svg)
         self.assertLess(by_kind["gain"].rect.x0, by_kind["vswr"].rect.x0)
+        self.assertEqual(by_kind["gain"].legend_asset_path, self.gain_legend_svg)
+        self.assertEqual(by_kind["vswr"].legend_asset_path, self.vswr_legend_svg)
+        self.assertLess(by_kind["gain"].rect.x1, by_kind["gain"].legend_rect.x0)
+        self.assertLess(by_kind["vswr"].rect.x1, by_kind["vswr"].legend_rect.x0)
         self.assertLess(by_kind["beamwidth_e_plane"].erase_rect.x0, by_kind["beamwidth_h_plane"].erase_rect.x0)
         self.assertLess(by_kind["beamwidth_e_plane"].rect.x1, by_kind["beamwidth_e_plane"].legend_rect.x0)
         self.assertLess(by_kind["beamwidth_h_plane"].rect.x1, by_kind["beamwidth_h_plane"].legend_rect.x0)
@@ -1042,9 +1048,13 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(by_kind["beamwidth_e_plane"].asset_path, self.beamwidth_e_plane_h_svg)
         self.assertEqual(by_kind["beamwidth_h_plane"].asset_path, self.beamwidth_h_plane_h_svg)
         self.assertAlmostEqual(by_kind["gain"].rect.x0, gain_rect.x0, delta=0.1)
-        self.assertAlmostEqual(by_kind["gain"].rect.x1, gain_rect.x1, delta=0.1)
+        self.assertAlmostEqual(by_kind["gain"].erase_rect.x1, gain_rect.x1, delta=0.1)
+        self.assertLess(by_kind["gain"].rect.x1, by_kind["gain"].legend_rect.x0)
+        self.assertEqual(by_kind["gain"].legend_asset_path, self.gain_legend_svg)
         self.assertAlmostEqual(by_kind["vswr"].rect.x0, vswr_rect.x0, delta=0.1)
-        self.assertAlmostEqual(by_kind["vswr"].rect.x1, vswr_rect.x1, delta=0.1)
+        self.assertAlmostEqual(by_kind["vswr"].erase_rect.x1, vswr_rect.x1, delta=0.1)
+        self.assertLess(by_kind["vswr"].rect.x1, by_kind["vswr"].legend_rect.x0)
+        self.assertEqual(by_kind["vswr"].legend_asset_path, self.vswr_legend_svg)
         self.assertAlmostEqual(by_kind["beamwidth_e_plane"].erase_rect.x0, e_plane_rect.x0, delta=0.1)
         self.assertAlmostEqual(by_kind["beamwidth_h_plane"].erase_rect.x0, h_plane_rect.x0, delta=0.1)
 
@@ -1125,6 +1135,14 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(by_kind["radiation_mid"].legend_asset_path, self.combined_eh_mid_legend_svg)
         self.assertEqual(by_kind["radiation_high"].legend_asset_path, self.combined_eh_high_legend_svg)
         self.assertLess(by_kind["radiation_low"].rect.y1, by_kind["radiation_low"].legend_rect.y0)
+        self.assertAlmostEqual(by_kind["gain"].rect.x0, by_kind["beamwidth_e_plane"].rect.x0, delta=0.01)
+        self.assertAlmostEqual(by_kind["gain"].rect.x1, by_kind["beamwidth_e_plane"].rect.x1, delta=0.01)
+        self.assertAlmostEqual(by_kind["gain"].legend_rect.x0, by_kind["beamwidth_e_plane"].legend_rect.x0, delta=0.01)
+        self.assertAlmostEqual(by_kind["vswr"].rect.x0, by_kind["beamwidth_h_plane"].rect.x0, delta=0.01)
+        self.assertAlmostEqual(by_kind["vswr"].rect.x1, by_kind["beamwidth_h_plane"].rect.x1, delta=0.01)
+        self.assertAlmostEqual(by_kind["vswr"].legend_rect.x0, by_kind["beamwidth_h_plane"].legend_rect.x0, delta=0.01)
+        self.assertAlmostEqual(by_kind["gain"].rect.y0, by_kind["vswr"].rect.y0, delta=0.01)
+        self.assertAlmostEqual(by_kind["beamwidth_e_plane"].rect.y0, by_kind["beamwidth_h_plane"].rect.y0, delta=0.01)
 
     def test_netqui_1pol_frequency_triplet_uses_closest_unique_combined_assets(self) -> None:
         with pd.ExcelWriter(self.extract_workbook) as writer:

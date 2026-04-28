@@ -6,7 +6,6 @@ import json
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -15,7 +14,8 @@ from xml.sax.saxutils import escape as xml_escape
 import fitz
 import pandas as pd
 
-from datasheet_models import (
+from datasheet.pdf_models import ChartReplacement, ChartSlot, ReplacementSlot, TechnicalDataRowSlot, TextSpan
+from datasheet.models import (
     FIELD_LABELS,
     FIELD_LABEL_ALIASES,
     TECHNICAL_DATA_PLACEHOLDER,
@@ -29,8 +29,17 @@ from datasheet_models import (
     technical_data_by_key,
     text_or_placeholder,
 )
-from datasheet_service import build_render_context
-from datasheet_templates import DatasheetTemplateAdapter, TemplateChartManifest, TemplateChartSlot
+from datasheet.service import build_render_context
+from datasheet.templates import DatasheetTemplateAdapter, TemplateChartManifest, TemplateChartSlot
+from datasheet.layouts.netqui_1pol import (
+    NETQUI_POLAR_LEGEND_SCALE_CAP,
+    NETQUI_SIDE_LEGEND_SCALE_CAP,
+    align_1pol_cartesian_slots,
+    beamwidth_rects as netqui_beamwidth_rects,
+    polar_rects as netqui_polar_rects,
+    top_chart_rects as netqui_top_chart_rects,
+)
+from datasheet.layouts.rfe import order_chart_slots_first_two_then_x
 
 fitz.TOOLS.mupdf_display_errors(False)
 fitz.TOOLS.mupdf_display_warnings(False)
@@ -51,6 +60,7 @@ MYRIAD_FONT_FILES = {
 }
 
 MISSING_VALUE_COLOR = (0.9, 0.0, 0.0)
+NETQUI_TABLE_FONT_SIZE = 9.0
 PERFORMANCE_FIELD_KEYS = {
     re.sub(r"\s+", " ", str(alias or "").strip()).lower()
     for aliases in FIELD_LABEL_ALIASES.values()
@@ -78,66 +88,6 @@ PDF_METADATA_KEYS = (
 )
 PDF_CREATOR = "Antenna Toolkit"
 PDF_PRODUCER = "Antenna Toolkit (PyMuPDF)"
-
-
-@dataclass(frozen=True)
-class TextSpan:
-    text: str
-    bbox: fitz.Rect
-    origin: tuple[float, float]
-    font: str
-    size: float
-    color: int
-
-
-@dataclass(frozen=True)
-class ReplacementSlot:
-    label: str
-    erase_rect: fitz.Rect
-    origin: tuple[float, float]
-    max_width: float
-    font_name: str
-    font_size: float
-    color: tuple[float, float, float]
-
-
-@dataclass(frozen=True)
-class ChartSlot:
-    rect: fitz.Rect
-    image_name: str
-
-
-@dataclass(frozen=True)
-class ChartReplacement:
-    kind: str
-    rect: fitz.Rect
-    asset_path: Path
-    legend_rect: fitz.Rect | None = None
-    legend_asset_path: Path | None = None
-    erase_rect: fitz.Rect | None = None
-
-
-@dataclass
-class TechnicalDataEntry:
-    label: str
-    value: str
-
-
-@dataclass(frozen=True)
-class TechnicalDataRowSlot:
-    label: str
-    label_rect: fitz.Rect
-    value_rect: fitz.Rect
-    erase_rect: fitz.Rect
-    label_font_name: str
-    label_font_size: float
-    label_color: tuple[float, float, float]
-    value_font_name: str
-    value_font_size: float
-    value_origin: tuple[float, float]
-    value_color: tuple[float, float, float]
-    row_bottom: float
-    table_right: float
 
 
 def _load_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
@@ -385,13 +335,21 @@ def _insert_wrapped_text(
     font_size: float,
     color: tuple[float, float, float],
     registered_fonts: set[str],
+    center_vertically: bool = False,
 ) -> None:
     pdf_font_name, fontfile, font_path = _register_pdf_font(page, font_name, registered_fonts, required_text=text)
     font = _measurement_font(pdf_font_name, str(font_path) if font_path else None)
     lines = _wrap_text_to_width(text, font, font_size, max(1.0, rect.width))
     line_height = max(font_size * 1.2, font_size + 1.0)
     x = rect.x0 if origin is None else origin[0]
-    first_baseline = (rect.y0 + font_size) if origin is None else origin[1]
+    if origin is None and center_vertically:
+        ascender = float(getattr(font, "ascender", 1.0))
+        descender = float(getattr(font, "descender", -0.25))
+        glyph_height = max(0.1, (ascender - descender) * font_size)
+        total_height = glyph_height + (max(1, len(lines)) - 1) * line_height
+        first_baseline = rect.y0 + max(0.0, (rect.height - total_height) / 2.0) + ascender * font_size
+    else:
+        first_baseline = (rect.y0 + font_size) if origin is None else origin[1]
     max_baseline = rect.y1 + 0.8
     for index, line in enumerate(lines):
         baseline = first_baseline + (index * line_height)
@@ -405,6 +363,12 @@ def _insert_wrapped_text(
             fontfile=fontfile,
             color=color,
         )
+
+
+def _technical_table_font_size(font_size: float, layout_mode: str) -> float:
+    if layout_mode in {"netqui", "netqui_1pol"}:
+        return min(font_size, NETQUI_TABLE_FONT_SIZE)
+    return font_size
 
 
 def _insert_replacement_slot_text(
@@ -541,9 +505,7 @@ def _redraw_netqui_table_separators(page: fitz.Page, layout_mode: str) -> None:
     line_color = (0.13669031858444214, 0.12195010483264923, 0.1252918243408203)
     seen: set[tuple[float, float, float]] = set()
     for slot in slots:
-        if layout_mode == "netqui_1pol" and slot.label.strip().lower().rstrip(".") == "beamwidth h plane":
-            continue
-        line_left = 36.638 if slot.label_rect.x0 < 280.0 else 285.0
+        line_left = 36.638 if slot.label_rect.x0 < 280.0 else max(302.25, slot.label_rect.x0)
         line_right = slot.table_right
         key = (round(line_left, 3), round(slot.row_bottom, 3), round(line_right, 3))
         if key in seen:
@@ -643,7 +605,7 @@ def _technical_data_row_slots(page: fitz.Page, *, layout_mode: str = "auto") -> 
             "label_x0": 25.0,
             "label_x1": 140.0,
             "value_x": 148.5,
-            "table_right": 295.0,
+            "table_right": 280.0,
         },
         {
             "heading": mechanical_heading,
@@ -668,7 +630,7 @@ def _technical_data_row_slots(page: fitz.Page, *, layout_mode: str = "auto") -> 
         labels.sort(key=lambda span: (span.bbox.y0, span.bbox.x0))
         for index, label_span in enumerate(labels):
             row_top = max(section["heading"].bbox.y1 + 1.0, label_span.bbox.y0 - 1.0)
-            next_y = labels[index + 1].bbox.y0 if index + 1 < len(labels) else bottom_y - 6.0
+            next_y = labels[index + 1].bbox.y0 if index + 1 < len(labels) else label_span.bbox.y1 + 3.0
             row_bottom = max(label_span.bbox.y1 + 2.0, min(bottom_y - 4.0, next_y - 1.0))
             value_spans = [
                 span
@@ -723,6 +685,7 @@ def _draw_technical_data_row(
         font_size=font_size,
         color=label_color,
         registered_fonts=registered_fonts,
+        center_vertically=True,
     )
     text, is_missing = _text_or_placeholder(value)
     _insert_wrapped_text(
@@ -734,6 +697,7 @@ def _draw_technical_data_row(
         font_size=font_size,
         color=MISSING_VALUE_COLOR if is_missing else value_color,
         registered_fonts=registered_fonts,
+        center_vertically=True,
     )
     page.draw_line(
         (36.638, rect.y1),
@@ -790,11 +754,12 @@ def _replace_technical_table(
             page,
             slot.value_rect,
             text,
-            origin=slot.value_origin,
+            origin=None if layout_mode in {"netqui", "netqui_1pol"} else slot.value_origin,
             font_name=slot.value_font_name,
-            font_size=slot.value_font_size,
+            font_size=_technical_table_font_size(slot.value_font_size, layout_mode),
             color=MISSING_VALUE_COLOR if is_missing else slot.value_color,
             registered_fonts=registered_fonts,
+            center_vertically=layout_mode in {"netqui", "netqui_1pol"},
         )
     extra_entries = [
         entry
@@ -2075,27 +2040,9 @@ def _chart_slot_rows(slots: list[ChartSlot], tolerance: float = 36.0) -> list[li
     return [sorted(row, key=lambda item: item.rect.x0) for row in rows]
 
 
-def _netqui_beamwidth_rects(slot_rect: fitz.Rect) -> tuple[fitz.Rect, fitz.Rect]:
-    full = fitz.Rect(slot_rect)
-    legend_width = min(max(full.width * 0.32, 82.0), 96.0)
-    legend = fitz.Rect(full.x1 - legend_width, full.y0 + 6.0, full.x1 - 2.0, full.y1 - 6.0)
-    plot = fitz.Rect(full.x0, full.y0, legend.x0 - 6.0, full.y1)
-    return plot, legend
-
-
-def _netqui_polar_rects(slot_rect: fitz.Rect) -> tuple[fitz.Rect, fitz.Rect]:
-    full = fitz.Rect(slot_rect)
-    legend_height = min(max(full.height * 0.24, 30.0), 40.0)
-    legend = fitz.Rect(full.x0 + 2.0, full.y1 - legend_height, full.x1 - 2.0, full.y1)
-    plot_area = fitz.Rect(full.x0, full.y0, full.x1, legend.y0 - 2.0)
-    plot_size = max(1.0, min(plot_area.width, plot_area.height))
-    plot = fitz.Rect(
-        (plot_area.x0 + plot_area.x1 - plot_size) / 2.0,
-        plot_area.y0,
-        (plot_area.x0 + plot_area.x1 + plot_size) / 2.0,
-        plot_area.y0 + plot_size,
-    )
-    return plot, legend
+def _align_netqui_1pol_cartesian_slots(ordered_slots: list[ChartSlot]) -> list[ChartSlot]:
+    rows = _chart_slot_rows(ordered_slots)
+    return align_1pol_cartesian_slots(rows, ChartSlot)
 
 
 def _build_netqui_chart_replacements(
@@ -2110,12 +2057,34 @@ def _build_netqui_chart_replacements(
     gain_slot, vswr_slot = rows[0][0], rows[0][1]
     e_plane_slot, h_plane_slot = rows[1][0], rows[1][1]
     gain_asset = _find_manifest_chart_asset(artifact_manifest, "gain") or _find_plot_asset(output, extract_workbook, "-gain.svg")
+    gain_legend_asset = _legend_asset_path(gain_asset, artifact_manifest)
+    gain_plot_rect, gain_legend_rect = netqui_top_chart_rects(fitz.Rect(gain_slot.rect))
     replacements: list[ChartReplacement] = [
-        ChartReplacement("gain", fitz.Rect(gain_slot.rect), gain_asset),
+        ChartReplacement(
+            "gain",
+            gain_plot_rect,
+            gain_asset,
+            legend_rect=gain_legend_rect if gain_legend_asset.exists() else None,
+            legend_asset_path=gain_legend_asset if gain_legend_asset.exists() else None,
+            erase_rect=fitz.Rect(gain_slot.rect),
+            legend_scale_cap=NETQUI_SIDE_LEGEND_SCALE_CAP,
+        ),
     ]
     vswr_asset = _find_manifest_chart_asset(artifact_manifest, "vswr") or _find_optional_plot_asset(output, extract_workbook, "-vswr.svg")
     if vswr_asset is not None:
-        replacements.append(ChartReplacement("vswr", fitz.Rect(vswr_slot.rect), vswr_asset))
+        vswr_legend_asset = _legend_asset_path(vswr_asset, artifact_manifest)
+        vswr_plot_rect, vswr_legend_rect = netqui_top_chart_rects(fitz.Rect(vswr_slot.rect))
+        replacements.append(
+            ChartReplacement(
+                "vswr",
+                vswr_plot_rect,
+                vswr_asset,
+                legend_rect=vswr_legend_rect if vswr_legend_asset.exists() else None,
+                legend_asset_path=vswr_legend_asset if vswr_legend_asset.exists() else None,
+                erase_rect=fitz.Rect(vswr_slot.rect),
+                legend_scale_cap=NETQUI_SIDE_LEGEND_SCALE_CAP,
+            )
+        )
 
     for slot, kind, plane in [
         (e_plane_slot, "beamwidth_e_plane", "e-plane"),
@@ -2123,7 +2092,7 @@ def _build_netqui_chart_replacements(
     ]:
         asset = _find_beamwidth_plane_asset(output, extract_workbook, plane, artifact_manifest=artifact_manifest)
         legend_asset = _legend_asset_path(asset, artifact_manifest)
-        plot_rect, legend_rect = _netqui_beamwidth_rects(fitz.Rect(slot.rect))
+        plot_rect, legend_rect = netqui_beamwidth_rects(fitz.Rect(slot.rect))
         replacements.append(
             ChartReplacement(
                 kind,
@@ -2132,6 +2101,7 @@ def _build_netqui_chart_replacements(
                 legend_rect=legend_rect if legend_asset.exists() else None,
                 legend_asset_path=legend_asset if legend_asset.exists() else None,
                 erase_rect=fitz.Rect(slot.rect),
+                legend_scale_cap=NETQUI_SIDE_LEGEND_SCALE_CAP,
             )
         )
     return replacements
@@ -2187,11 +2157,10 @@ def _build_manifest_chart_replacements(
 ) -> list[ChartReplacement]:
     if chart_manifest.slot_order == "rows":
         ordered_slots = [slot for row in _chart_slot_rows(ordered_slots) for slot in row]
+        if any(slot.kind == "radiation_low" for slot in chart_manifest.slots):
+            ordered_slots = _align_netqui_1pol_cartesian_slots(ordered_slots)
     elif chart_manifest.slot_order == "first_two_then_x" and len(ordered_slots) > 2:
-        ordered_slots = ordered_slots[:2] + sorted(
-            ordered_slots[2:],
-            key=lambda slot: (slot.rect.x0, slot.rect.y0, slot.rect.y1, slot.rect.x1),
-        )
+        ordered_slots = order_chart_slots_first_two_then_x(ordered_slots)
     replacements: list[ChartReplacement] = []
     for slot_spec in chart_manifest.slots:
         if slot_spec.slot_index >= len(ordered_slots):
@@ -2208,7 +2177,7 @@ def _build_manifest_chart_replacements(
         slot_rect = fitz.Rect(ordered_slots[slot_spec.slot_index].rect)
         if slot_spec.legend_mode == "netqui_side":
             legend_asset = _legend_asset_path(asset, artifact_manifest)
-            plot_rect, legend_rect = _netqui_beamwidth_rects(slot_rect)
+            plot_rect, legend_rect = netqui_beamwidth_rects(slot_rect)
             replacements.append(
                 ChartReplacement(
                     slot_spec.kind,
@@ -2217,11 +2186,26 @@ def _build_manifest_chart_replacements(
                     legend_rect=legend_rect if legend_asset.exists() else None,
                     legend_asset_path=legend_asset if legend_asset.exists() else None,
                     erase_rect=slot_rect,
+                    legend_scale_cap=NETQUI_SIDE_LEGEND_SCALE_CAP,
+                )
+            )
+        elif slot_spec.legend_mode == "netqui_top_side":
+            legend_asset = _legend_asset_path(asset, artifact_manifest)
+            plot_rect, legend_rect = netqui_top_chart_rects(slot_rect)
+            replacements.append(
+                ChartReplacement(
+                    slot_spec.kind,
+                    plot_rect,
+                    asset,
+                    legend_rect=legend_rect if legend_asset.exists() else None,
+                    legend_asset_path=legend_asset if legend_asset.exists() else None,
+                    erase_rect=slot_rect,
+                    legend_scale_cap=NETQUI_SIDE_LEGEND_SCALE_CAP,
                 )
             )
         elif slot_spec.legend_mode == "netqui_bottom":
             legend_asset = _legend_asset_path(asset, artifact_manifest)
-            plot_rect, legend_rect = _netqui_polar_rects(slot_rect)
+            plot_rect, legend_rect = netqui_polar_rects(slot_rect)
             replacements.append(
                 ChartReplacement(
                     slot_spec.kind,
@@ -2230,6 +2214,7 @@ def _build_manifest_chart_replacements(
                     legend_rect=legend_rect if legend_asset.exists() else None,
                     legend_asset_path=legend_asset if legend_asset.exists() else None,
                     erase_rect=slot_rect,
+                    legend_scale_cap=NETQUI_POLAR_LEGEND_SCALE_CAP,
                 )
             )
         else:
@@ -2453,6 +2438,8 @@ def _shared_side_legend_scale(replacements: list[ChartReplacement]) -> float | N
                 replacement.legend_rect.height / native_height,
             )
         )
+        if replacement.legend_scale_cap is not None:
+            scales.append(float(replacement.legend_scale_cap))
     return min(scales) if scales else None
 
 
@@ -2464,8 +2451,15 @@ def _legend_target_rect(replacement: ChartReplacement, shared_side_scale: float 
     if native_width <= 0.0 or native_height <= 0.0:
         return container_rect
     if shared_side_scale is not None and shared_side_scale > 0.0:
-        return _center_rect_with_size(container_rect, native_width * shared_side_scale, native_height * shared_side_scale)
-    scale = min(container_rect.width / native_width, container_rect.height / native_height)
+        scale = shared_side_scale
+    else:
+        scale = min(container_rect.width / native_width, container_rect.height / native_height)
+    if replacement.legend_scale_cap is not None:
+        scale = min(scale, float(replacement.legend_scale_cap))
+    if replacement.legend_scale_cap is not None and not replacement.kind.startswith("radiation_"):
+        height = native_height * scale
+        center_y = (container_rect.y0 + container_rect.y1) / 2.0
+        return fitz.Rect(container_rect.x0, center_y - height / 2.0, container_rect.x0 + native_width * scale, center_y + height / 2.0)
     return _center_rect_with_size(container_rect, native_width * scale, native_height * scale)
 
 
@@ -2569,12 +2563,35 @@ def build_datasheet_pdf(
         for slot in slots.values():
             page.add_redact_annot(slot.erase_rect, fill=None)
         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+        layout_mode = adapter.technical_layout_mode if adapter is not None else "auto"
+        table_slots_by_key: dict[str, TechnicalDataRowSlot] = {}
+        if layout_mode in {"netqui", "netqui_1pol"}:
+            for table_slot in _technical_data_row_slots(page, layout_mode=layout_mode):
+                if key := _normalize_technical_key(table_slot.label):
+                    table_slots_by_key[key] = table_slot
+                if inferred_label := _infer_field_label_from_template_text(table_slot.label):
+                    table_slots_by_key[_normalize_technical_key(inferred_label)] = table_slot
         for label in FIELD_LABELS:
             if label not in slots:
                 continue
             slot = slots[label]
             text = replacements[label]
-            _insert_replacement_slot_text(page, slot, text, registered_fonts=registered_fonts)
+            table_slot = table_slots_by_key.get(_normalize_technical_key(label))
+            if table_slot is not None:
+                rendered_text, is_missing = _text_or_placeholder(text)
+                _insert_wrapped_text(
+                    page,
+                    table_slot.value_rect,
+                    rendered_text,
+                    origin=None,
+                    font_name=table_slot.value_font_name,
+                    font_size=_technical_table_font_size(table_slot.value_font_size, layout_mode),
+                    color=MISSING_VALUE_COLOR if is_missing else slot.color,
+                    registered_fonts=registered_fonts,
+                    center_vertically=True,
+                )
+            else:
+                _insert_replacement_slot_text(page, slot, text, registered_fonts=registered_fonts)
 
         _redraw_template_table_separators(doc[0], adapter)
         emit_progress("datasheet", next_step, total_steps, "Embedding chart assets")

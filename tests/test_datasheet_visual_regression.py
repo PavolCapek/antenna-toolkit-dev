@@ -6,8 +6,14 @@ from pathlib import Path
 
 import fitz
 
-from datasheet_pdf import _build_chart_replacements, _extract_page_spans, build_datasheet_pdf
-from datasheet_templates import resolve_template_adapter
+from datasheet_pdf import (
+    _build_chart_replacements,
+    _extract_page_spans,
+    _legend_target_rect,
+    _shared_side_legend_scale,
+    build_datasheet_pdf,
+)
+from datasheet.templates import resolve_template_adapter
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -61,7 +67,7 @@ def _has_left_table_line_below(page: fitz.Page, text: str) -> bool:
     for x0, x1, y in _horizontal_table_segments(page):
         if not (span.y1 <= y <= span.y1 + 8.0):
             continue
-        if x0 <= 40.0 and x1 >= 290.0:
+        if x0 <= 40.0 and x1 >= 275.0:
             return True
     return False
 
@@ -184,17 +190,19 @@ class DatasheetVisualRegressionTests(unittest.TestCase):
             self.assertIn("text_placeholder", text)
             self.assertTrue(_has_left_table_line_below(page_one, "VSWR"))
             self.assertTrue(_has_left_table_line_below(page_one, "Nominal Impedance"))
-            self.assertFalse(_has_left_table_line_below(page_one, "Beamwidth H plane."))
+            self.assertTrue(_has_left_table_line_below(page_one, "Beamwidth H plane."))
             table_segments = _horizontal_table_segments(page_one)
             self.assertEqual(len(table_segments), len(set(table_segments)))
             self.assertFalse([segment for segment in table_segments if segment[0] < 40.0 and segment[1] > 500.0])
             self.assertFalse([segment for segment in table_segments if segment[2] > 565.0])
+            self.assertFalse([segment for segment in table_segments if segment[0] < 285.0 and segment[1] > 295.0])
             self.assertEqual(len(replacements), 7)
+            shared_legend_scale = _shared_side_legend_scale(replacements)
             for replacement in replacements:
                 self.assertGreater(_non_white_ratio(page_two, replacement.erase_rect or replacement.rect), 0.01)
-                if replacement.kind.startswith("radiation_"):
+                if replacement.kind in {"gain", "vswr"} or replacement.kind.startswith("radiation_"):
                     self.assertIsNotNone(replacement.legend_rect)
-                    self.assertGreater(_non_white_ratio(page_two, replacement.legend_rect), 0.01)
+                    self.assertGreater(_non_white_ratio(page_two, _legend_target_rect(replacement, shared_legend_scale)), 0.01)
 
 
 if __name__ == "__main__":

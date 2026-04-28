@@ -5,8 +5,8 @@ from pathlib import Path
 
 import fitz
 
-from datasheet_models import DatasheetModel, load_datasheet_model
-from datasheet_templates import DatasheetTemplateAdapter, resolve_template_adapter
+from datasheet.models import DatasheetModel, load_datasheet_model
+from datasheet.templates import DatasheetTemplateAdapter, resolve_template_adapter
 
 
 @dataclass(frozen=True)

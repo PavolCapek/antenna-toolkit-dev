@@ -5,6 +5,9 @@ from pathlib import Path
 
 import fitz
 
+from datasheet.layouts.netqui_1pol import NETQUI_SLOT_ORDER_ROWS
+from datasheet.layouts.rfe import RFE_SLOT_ORDER_FIRST_TWO_THEN_X
+
 
 @dataclass(frozen=True)
 class TemplateChartSlot:
@@ -80,12 +83,12 @@ NETQUI_TEMPLATE_MANIFEST = TemplateManifest(
         page_index=None,
         min_image_slots=4,
         slots=(
-            TemplateChartSlot("gain", 0, "gain", legend_mode="none"),
-            TemplateChartSlot("vswr", 1, "vswr", required=False, legend_mode="none"),
+            TemplateChartSlot("gain", 0, "gain", legend_mode="netqui_top_side"),
+            TemplateChartSlot("vswr", 1, "vswr", required=False, legend_mode="netqui_top_side"),
             TemplateChartSlot("beamwidth_e_plane", 2, "beamwidth_plane", plane="e-plane", legend_mode="netqui_side"),
             TemplateChartSlot("beamwidth_h_plane", 3, "beamwidth_plane", plane="h-plane", legend_mode="netqui_side"),
         ),
-        slot_order="rows",
+        slot_order=NETQUI_SLOT_ORDER_ROWS,
     ),
     technical_layout_mode="netqui",
 )
@@ -96,15 +99,15 @@ NETQUI_1POL_TEMPLATE_MANIFEST = TemplateManifest(
         page_index=1,
         min_image_slots=7,
         slots=(
-            TemplateChartSlot("gain", 0, "gain", legend_mode="none"),
-            TemplateChartSlot("vswr", 1, "vswr", required=False, legend_mode="none"),
+            TemplateChartSlot("gain", 0, "gain", legend_mode="netqui_top_side"),
+            TemplateChartSlot("vswr", 1, "vswr", required=False, legend_mode="netqui_top_side"),
             TemplateChartSlot("beamwidth_e_plane", 2, "beamwidth_plane", plane="e-plane", legend_mode="netqui_side"),
             TemplateChartSlot("beamwidth_h_plane", 3, "beamwidth_plane", plane="h-plane", legend_mode="netqui_side"),
             TemplateChartSlot("radiation_low", 4, "polar_combined_planes_triplet", frequency_role="low", legend_mode="netqui_bottom"),
             TemplateChartSlot("radiation_mid", 5, "polar_combined_planes_triplet", frequency_role="mid", legend_mode="netqui_bottom"),
             TemplateChartSlot("radiation_high", 6, "polar_combined_planes_triplet", frequency_role="high", legend_mode="netqui_bottom"),
         ),
-        slot_order="rows",
+        slot_order=NETQUI_SLOT_ORDER_ROWS,
     ),
     technical_layout_mode="netqui_1pol",
 )
@@ -121,7 +124,7 @@ RFE_TEMPLATE_MANIFEST = TemplateManifest(
             TemplateChartSlot("elevation", 3, "polar_elevation", required=False),
         ),
         normalize_width_kinds=("gain", "beamwidth"),
-        slot_order="first_two_then_x",
+        slot_order=RFE_SLOT_ORDER_FIRST_TWO_THEN_X,
     ),
 )
 
@@ -145,7 +148,6 @@ NETQUI_1POL_TEMPLATE_ADAPTER = DatasheetTemplateAdapter(
     key="netqui_1pol",
     display_name="Netqui 1Pol Datasheet",
     filename_tokens=("netqui - 1pol", "netqui-1pol", "netqui_1pol"),
-    required_text_markers=("ANTENNA GAIN", "ANTENNA BEAMWIDTH", "RADIATION PATTERNS"),
     chart_layout_mode="netqui_1pol",
     technical_layout_mode="netqui_1pol",
     manifest=NETQUI_1POL_TEMPLATE_MANIFEST,

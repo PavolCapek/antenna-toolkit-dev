@@ -37,7 +37,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.project = ProjectRecord(
             name="Dirty Project",
             slug="dirty_project",
-            settings=self.window.collect_preset_values(),
+            settings={},
             presets={},
             active_preset="",
             run_state={},
@@ -54,6 +54,7 @@ class StudioDirtyStateTests(unittest.TestCase):
     def test_starts_clean_and_save_button_tracks_project_changes(self) -> None:
         self.assertFalse(self.window.has_unsaved_project_changes())
         self.assertFalse(self.window.project_save_button.isEnabled())
+        self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
 
         self.window._add_ffs_files(["Input data/a.ffs"])
         self.app.processEvents()
@@ -61,6 +62,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertTrue(self.window.has_unsaved_project_changes())
         self.assertTrue(self.window.project_save_button.isEnabled())
         self.assertTrue(self.window.project_name.text().endswith("*"))
+        self.assertEqual(self.window.project_save_state_indicator.text(), "Project has unsaved changes")
 
         self.window.save_project_changes()
         self.app.processEvents()
@@ -68,6 +70,57 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertFalse(self.window.has_unsaved_project_changes())
         self.assertFalse(self.window.project_save_button.isEnabled())
         self.assertFalse(self.window.project_name.text().endswith("*"))
+        self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
+
+    def test_workspace_status_indicators_replace_summary_badges(self) -> None:
+        self.assertFalse(hasattr(self.window, "count_badge"))
+        self.assertFalse(hasattr(self.window, "preset_badge"))
+        self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
+        self.assertEqual(self.window.preset_save_state_indicator.text(), "No preset selected")
+
+        self.window.global_presets["Preset A"] = self.window.collect_preset_values()
+        self.window.global_active_preset = "Preset A"
+        self.window.project_active_preset = "Preset A"
+        self.window.refresh_preset_list(select_name="Preset A")
+        self.window.save_project_changes()
+        self.app.processEvents()
+
+        self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset saved")
+
+        self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset has unsaved changes")
+        self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
+
+    def test_active_global_preset_loads_clean_on_reset(self) -> None:
+        preset = self.window.collect_preset_values()
+        preset["smooth"] = 9
+        self.window.global_presets["Startup Preset"] = preset
+        self.window.global_active_preset = "Startup Preset"
+
+        self.window._reset_to_default_state(clear_persisted_project=False)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.current_preset_name(), "Startup Preset")
+        self.assertEqual(self.window.beam_smooth.value(), 9)
+        self.assertFalse(self.window.has_unsaved_preset_changes())
+        self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset saved")
+
+    def test_legacy_preset_missing_default_keys_loads_clean(self) -> None:
+        preset = self.window.collect_preset_values()
+        preset.pop("cartesian_figure_width")
+        preset.pop("cartesian_figure_height")
+        preset.pop("polar_azimuth_line_1_color")
+        preset["plot_line_1"] = preset["plot_line_1"].lower()
+        self.window.global_presets["Legacy Preset"] = preset
+        self.window.global_active_preset = "Legacy Preset"
+
+        self.window._reset_to_default_state(clear_persisted_project=False)
+        self.app.processEvents()
+
+        self.assertFalse(self.window.has_unsaved_preset_changes())
+        self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset saved")
 
     def test_ffs_port_label_is_project_only_and_marks_dirty(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "sample_H.ffs"
@@ -124,12 +177,15 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(loaded_after_save.presets, {})
         self.assertEqual(loaded_after_save.active_preset, "Preset A")
         first_saved_settings = dict(loaded_after_save.settings)
-        self.assertEqual(first_saved_settings["smooth"], self.window.beam_smooth.value())
+        self.assertEqual(first_saved_settings, {})
 
         self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
         self.app.processEvents()
 
-        self.assertTrue(self.window.has_unsaved_project_changes())
+        self.assertFalse(self.window.has_unsaved_project_changes())
+        self.assertTrue(self.window.has_unsaved_preset_changes())
+        self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
+        self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset has unsaved changes")
 
         self.window.cartesian_grid_line_width.setValue(1.4)
         self.window.polar_grid_line_width.setValue(1.1)
@@ -155,7 +211,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.window.save_preset()
         self.app.processEvents()
 
-        self.assertTrue(self.window.has_unsaved_project_changes())
+        self.assertFalse(self.window.has_unsaved_project_changes())
+        self.assertFalse(self.window.has_unsaved_preset_changes())
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["smooth"], self.window.beam_smooth.value())
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_grid_line_width"], 1.4)
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["polar_grid_line_width"], 1.1)
@@ -189,14 +246,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         loaded_before_second_save = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded_before_second_save.presets, {})
         self.assertEqual(loaded_before_second_save.settings, first_saved_settings)
-
-        self.window.save_project_changes()
-        self.app.processEvents()
-
-        loaded_after_second_save = self.window.project_store.load_project(self.project.slug)
-        self.assertEqual(loaded_after_second_save.presets, {})
-        self.assertEqual(loaded_after_second_save.active_preset, "Preset A")
-        self.assertEqual(loaded_after_second_save.settings, self.window.collect_preset_values())
+        self.assertEqual(loaded_before_second_save.active_preset, "Preset A")
 
     def test_document_tab_contains_preset_backed_author_field(self) -> None:
         tabs = [self.window.workflow_tabs.tabText(index) for index in range(self.window.workflow_tabs.count())]
@@ -421,7 +471,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         second = ProjectRecord(
             name="Second Project",
             slug="second_project",
-            settings=self.window._default_project_settings(),
+            settings={},
             presets={},
             active_preset="",
             run_state={},
@@ -434,6 +484,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertGreaterEqual(self.window.preset_combo.findData("Preset A"), 0)
         self.assertEqual(self.window.current_preset_name(), "")
         self.assertEqual(self.window.project_store.load_project(second.slug).active_preset, "")
+        self.assertEqual(self.window.project_store.load_project(second.slug).settings, {})
 
     def test_switching_projects_applies_each_projects_selected_preset(self) -> None:
         preset_a = dict(self.window.collect_preset_values())
@@ -518,7 +569,7 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         saved_first = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(self.window.global_presets["Preset A"]["smooth"], 9)
-        self.assertEqual(saved_first.settings["smooth"], 9)
+        self.assertEqual(saved_first.settings, {})
         self.assertEqual(saved_first.ffs_items[0]["path"], "Input data/a.ffs")
         self.assertEqual(self.window.active_project_slug, second.slug)
 
@@ -568,7 +619,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         project = ProjectRecord(
             name="Restored Project",
             slug="restored_project",
-            settings=self.window._default_project_settings(),
+            settings={},
             presets={},
             active_preset="",
             run_state={},

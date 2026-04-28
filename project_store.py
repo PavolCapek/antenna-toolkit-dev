@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 PROJECTS_DIRNAME = "Projects"
 PROJECT_FILE_NAME = "project.json"
-CURRENT_PROJECT_SCHEMA_VERSION = 5
+CURRENT_PROJECT_SCHEMA_VERSION = 6
 
 
 def utc_now_iso() -> str:
@@ -129,8 +129,6 @@ class ProjectRecord:
             "ffs_items": self.ffs_items,
             "touchstone_file": self.touchstone_file,
             "technical_data_file": self.technical_data_file,
-            "settings": self.settings,
-            "presets": self.presets,
             "active_preset": self.active_preset,
             "run_state": self.run_state,
         }

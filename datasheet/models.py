@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 
-from datasheet_artifacts import artifact_manifest_path, load_artifact_manifest
+from datasheet.artifacts import artifact_manifest_path, load_artifact_manifest
 
 
 FIELD_LABELS = [
