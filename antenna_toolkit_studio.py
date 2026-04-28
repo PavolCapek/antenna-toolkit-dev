@@ -979,6 +979,12 @@ class ModernMainWindow(QMainWindow):
         self._loading_project = False
         self._applying_preset_values = False
         self._suppress_ffs_item_change = False
+        self._refresh_cache: dict[str, object] = {}
+        self._refresh_cache_enabled = False
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(75)
+        self._refresh_timer.timeout.connect(self.refresh_derived_paths)
         self._run_cancelled = False
         self._current_stage_key = ""
         self._pending_stage_keys: list[str] = []
@@ -2043,6 +2049,16 @@ class ModernMainWindow(QMainWindow):
             return
         self.refresh_derived_paths()
 
+    def request_derived_paths_refresh(self) -> None:
+        if self._loading_project:
+            return
+        self._refresh_timer.start()
+
+    def flush_derived_paths_refresh(self) -> None:
+        if self._refresh_timer.isActive():
+            self._refresh_timer.stop()
+        self.refresh_derived_paths()
+
     def _save_active_preset(self, *, refresh: bool = False) -> bool:
         name = self._active_preset_for_dirty_check()
         if not name or name not in self.global_presets:
@@ -2573,9 +2589,10 @@ class ModernMainWindow(QMainWindow):
         if self._loading_project or self._applying_preset_values:
             return
         if self._active_preset_for_dirty_check():
-            self.refresh_derived_paths()
+            self.request_derived_paths_refresh()
             return
-        self._mark_project_dirty()
+        if self.active_project_slug:
+            self.request_derived_paths_refresh()
 
     def collect_ffs_items(self) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
@@ -2594,6 +2611,32 @@ class ModernMainWindow(QMainWindow):
     def _enabled_ffs_count(self) -> int:
         return sum(1 for item in self.collect_ffs_items() if bool(item["enabled"]))
 
+    def _cache_get(self, key: str) -> object | None:
+        if not self._refresh_cache_enabled:
+            return None
+        return self._refresh_cache.get(key)
+
+    def _cache_set(self, key: str, value: object) -> object:
+        if self._refresh_cache_enabled:
+            self._refresh_cache[key] = value
+        return value
+
+    def _cached_path_exists(self, path: str | Path) -> bool:
+        cache_key = f"exists:{Path(path)}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return bool(cached)
+        return bool(self._cache_set(cache_key, Path(path).exists()))
+
+    def _cached_project_file_count(self) -> int:
+        project_dir = self.project_results_dir()
+        cache_key = f"file_count:{project_dir}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return int(cached)
+        count = sum(1 for path in project_dir.rglob("*") if path.is_file()) if project_dir.exists() else 0
+        return int(self._cache_set(cache_key, count))
+
     def _path_fingerprint(self, path: str | Path | None) -> dict[str, object]:
         if is_url(path):
             return {
@@ -2602,7 +2645,11 @@ class ModernMainWindow(QMainWindow):
                 "type": "url",
             }
         resolved = Path(resolve_workspace_path(path)) if path else Path()
-        exists = bool(path) and resolved.exists()
+        cache_key = f"fingerprint:{resolved}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return dict(cached)
+        exists = bool(path) and self._cached_path_exists(resolved)
         payload: dict[str, object] = {
             "path": serialize_workspace_path(THIS_DIR, resolved) if path else "",
             "exists": exists,
@@ -2611,6 +2658,7 @@ class ModernMainWindow(QMainWindow):
             stat = resolved.stat()
             payload["mtime_ns"] = int(stat.st_mtime_ns)
             payload["size"] = int(stat.st_size)
+        self._cache_set(cache_key, dict(payload))
         return payload
 
     def _stage_settings_snapshot(self, stage_key: str) -> dict[str, object]:
@@ -2695,16 +2743,26 @@ class ModernMainWindow(QMainWindow):
                 shutil.rmtree(path, ignore_errors=False)
 
     def _stage_output_any_exists(self, stage_key: str) -> bool:
+        cache_key = f"stage_any:{stage_key}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return bool(cached)
         files = self._stage_output_files(stage_key)
         if not files:
             return False
-        return any(path.exists() for path in files)
+        exists = any(self._cached_path_exists(path) for path in files)
+        return bool(self._cache_set(cache_key, exists))
 
     def _stage_output_exists(self, stage_key: str) -> bool:
+        cache_key = f"stage_all:{stage_key}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return bool(cached)
         files = self._stage_output_files(stage_key)
         if not files:
             return False
-        return all(path.exists() for path in files)
+        exists = all(self._cached_path_exists(path) for path in files)
+        return bool(self._cache_set(cache_key, exists))
 
     def _ensure_run_state(self) -> None:
         if not isinstance(self.project_run_state, dict):
@@ -2748,13 +2806,18 @@ class ModernMainWindow(QMainWindow):
         )
 
     def _stage_is_stale(self, stage_key: str) -> bool:
+        cache_key = f"stage_stale:{stage_key}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return bool(cached)
         if not self._stage_output_exists(stage_key):
-            return False
+            return bool(self._cache_set(cache_key, False))
         stage_state = self._stage_state(stage_key)
         snapshot = stage_state.get("snapshot")
         if not snapshot:
-            return True
-        return snapshot != self._current_stage_snapshot(stage_key)
+            return bool(self._cache_set(cache_key, True))
+        stale = snapshot != self._current_stage_snapshot(stage_key)
+        return bool(self._cache_set(cache_key, stale))
 
     def _stage_stale_detail(self, stage_key: str) -> str:
         if not self._stage_output_exists(stage_key):
@@ -2769,11 +2832,17 @@ class ModernMainWindow(QMainWindow):
         return stage_stale_detail(stage_key, snapshot.get("tool_versions"), current_versions)
 
     def _stale_stage_keys(self) -> list[str]:
-        return [
+        cache_key = "stale_stage_keys"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return list(cached)
+        keys = [
             stage_key
             for stage_key, _label in STAGE_DEFINITIONS
             if self._stage_is_applicable(stage_key) and self._stage_is_stale(stage_key)
         ]
+        self._cache_set(cache_key, list(keys))
+        return keys
 
     def _preset_matches_selected(self) -> bool:
         name = self.project_active_preset or self.current_preset_name()
@@ -2790,7 +2859,7 @@ class ModernMainWindow(QMainWindow):
         paths = [str(item["path"]) for item in items]
         enabled_paths = [str(item["path"]) for item in items if bool(item["enabled"])]
         duplicates = sorted({path for path in paths if paths.count(path) > 1})
-        missing_ffs = [path for path in paths if path and not Path(path).exists()]
+        missing_ffs = [path for path in paths if path and not self._cached_path_exists(Path(path))]
         if not items:
             messages.append("Add at least one far-field file for workbook and plot stages.")
         elif not enabled_paths:
@@ -2802,7 +2871,7 @@ class ModernMainWindow(QMainWindow):
             more = " ..." if len(missing_ffs) > 3 else ""
             messages.append(f"Missing far-field files: {sample}{more}")
         s2p = self.selected_s2p()
-        if s2p and not Path(s2p).exists():
+        if s2p and not self._cached_path_exists(Path(s2p)):
             messages.append(f"Selected Touchstone file is missing: {display_workspace_path(s2p)}")
         elif not s2p:
             messages.append("VSWR stage is unavailable until a Touchstone file is selected.")
@@ -2813,12 +2882,12 @@ class ModernMainWindow(QMainWindow):
             messages.append("Selected Google Sheet URL is missing a spreadsheet ID.")
         elif self.technical_data_is_google_sheet() and not self.google_sheets_auth_configured():
             messages.append("Google Sheets sign-in is required before Datasheet generation.")
-        elif technical_data and not is_url(technical_data) and not Path(technical_data).exists():
+        elif technical_data and not is_url(technical_data) and not self._cached_path_exists(Path(technical_data)):
             messages.append(f"Selected Technical Data workbook is missing: {display_workspace_path(technical_data)}")
         elif not technical_data:
             messages.append("Datasheet stage is unavailable until a Technical Data workbook is selected.")
         template_path = self.selected_datasheet_template_path()
-        if not template_path.exists():
+        if not self._cached_path_exists(template_path):
             messages.append(f"Selected datasheet template is missing: {display_workspace_path(template_path)}")
         fmin = float(self.shared_fmin.value())
         fmax = float(self.shared_fmax.value())
@@ -2982,11 +3051,11 @@ class ModernMainWindow(QMainWindow):
         enabled_ffs = self._enabled_ffs_count() if has_project else 0
         missing_enabled = self._missing_enabled_ffs() if has_project else []
         s2p = self.selected_s2p() if has_project else ""
-        touchstone_ready = bool(s2p) and Path(s2p).exists()
+        touchstone_ready = bool(s2p) and self._cached_path_exists(Path(s2p))
         technical_data = self.selected_technical_data() if has_project else ""
         technical_data_ready = self.technical_data_source_ready() if has_project else False
         template_path = self.selected_datasheet_template_path()
-        template_ready = template_path.exists()
+        template_ready = self._cached_path_exists(template_path)
         frequency_ready = self._frequency_window_is_valid()
         stale_stages = self._stale_stage_keys() if has_project else []
         latest_failed = self._latest_failed_stage_key() if has_project else ""
@@ -3188,8 +3257,7 @@ class ModernMainWindow(QMainWindow):
                 artifact_bits.append(f"{stage_label}: ready")
             else:
                 artifact_bits.append(f"{stage_label}: missing")
-        project_dir = self.project_results_dir()
-        file_count = sum(1 for path in project_dir.rglob("*") if path.is_file()) if project_dir.exists() else 0
+        file_count = self._cached_project_file_count()
         self.project_stats_label.setText(
             f"Schema v{self._loaded_project_schema_version}->{CURRENT_PROJECT_SCHEMA_VERSION} | "
             f"{enabled_ffs} enabled / {total_ffs} far-field files"
@@ -3384,7 +3452,7 @@ class ModernMainWindow(QMainWindow):
             return False
         if is_url(source):
             return self.technical_data_is_google_sheet() and bool(extract_google_sheet_id(source)) and self.google_sheets_auth_configured()
-        return Path(source).exists()
+        return self._cached_path_exists(Path(source))
 
     def selected_pdf_metadata_author(self) -> str:
         return self.pdf_metadata_author.text().strip()
@@ -3433,21 +3501,30 @@ class ModernMainWindow(QMainWindow):
         return project.vswr_path(THIS_DIR) if project else (self.project_results_dir() / "project-vswr.svg")
 
     def refresh_derived_paths(self) -> None:
-        if self.active_project_slug:
-            project_label = self.active_project_name or self.active_project_slug
-            self.project_name.setText(project_label)
-            self.project_meta.setText(f"Folder: {display_workspace_path(self.project_results_dir())}")
-        else:
-            self.project_name.setText("No project selected")
-            self.project_meta.setText("Create a project to keep inputs, presets, and generated results together.")
-        if self.active_project_slug:
-            suffix = " *" if self.has_unsaved_project_changes() else ""
-            self.project_name.setText(f"{(self.active_project_name or self.active_project_slug)}{suffix}")
-        self.open_s2p_button.setEnabled(bool(self.active_project_slug and self.selected_s2p()))
-        self.open_technical_data_button.setEnabled(bool(self.active_project_slug and self.selected_technical_data()))
-        self._update_ffs_action_state()
-        self._refresh_project_summary()
-        self._update_project_action_state()
+        was_enabled = self._refresh_cache_enabled
+        if not was_enabled:
+            self._refresh_cache = {}
+            self._refresh_cache_enabled = True
+        try:
+            if self.active_project_slug:
+                project_label = self.active_project_name or self.active_project_slug
+                self.project_name.setText(project_label)
+                self.project_meta.setText(f"Folder: {display_workspace_path(self.project_results_dir())}")
+            else:
+                self.project_name.setText("No project selected")
+                self.project_meta.setText("Create a project to keep inputs, presets, and generated results together.")
+            if self.active_project_slug:
+                suffix = " *" if self.has_unsaved_project_changes() else ""
+                self.project_name.setText(f"{(self.active_project_name or self.active_project_slug)}{suffix}")
+            self.open_s2p_button.setEnabled(bool(self.active_project_slug and self.selected_s2p()))
+            self.open_technical_data_button.setEnabled(bool(self.active_project_slug and self.selected_technical_data()))
+            self._update_ffs_action_state()
+            self._refresh_project_summary()
+            self._update_project_action_state()
+        finally:
+            if not was_enabled:
+                self._refresh_cache = {}
+                self._refresh_cache_enabled = False
 
     def _update_project_action_state(self) -> None:
         has_project = bool(self.active_project_slug)
@@ -3466,7 +3543,7 @@ class ModernMainWindow(QMainWindow):
         self.project_run_vswr_action.setEnabled(has_project)
         self.project_import_action.setEnabled(True)
         self.project_export_action.setEnabled(has_project)
-        has_generated_outputs = any(path.exists() for path in self._all_generated_output_files()) if has_project else False
+        has_generated_outputs = any(self._cached_path_exists(path) for path in self._all_generated_output_files()) if has_project else False
         self.project_delete_outputs_action.setEnabled(has_project and not is_running and has_generated_outputs)
         self.project_open_folder_action.setEnabled(has_project)
         for widget in (

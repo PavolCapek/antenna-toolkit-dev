@@ -577,6 +577,17 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.beam_smooth.value(), 11)
         self.assertLessEqual(refresh.call_count, 2)
 
+    def test_configuration_changes_debounce_refresh_work(self) -> None:
+        with mock.patch.object(self.window, "refresh_derived_paths") as refresh:
+            for _index in range(5):
+                self.window.on_project_configuration_changed()
+
+            self.assertEqual(refresh.call_count, 0)
+
+            self.window.flush_derived_paths_refresh()
+
+        self.assertEqual(refresh.call_count, 1)
+
     def test_switching_projects_can_save_dirty_preset_and_project(self) -> None:
         preset_a = dict(self.window.collect_preset_values())
         preset_a["smooth"] = 5
