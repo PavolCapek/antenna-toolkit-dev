@@ -544,6 +544,39 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.current_preset_name(), "Preset B")
         self.assertEqual(self.window.beam_smooth.value(), 11)
 
+    def test_switching_presets_batches_refresh_work(self) -> None:
+        preset_a = dict(self.window.collect_preset_values())
+        preset_b = dict(self.window.collect_preset_values())
+        preset_b.update({
+            "smooth": 11,
+            "theta": 12.0,
+            "smooth2": 9,
+            "shared_xstep": 0.5,
+            "gain_ymax": 18.0,
+            "beamwidth_ymax": 140.0,
+            "vswr_ymax": 5.0,
+            "cartesian_line_width": 3.0,
+            "polar_line_width": 3.0,
+            "plot_line_1": "#123456",
+            "plot_line_2": "#654321",
+            "gain_legend_labels": "A,B",
+        })
+        self.window.global_presets = {"Preset A": preset_a, "Preset B": preset_b}
+        self.window.project_active_preset = "Preset A"
+        self.window.global_active_preset = "Preset A"
+        self.window._persist_global_presets()
+        self.window.refresh_preset_list(select_name="Preset A")
+        self.window.apply_preset_values(preset_a)
+        self.app.processEvents()
+
+        with mock.patch.object(self.window, "refresh_derived_paths", wraps=self.window.refresh_derived_paths) as refresh:
+            self.window.preset_combo.setCurrentIndex(self.window.preset_combo.findData("Preset B"))
+            self.app.processEvents()
+
+        self.assertEqual(self.window.current_preset_name(), "Preset B")
+        self.assertEqual(self.window.beam_smooth.value(), 11)
+        self.assertLessEqual(refresh.call_count, 2)
+
     def test_switching_projects_can_save_dirty_preset_and_project(self) -> None:
         preset_a = dict(self.window.collect_preset_values())
         preset_a["smooth"] = 5

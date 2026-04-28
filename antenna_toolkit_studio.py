@@ -977,6 +977,7 @@ class ModernMainWindow(QMainWindow):
         self.proc = Proc(self)
         self._closing_app = False
         self._loading_project = False
+        self._applying_preset_values = False
         self._suppress_ffs_item_change = False
         self._run_cancelled = False
         self._current_stage_key = ""
@@ -2569,7 +2570,7 @@ class ModernMainWindow(QMainWindow):
             signal.connect(self.on_project_configuration_changed)
 
     def on_project_configuration_changed(self, *_args) -> None:
-        if self._loading_project:
+        if self._loading_project or self._applying_preset_values:
             return
         if self._active_preset_for_dirty_check():
             self.refresh_derived_paths()
@@ -3955,6 +3956,14 @@ class ModernMainWindow(QMainWindow):
     def apply_preset_values(self, values: dict[str, object]) -> None:
         if not values:
             return
+        previous = self._applying_preset_values
+        self._applying_preset_values = True
+        try:
+            self._apply_preset_values_unchecked(values)
+        finally:
+            self._applying_preset_values = previous
+
+    def _apply_preset_values_unchecked(self, values: dict[str, object]) -> None:
         def value_or_legacy(primary: str, legacy: str) -> object | None:
             if primary in values:
                 return values[primary]
