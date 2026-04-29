@@ -9,6 +9,13 @@ import fitz
 import pandas as pd
 
 from datasheet.artifacts import build_asset_record, load_artifact_manifest, update_artifact_manifest
+from datasheet.models import DatasheetTableRow
+from datasheet.tables import (
+    extra_rows_for_sections,
+    is_electrical_section,
+    resolve_datasheet_tables,
+    row_for_fixed_label,
+)
 from datasheet_pdf import (
     ChartReplacement,
     _build_chart_replacements,
@@ -601,6 +608,51 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(by_label["Product ID"], "")
         self.assertEqual(by_label["Radio Connection"], "")
 
+    def test_load_technical_data_workbook_accepts_section_label_value_rows(self) -> None:
+        pd.DataFrame(
+            [
+                ("Section", "Label", "Value"),
+                ("Performance", "Gain", "Manual gain should not override"),
+                ("Mechanical Data", "Custom Mechanical", "Mechanical custom value"),
+                ("Mechanical Data", "Custom Mechanical", "Mechanical custom final value"),
+            ]
+        ).to_excel(self.technical_workbook, sheet_name="Sheet1", index=False, header=False)
+
+        entries = load_technical_data_workbook(self.technical_workbook)
+
+        self.assertEqual([(entry.section, entry.label, entry.value) for entry in entries], [
+            ("Performance", "Gain", "Manual gain should not override"),
+            ("Mechanical Data", "Custom Mechanical", "Mechanical custom final value"),
+        ])
+
+    def test_table_resolver_keeps_calculated_performance_authoritative(self) -> None:
+        tables = resolve_datasheet_tables(
+            {"Gain": "19.5 dBi"},
+            [
+                DatasheetTableRow(section="Performance", label="Gain", value="Manual gain"),
+                DatasheetTableRow(section="Performance", label="Custom Performance", value="Custom performance value"),
+            ],
+            adapter=RFE_TEMPLATE_ADAPTER,
+        )
+
+        self.assertEqual(row_for_fixed_label(tables, "Gain").value, "19.5 dBi")
+        extras = extra_rows_for_sections(tables, used_keys={"gain"}, section_filter=is_electrical_section)
+
+        self.assertEqual([(row.label, row.value) for row in extras], [("Custom Performance", "Custom performance value")])
+
+    def test_table_resolver_maps_netqui_template_aliases(self) -> None:
+        tables = resolve_datasheet_tables(
+            {},
+            [
+                DatasheetTableRow(section="Mechanical Data", label="Radio Connection", value="Waveguide input"),
+                DatasheetTableRow(section="Mechanical Data", label="Materials", value="Aluminium"),
+            ],
+            adapter=NETQUI_TEMPLATE_ADAPTER,
+        )
+
+        self.assertEqual(row_for_fixed_label(tables, "RF Connection").value, "Waveguide input")
+        self.assertEqual(row_for_fixed_label(tables, "Material").value, "Aluminium")
+
     def test_build_datasheet_pdf_populates_technical_data_and_marks_missing_values(self) -> None:
         self._write_template_pdf(add_technical_data=True)
         self._write_technical_workbook(
@@ -658,6 +710,37 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertTrue(any(((span["color"] >> 16) & 0xFF) > 180 for span in placeholder_spans))
         self.assertNotIn("Template connector", page_text)
         self.assertAlmostEqual(custom_bottom_line - previous_line, 12.0, places=1)
+
+    def test_build_datasheet_pdf_adds_sectioned_custom_rows_without_overriding_generated_values(self) -> None:
+        self._write_template_pdf(add_technical_data=True)
+        pd.DataFrame(
+            [
+                ("Section", "Label", "Value"),
+                ("Technical Data", "Antenna Name", "Sample Horn"),
+                ("Technical Data", "Product ID", "SH123"),
+                ("Technical Data", "Radio Connection", "Waveguide input"),
+                ("Technical Data", "Custom Technical Note", "Custom technical value"),
+                ("Performance", "Gain", "Manual gain"),
+                ("Performance", "Custom Performance Note", "Custom performance value"),
+            ]
+        ).to_excel(self.technical_workbook, sheet_name="Sheet1", index=False, header=False)
+
+        build_datasheet_pdf(
+            output=self.output_pdf,
+            template=self.template_pdf,
+            extract_workbook=self.extract_workbook,
+            technical_data_workbook=self.technical_workbook,
+        )
+
+        with fitz.open(self.output_pdf) as doc:
+            page_text = "\n".join(page.get_text() for page in doc)
+
+        self.assertIn("Custom Technical Note", page_text)
+        self.assertIn("Custom technical value", page_text)
+        self.assertIn("Custom Performance Note", page_text)
+        self.assertIn("Custom performance value", page_text)
+        self.assertIn("19.5 dBi", page_text)
+        self.assertNotIn("Manual gain", page_text)
 
     def test_build_datasheet_pdf_matches_alternate_performance_labels(self) -> None:
         self._write_template_pdf(
@@ -720,6 +803,40 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertNotIn("Log-periodic Antenna", page_text)
         self.assertNotIn("1142 x 200 x 618 mm", page_text)
         self.assertNotIn("6.7 kg", page_text)
+
+    def test_build_datasheet_pdf_netqui_template_uses_aliases_and_sectioned_extra_rows(self) -> None:
+        self._write_netqui_technical_template_pdf()
+        pd.DataFrame(
+            [
+                ("Section", "Label", "Value"),
+                ("Technical Data", "Antenna Name", "Sample Horn"),
+                ("Technical Data", "Product ID", "SH123"),
+                ("Technical Data", "Radio Connection", "Waveguide input"),
+                ("Mechanical Data", "Custom Mechanical Note", "Mechanical custom value"),
+                ("Electrical Data", "Custom Electrical Note", "Electrical custom value"),
+                ("Performance", "Gain", "Manual gain"),
+            ]
+        ).to_excel(self.technical_workbook, sheet_name="Sheet1", index=False, header=False)
+
+        build_datasheet_pdf(
+            output=self.output_pdf,
+            template=self.template_pdf,
+            extract_workbook=self.extract_workbook,
+            technical_data_workbook=self.technical_workbook,
+        )
+
+        with fitz.open(self.output_pdf) as doc:
+            page_text = doc[0].get_text()
+
+        self.assertIn("Waveguide input", page_text)
+        self.assertIn("Custom", page_text)
+        self.assertIn("Mechanical", page_text)
+        self.assertIn("Note", page_text)
+        self.assertIn("Mechanical custom value", page_text)
+        self.assertIn("Custom Electrical", page_text)
+        self.assertIn("Electrical custom value", page_text)
+        self.assertIn("19.5 dBi", page_text)
+        self.assertNotIn("Manual gain", page_text)
 
     def test_exact_span_replacement_does_not_paint_white_background(self) -> None:
         with fitz.open() as doc:

@@ -81,9 +81,15 @@ KNOWN_POLARIZATION_KEYS = {"horizontal", "vertical", "rhcp", "lhcp"}
 
 
 @dataclass
-class TechnicalDataEntry:
+class DatasheetTableRow:
     label: str
     value: str
+    section: str = "Technical Data"
+    canonical_key: str = ""
+    source: str = "excel"
+
+
+TechnicalDataEntry = DatasheetTableRow
 
 
 @dataclass
@@ -92,6 +98,7 @@ class DatasheetModel:
     technical_data_workbook: Path | None = None
     performance_fields: dict[str, str] = field(default_factory=dict)
     technical_entries: list[TechnicalDataEntry] = field(default_factory=list)
+    table_rows: list[DatasheetTableRow] = field(default_factory=list)
     artifact_manifest: dict[str, Any] = field(default_factory=dict)
 
 
@@ -329,34 +336,119 @@ def normalize_technical_key(value: object) -> str:
     return re.sub(r"\s+", " ", cleaned.strip()).lower()
 
 
+def _normalize_table_header(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").strip().lower()).strip()
+
+
+def normalize_table_section(value: object) -> str:
+    key = _normalize_table_header(value)
+    if key in {"performance", "performance data", "electrical", "electrical data"}:
+        return "Performance" if "performance" in key else "Electrical Data"
+    if key in {"mechanical", "mechanical data"}:
+        return "Mechanical Data"
+    return "Technical Data"
+
+
+def canonical_field_key(value: object) -> str:
+    key = normalize_technical_key(value)
+    if not key:
+        return ""
+    technical_aliases = {
+        "sku": "product id",
+        "rf connection": "radio connection",
+        "material": "materials",
+        "dimensions (lxwxd)": "dimensions",
+        "dimensions (h x w x d)": "dimensions",
+    }
+    if key in technical_aliases:
+        return technical_aliases[key]
+    for canonical, aliases in FIELD_LABEL_ALIASES.items():
+        alias_keys = {normalize_technical_key(alias) for alias in aliases}
+        if key in alias_keys:
+            return normalize_technical_key(canonical)
+    return key
+
+
+def _technical_workbook_has_section_column(data: pd.DataFrame) -> tuple[bool, int]:
+    if data.shape[1] < 3:
+        return False, 0
+    first_non_empty = 0
+    for index, row in data.iloc[:, :3].iterrows():
+        values = [_format_technical_cell(value) for value in row.tolist()]
+        if any(value for value in values):
+            first_non_empty = int(index)
+            break
+    headers = [_normalize_table_header(value) for value in data.iloc[first_non_empty, :3].tolist()]
+    if headers[:3] == ["section", "label", "value"]:
+        return True, first_non_empty + 1
+    known_sections = {
+        "technical",
+        "technical data",
+        "performance",
+        "performance data",
+        "electrical",
+        "electrical data",
+        "mechanical",
+        "mechanical data",
+    }
+    if headers[0] in known_sections:
+        return True, first_non_empty
+    sampled_sections = 0
+    sampled_labels = 0
+    for _index, row in data.iloc[first_non_empty:, :3].head(25).iterrows():
+        section_key = _normalize_table_header(row.iloc[0])
+        label = _format_technical_cell(row.iloc[1])
+        if section_key in known_sections:
+            sampled_sections += 1
+        if label:
+            sampled_labels += 1
+    return sampled_sections > 0 and sampled_labels > 0, first_non_empty
+
+
 def load_technical_data_entries(path: Path) -> list[TechnicalDataEntry]:
     try:
         data = pd.read_excel(path, sheet_name=0, header=None, dtype=object)
     except Exception as exc:
         raise ValueError(f"Could not read Technical Data workbook '{path}'.") from exc
+    has_section_column, start_index = _technical_workbook_has_section_column(data)
     if data.shape[1] < 2:
         data[1] = ""
 
     entries: list[TechnicalDataEntry] = []
-    index_by_key: dict[str, int] = {}
-    for _idx, row in data.iloc[:, :2].iterrows():
-        label = _format_technical_cell(row.iloc[0])
+    index_by_key: dict[tuple[str, str], int] = {}
+    for _idx, row in data.iloc[start_index:].iterrows():
+        if has_section_column:
+            section = normalize_table_section(row.iloc[0])
+            label = _format_technical_cell(row.iloc[1])
+            value = _format_technical_cell(row.iloc[2] if data.shape[1] > 2 else "")
+        else:
+            section = "Technical Data"
+            label = _format_technical_cell(row.iloc[0])
+            value = _format_technical_cell(row.iloc[1] if data.shape[1] > 1 else "")
         key = normalize_technical_key(label)
         if not key:
             continue
-        value = _format_technical_cell(row.iloc[1])
-        if key in index_by_key:
-            entries[index_by_key[key]].value = value
+        dedupe_key = (normalize_table_section(section), key)
+        if dedupe_key in index_by_key:
+            entries[index_by_key[dedupe_key]].value = value
             continue
-        index_by_key[key] = len(entries)
-        entries.append(TechnicalDataEntry(label=label, value=value))
+        index_by_key[dedupe_key] = len(entries)
+        entries.append(
+            TechnicalDataEntry(
+                label=label,
+                value=value,
+                section=section,
+                canonical_key=canonical_field_key(label),
+                source="excel",
+            )
+        )
     if not entries:
         raise ValueError("Technical Data workbook does not contain any field/value rows.")
     return entries
 
 
 def technical_data_by_key(entries: list[TechnicalDataEntry]) -> dict[str, TechnicalDataEntry]:
-    return {normalize_technical_key(entry.label): entry for entry in entries}
+    return {entry.canonical_key or canonical_field_key(entry.label): entry for entry in entries}
 
 
 def text_or_placeholder(value: str) -> tuple[str, bool]:
@@ -387,6 +479,7 @@ def load_datasheet_model(
         technical_data_workbook=technical_data_workbook.resolve() if technical_data_workbook else None,
         performance_fields=build_performance_fields(extract_workbook),
         technical_entries=entries,
+        table_rows=entries,
         artifact_manifest=manifest,
     )
 

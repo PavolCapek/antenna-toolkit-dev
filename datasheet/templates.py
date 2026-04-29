@@ -30,9 +30,23 @@ class TemplateChartManifest:
 
 
 @dataclass(frozen=True)
+class TemplateTableAlias:
+    canonical_key: str
+    labels: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TemplateTableManifest:
+    aliases: tuple[TemplateTableAlias, ...] = ()
+    electrical_sections: tuple[str, ...] = ("performance", "electrical data")
+    mechanical_sections: tuple[str, ...] = ("technical data", "mechanical data")
+
+
+@dataclass(frozen=True)
 class TemplateManifest:
     key: str
     chart_layout: TemplateChartManifest | None = None
+    table_layout: TemplateTableManifest = TemplateTableManifest()
     technical_layout_mode: str = "generic"
 
 
@@ -90,6 +104,20 @@ NETQUI_TEMPLATE_MANIFEST = TemplateManifest(
         ),
         slot_order=NETQUI_SLOT_ORDER_ROWS,
     ),
+    table_layout=TemplateTableManifest(
+        aliases=(
+            TemplateTableAlias("frequency range", ("Frequency Range", "Frequency")),
+            TemplateTableAlias("gain", ("Gain", "Antenna Gain", "Nominal Gain")),
+            TemplateTableAlias("azimuth beam width -3 db/-6db", ("Beamwidth H plane.", "Beamwidth H plane", "H Plane Beamwidth", "Horizontal Beamwidth")),
+            TemplateTableAlias("elevation beam width -3 db/-6db", ("Beamwidth E plane.", "Beamwidth E plane", "E Plane Beamwidth", "Vertical Beamwidth")),
+            TemplateTableAlias("vswr", ("VSWR",)),
+            TemplateTableAlias("polarization", ("Polarization",)),
+            TemplateTableAlias("impedance", ("Nominal Impedance", "Impedance")),
+            TemplateTableAlias("radio connection", ("RF Connection", "Radio Connection")),
+            TemplateTableAlias("materials", ("Material", "Materials")),
+            TemplateTableAlias("dimensions", ("Dimensions (LxWxD)", "Dimensions (H x W x D)", "Dimensions")),
+        ),
+    ),
     technical_layout_mode="netqui",
 )
 
@@ -109,6 +137,7 @@ NETQUI_1POL_TEMPLATE_MANIFEST = TemplateManifest(
         ),
         slot_order=NETQUI_SLOT_ORDER_ROWS,
     ),
+    table_layout=NETQUI_TEMPLATE_MANIFEST.table_layout,
     technical_layout_mode="netqui_1pol",
 )
 

@@ -204,6 +204,48 @@ class DatasheetVisualRegressionTests(unittest.TestCase):
                     self.assertIsNotNone(replacement.legend_rect)
                     self.assertGreater(_non_white_ratio(page_two, _legend_target_rect(replacement, shared_legend_scale)), 0.01)
 
+    def test_netqui_1pol_wraps_long_table_values_inside_value_column(self) -> None:
+        template = REPO_ROOT / "Templates" / "Datasheet - Netqui - 1Pol.pdf"
+        project_dir = REPO_ROOT / "Projects" / "TWB_DQ_47_26"
+        extract_workbook = project_dir / "TWB_DQ_47_26-extracted-data.xlsx"
+        technical_workbook = REPO_ROOT / "Input data" / "Technical Data - TWB-DQ-47-26.xlsx"
+        _require_paths(
+            self,
+            [
+                template,
+                extract_workbook,
+                technical_workbook,
+                project_dir / "TWB_DQ_47_26-gain.svg",
+                project_dir / "TWB_DQ_47_26-vswr.svg",
+                project_dir / "TWB_DQ_47_26-beamwidth-e-plane.svg",
+                project_dir / "TWB_DQ_47_26-beamwidth-h-plane.svg",
+                project_dir / "polar_combined",
+            ],
+        )
+        output = self.output_dir / "twb-dq-netqui-1pol.pdf"
+
+        build_datasheet_pdf(output, template, extract_workbook, technical_workbook)
+
+        with fitz.open(output) as doc:
+            page = doc[0]
+            text = page.get_text("text")
+            self.assertIn("~4,2 kg (Total for the inseparable", text)
+            self.assertIn("pair, including bracket and", text)
+            self.assertIn("radome)", text)
+            self.assertIn("2x N-type Female (RP-SMA for", text)
+            self.assertIn("prototypes)", text)
+            self.assertIn("Custom Quick-Release Slide", text)
+            self.assertIn("Mount (for 80x40 mm profiles)", text)
+
+            weight = _span_for_text(page, "Weight")
+            first_weight_line = _span_for_text(page, "~4,2 kg (Total for the inseparable")
+            wrapped_weight = _span_for_text(page, "pair, including bracket and")
+            self.assertGreater(first_weight_line.x0, weight.x1)
+            self.assertGreater(wrapped_weight.x0, weight.x1)
+            self.assertGreater(wrapped_weight.y0, first_weight_line.y0)
+            self.assertLess(wrapped_weight.x1, 548.0)
+            self.assertNotIn("Dimensions (H x W", text)
+
 
 if __name__ == "__main__":
     unittest.main()

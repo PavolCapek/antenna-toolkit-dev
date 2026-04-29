@@ -30,6 +30,15 @@ from datasheet.models import (
     text_or_placeholder,
 )
 from datasheet.service import build_render_context
+from datasheet.tables import (
+    ResolvedDatasheetTables,
+    canonical_key_for_template,
+    extra_rows_for_sections,
+    is_electrical_section,
+    is_mechanical_section,
+    resolve_datasheet_tables,
+    row_for_fixed_label,
+)
 from datasheet.templates import DatasheetTemplateAdapter, TemplateChartManifest, TemplateChartSlot
 from datasheet.layouts.netqui_1pol import (
     NETQUI_POLAR_LEGEND_SCALE_CAP,
@@ -336,11 +345,12 @@ def _insert_wrapped_text(
     color: tuple[float, float, float],
     registered_fonts: set[str],
     center_vertically: bool = False,
+    line_height_factor: float = 1.2,
 ) -> None:
     pdf_font_name, fontfile, font_path = _register_pdf_font(page, font_name, registered_fonts, required_text=text)
     font = _measurement_font(pdf_font_name, str(font_path) if font_path else None)
     lines = _wrap_text_to_width(text, font, font_size, max(1.0, rect.width))
-    line_height = max(font_size * 1.2, font_size + 1.0)
+    line_height = max(font_size * line_height_factor, font_size + 1.0)
     x = rect.x0 if origin is None else origin[0]
     if origin is None and center_vertically:
         ascender = float(getattr(font, "ascender", 1.0))
@@ -369,6 +379,46 @@ def _technical_table_font_size(font_size: float, layout_mode: str) -> float:
     if layout_mode in {"netqui", "netqui_1pol"}:
         return min(font_size, NETQUI_TABLE_FONT_SIZE)
     return font_size
+
+
+def _wrapped_text_height(
+    page: fitz.Page,
+    text: str,
+    *,
+    font_name: str,
+    font_size: float,
+    width: float,
+    registered_fonts: set[str],
+    line_height_factor: float = 1.2,
+) -> float:
+    pdf_font_name, _fontfile, font_path = _register_pdf_font(page, font_name, registered_fonts, required_text=text)
+    font = _measurement_font(pdf_font_name, str(font_path) if font_path else None)
+    lines = _wrap_text_to_width(text, font, font_size, max(1.0, width))
+    line_height = max(font_size * line_height_factor, font_size + 1.0)
+    ascender = float(getattr(font, "ascender", 1.0))
+    descender = float(getattr(font, "descender", -0.25))
+    glyph_height = max(0.1, (ascender - descender) * font_size)
+    return glyph_height + (max(1, len(lines)) - 1) * line_height
+
+
+def _loose_technical_key(value: object) -> str:
+    text = re.sub(r"[\u200B-\u200D\uFEFF]", "", str(value or "")).lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _technical_labels_match(template_label: str, entry_label: str) -> bool:
+    template_key = _normalize_technical_key(template_label)
+    entry_key = _normalize_technical_key(entry_label)
+    if template_key == entry_key:
+        return True
+    loose_template = _loose_technical_key(template_label)
+    loose_entry = _loose_technical_key(entry_label)
+    if loose_template == loose_entry:
+        return True
+    if "dimension" in loose_template and "dimension" in loose_entry:
+        return True
+    return bool(loose_template and loose_entry and (loose_template in loose_entry or loose_entry in loose_template))
 
 
 def _insert_replacement_slot_text(
@@ -722,22 +772,23 @@ def _technical_data_row_step(slots: list[TechnicalDataRowSlot]) -> float:
 
 def _replace_technical_table(
     doc: fitz.Document,
-    entries: list[TechnicalDataEntry],
+    tables: ResolvedDatasheetTables,
     *,
     adapter: DatasheetTemplateAdapter | None = None,
     registered_fonts: set[str],
 ) -> None:
     page = doc[0]
     layout_mode = adapter.technical_layout_mode if adapter is not None else "auto"
+    if layout_mode in {"netqui", "netqui_1pol"}:
+        return
     slots = _technical_data_row_slots(page, layout_mode=layout_mode)
     if not slots:
         return
-    data_by_key = _technical_data_by_key(entries)
     used_keys: set[str] = set()
     editable_slots = [
         slot
         for slot in slots
-        if (key := _normalize_technical_key(slot.label))
+        if (key := canonical_key_for_template(slot.label, adapter))
         and key not in PERFORMANCE_FIELD_KEYS
     ]
     for slot in editable_slots:
@@ -745,11 +796,10 @@ def _replace_technical_table(
     page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0)
 
     for slot in editable_slots:
-        key = _normalize_technical_key(slot.label)
-        entry = data_by_key.get(key)
-        if entry is not None:
-            used_keys.add(key)
-        text, is_missing = _text_or_placeholder(entry.value if entry is not None else "")
+        row = row_for_fixed_label(tables, slot.label)
+        if row is not None and row.canonical_key:
+            used_keys.add(row.canonical_key)
+        text, is_missing = _text_or_placeholder(row.value if row is not None else "")
         _insert_wrapped_text(
             page,
             slot.value_rect,
@@ -761,13 +811,7 @@ def _replace_technical_table(
             registered_fonts=registered_fonts,
             center_vertically=layout_mode in {"netqui", "netqui_1pol"},
         )
-    extra_entries = [
-        entry
-        for entry in entries
-        if _normalize_technical_key(entry.label) not in used_keys
-        and _normalize_technical_key(entry.label) not in TECHNICAL_DATA_RESERVED_KEYS
-        and bool(str(entry.value or "").strip())
-    ]
+    extra_entries = extra_rows_for_sections(tables, used_keys=used_keys, section_filter=is_mechanical_section)
     if not extra_entries:
         return
 
@@ -833,6 +877,283 @@ def _insert_technical_continuation_page(
             registered_fonts=registered_fonts,
         )
         y += row_height
+
+
+def _insert_performance_extra_rows(
+    doc: fitz.Document,
+    page: fitz.Page,
+    slots: dict[str, ReplacementSlot],
+    tables: ResolvedDatasheetTables,
+    *,
+    adapter: DatasheetTemplateAdapter | None = None,
+    registered_fonts: set[str],
+) -> None:
+    if not slots:
+        return
+    used_keys = {canonical_key_for_template(label, adapter) for label in slots}
+    extras = extra_rows_for_sections(tables, used_keys=used_keys, section_filter=is_electrical_section)
+    if not extras:
+        return
+
+    ordered_slots = sorted(slots.values(), key=lambda slot: (slot.origin[1], slot.origin[0]))
+    prototype = ordered_slots[-1]
+    row_height = max(14.0, prototype.font_size + 7.0)
+    label_x = 38.0
+    value_x = prototype.origin[0]
+    table_right = min(page.rect.x1 - 20.0, max(value_x + prototype.max_width, value_x + 160.0))
+    y = prototype.origin[1] + row_height
+    remaining: list[TechnicalDataEntry] = []
+    for row in extras:
+        if y + row_height > page.rect.y1 - 58.0:
+            remaining.append(row)
+            continue
+        pdf_font_name, fontfile, _font_path = _register_pdf_font(page, prototype.font_name, registered_fonts, required_text=row.label)
+        page.insert_text(
+            (label_x, y),
+            row.label,
+            fontsize=prototype.font_size,
+            fontname=pdf_font_name,
+            fontfile=fontfile,
+            color=prototype.color,
+        )
+        _insert_wrapped_text(
+            page,
+            fitz.Rect(value_x, y - prototype.font_size, table_right, y + row_height - prototype.font_size),
+            row.value,
+            origin=(value_x, y),
+            font_name=prototype.font_name,
+            font_size=prototype.font_size,
+            color=prototype.color,
+            registered_fonts=registered_fonts,
+        )
+        y += row_height
+
+    if not remaining:
+        return
+    continuation = doc.new_page(pno=1, width=page.rect.width, height=page.rect.height)
+    heading_font = "MyriadPro-Semibold" if MYRIAD_FONT_FILES["MyriadPro-Semibold"].exists() else "helv"
+    pdf_font_name, fontfile, _font_path = _register_pdf_font(continuation, heading_font, registered_fonts, required_text="PERFORMANCE")
+    continuation.insert_text((38.0, 58.0), "PERFORMANCE", fontsize=10.0, fontname=pdf_font_name, fontfile=fontfile, color=(0.237, 0.237, 0.237))
+    y = 78.0
+    for row in remaining:
+        if y + row_height > continuation.rect.y1 - 58.0:
+            break
+        row_font_name, row_fontfile, _row_font_path = _register_pdf_font(continuation, prototype.font_name, registered_fonts, required_text=row.label)
+        continuation.insert_text((label_x, y), row.label, fontsize=prototype.font_size, fontname=row_font_name, fontfile=row_fontfile, color=prototype.color)
+        _insert_wrapped_text(
+            continuation,
+            fitz.Rect(value_x, y - prototype.font_size, table_right, y + row_height - prototype.font_size),
+            row.value,
+            origin=(value_x, y),
+            font_name=prototype.font_name,
+            font_size=prototype.font_size,
+            color=prototype.color,
+            registered_fonts=registered_fonts,
+        )
+        y += row_height
+
+
+def _netqui_entry_for_slot(slot: TechnicalDataRowSlot, entries: list[TechnicalDataEntry]) -> TechnicalDataEntry | None:
+    key = _normalize_technical_key(slot.label)
+    data_by_key = _technical_data_by_key(entries)
+    if key in data_by_key:
+        return data_by_key[key]
+    for entry in entries:
+        if _technical_labels_match(slot.label, entry.label):
+            return entry
+    return None
+
+
+def _netqui_slot_text(
+    slot: TechnicalDataRowSlot,
+    tables: ResolvedDatasheetTables,
+) -> tuple[str, bool, bool, str]:
+    row = row_for_fixed_label(tables, slot.label)
+    text, is_missing = _text_or_placeholder(row.value if row is not None else "")
+    source = row.source if row is not None else ""
+    key = row.canonical_key if row is not None else canonical_key_for_template(slot.label, tables.adapter)
+    return text, is_missing, source == "generated", key
+
+
+def _netqui_row_layout(
+    page: fitz.Page,
+    slots: list[TechnicalDataRowSlot],
+    tables: ResolvedDatasheetTables,
+    *,
+    font_size: float,
+    bottom_limit: float,
+    registered_fonts: set[str],
+) -> list[tuple[TechnicalDataRowSlot, str, bool, bool, float, str]]:
+    measured_rows: list[tuple[TechnicalDataRowSlot, str, bool, bool, float, float, str]] = []
+    for slot in slots:
+        text, is_missing, is_performance, key = _netqui_slot_text(slot, tables)
+        value_height = _wrapped_text_height(
+            page,
+            text,
+            font_name=slot.value_font_name,
+            font_size=font_size,
+            width=slot.value_rect.width,
+            registered_fonts=registered_fonts,
+            line_height_factor=1.3,
+        )
+        label_height = _wrapped_text_height(
+            page,
+            slot.label,
+            font_name=slot.label_font_name,
+            font_size=font_size,
+            width=slot.label_rect.width,
+            registered_fonts=registered_fonts,
+        )
+        original_height = max(1.0, slot.row_bottom - slot.value_rect.y0)
+        if value_height <= font_size * 1.6 and label_height <= font_size * 1.6:
+            row_height = original_height
+        else:
+            row_height = max(original_height, value_height + 6.0, label_height + 4.0)
+        measured_rows.append((slot, text, is_missing, is_performance, original_height, row_height, key))
+
+    return [(slot, text, is_missing, is_performance, row_height, key) for slot, text, is_missing, is_performance, _original_height, row_height, key in measured_rows]
+
+
+def _netqui_rows_bottom(rows: list[tuple[TechnicalDataRowSlot, str, bool, bool, float, str]]) -> float:
+    offset = 0.0
+    dynamic_bottom = 0.0
+    for slot, _text, _is_missing, _is_performance, row_height, _key in rows:
+        dynamic_bottom = max(dynamic_bottom, slot.value_rect.y0 + offset + row_height)
+        offset = dynamic_bottom - slot.row_bottom
+    return dynamic_bottom
+
+
+def _netqui_extra_row_slot(prototype: TechnicalDataRowSlot, label: str, y: float, row_height: float) -> TechnicalDataRowSlot:
+    label_width = prototype.label_rect.width
+    return TechnicalDataRowSlot(
+        label=label,
+        label_rect=fitz.Rect(prototype.label_rect.x0, y, prototype.label_rect.x0 + label_width, y + row_height),
+        value_rect=fitz.Rect(prototype.value_rect.x0, y, prototype.value_rect.x1, y + row_height),
+        erase_rect=fitz.Rect(prototype.erase_rect.x0, y, prototype.erase_rect.x1, y + row_height + 1.0),
+        label_font_name=prototype.label_font_name,
+        label_font_size=prototype.label_font_size,
+        label_color=prototype.label_color,
+        value_font_name=prototype.value_font_name,
+        value_font_size=prototype.value_font_size,
+        value_origin=(prototype.value_origin[0], y + prototype.value_font_size),
+        value_color=prototype.value_color,
+        row_bottom=y + row_height,
+        table_right=prototype.table_right,
+    )
+
+
+def _replace_netqui_table(
+    page: fitz.Page,
+    tables: ResolvedDatasheetTables,
+    *,
+    adapter: DatasheetTemplateAdapter | None,
+    registered_fonts: set[str],
+) -> bool:
+    layout_mode = adapter.technical_layout_mode if adapter is not None else "auto"
+    if layout_mode not in {"netqui", "netqui_1pol"}:
+        return False
+    spans = _extract_page_spans(page)
+    bounds = _netqui_technical_data_bounds(page, spans)
+    if bounds is None:
+        return False
+    _electrical_heading, _mechanical_heading, bottom_y = bounds
+    slots = _technical_data_row_slots(page, layout_mode=layout_mode)
+    if not slots:
+        return False
+
+    groups = [
+        [slot for slot in slots if slot.label_rect.x0 < 280.0],
+        [slot for slot in slots if slot.label_rect.x0 >= 280.0],
+    ]
+    line_color = (0.13669031858444214, 0.12195010483264923, 0.1252918243408203)
+    for group in groups:
+        if not group:
+            continue
+        group.sort(key=lambda slot: (slot.value_rect.y0, slot.label_rect.x0))
+        base_font_size = _technical_table_font_size(group[0].value_font_size, layout_mode)
+        bottom_limit = bottom_y - 2.0
+        used_keys = {canonical_key_for_template(slot.label, adapter) for slot in group}
+        section_filter = is_electrical_section if group[0].label_rect.x0 < 280.0 else is_mechanical_section
+        extra_rows = extra_rows_for_sections(tables, used_keys=used_keys, section_filter=section_filter)
+        layout_slots = list(group)
+        if extra_rows:
+            row_step = _technical_data_row_step(group)
+            row_height = max(1.0, row_step - 0.5)
+            y = group[-1].row_bottom + 0.5
+            prototype = group[-1]
+            for extra in extra_rows:
+                layout_slots.append(_netqui_extra_row_slot(prototype, extra.label, y, row_height))
+                y += row_step
+
+        rows: list[tuple[TechnicalDataRowSlot, str, bool, bool, float, str]] = []
+        font_size = base_font_size
+        for candidate_font_size in (base_font_size, base_font_size - 0.35, base_font_size - 0.7, base_font_size - 1.0, base_font_size - 1.3):
+            font_size = max(7.4, candidate_font_size)
+            rows = _netqui_row_layout(
+                page,
+                layout_slots,
+                tables,
+                font_size=font_size,
+                bottom_limit=bottom_limit,
+                registered_fonts=registered_fonts,
+            )
+            if _netqui_rows_bottom(rows) <= bottom_limit:
+                break
+        if not rows:
+            continue
+        table_left = 36.638 if group[0].label_rect.x0 < 280.0 else max(302.25, min(slot.label_rect.x0 for slot in group))
+        table_right = max(slot.table_right for slot in group)
+        table_top = min(slot.value_rect.y0 for slot in group) - 1.0
+        dynamic_bottom = max(table_top, _netqui_rows_bottom(rows))
+        erase_bottom = min(bottom_y - 1.0, max(max(slot.row_bottom for slot in layout_slots), dynamic_bottom))
+        erase_rect = fitz.Rect(table_left - 1.0, table_top, table_right + 1.0, erase_bottom)
+        page.add_redact_annot(erase_rect, fill=None)
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0)
+        page.draw_rect(
+            erase_rect,
+            color=(1.0, 1.0, 1.0),
+            fill=(1.0, 1.0, 1.0),
+            overlay=True,
+        )
+        offset = 0.0
+        for slot, text, is_missing, is_performance, row_height, _key in rows:
+            y = slot.value_rect.y0 + offset
+            row_rect = fitz.Rect(table_left, y, table_right, y + row_height)
+            label_rect = fitz.Rect(slot.label_rect.x0, row_rect.y0, slot.label_rect.x1, row_rect.y1)
+            value_rect = fitz.Rect(slot.value_rect.x0, row_rect.y0, slot.value_rect.x1, row_rect.y1)
+            _insert_wrapped_text(
+                page,
+                label_rect,
+                slot.label,
+                origin=None,
+                font_name=slot.label_font_name,
+                font_size=font_size,
+                color=slot.label_color,
+                registered_fonts=registered_fonts,
+                center_vertically=True,
+            )
+            value_color = MISSING_VALUE_COLOR if is_missing else (0.0, 0.0, 0.0)
+            _insert_wrapped_text(
+                page,
+                value_rect,
+                text,
+                origin=None,
+                font_name=slot.value_font_name,
+                font_size=font_size,
+                color=value_color,
+                registered_fonts=registered_fonts,
+                center_vertically=True,
+                line_height_factor=1.3,
+            )
+            page.draw_line(
+                (table_left, row_rect.y1),
+                (table_right, row_rect.y1),
+                color=line_color,
+                width=0.25,
+                overlay=True,
+            )
+            offset = row_rect.y1 - slot.row_bottom
+    return True
 
 
 def _replace_exact_span_text(
@@ -1049,13 +1370,14 @@ def _update_footer_page_numbers(
 def _apply_technical_data(
     doc: fitz.Document,
     entries: list[TechnicalDataEntry],
+    tables: ResolvedDatasheetTables,
     generated_at: datetime,
     *,
     adapter: DatasheetTemplateAdapter | None = None,
     registered_fonts: set[str],
 ) -> dict[str, str]:
     header_values = _replace_header_placeholders(doc, entries, registered_fonts=registered_fonts)
-    _replace_technical_table(doc, entries, adapter=adapter, registered_fonts=registered_fonts)
+    _replace_technical_table(doc, tables, adapter=adapter, registered_fonts=registered_fonts)
     antenna_name = header_values.get("antenna name") or TECHNICAL_DATA_PLACEHOLDER
     _update_footer_page_numbers(doc, antenna_name, generated_at, registered_fonts=registered_fonts)
     return {
@@ -2538,6 +2860,7 @@ def build_datasheet_pdf(
         adapter = context.adapter
         model = context.model
         replacements = dict(model.performance_fields)
+        tables = resolve_datasheet_tables(model.performance_fields, model.technical_entries, adapter=adapter)
         now = datetime.now().astimezone()
         output_metadata = _build_pdf_metadata(doc.metadata, output, now, metadata_author=metadata_author)
         page = doc[0]
@@ -2552,6 +2875,7 @@ def build_datasheet_pdf(
                 _apply_technical_data(
                     doc,
                     model.technical_entries,
+                    tables,
                     now,
                     adapter=adapter,
                     registered_fonts=registered_fonts,
@@ -2564,36 +2888,50 @@ def build_datasheet_pdf(
             page.add_redact_annot(slot.erase_rect, fill=None)
         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
         layout_mode = adapter.technical_layout_mode if adapter is not None else "auto"
-        table_slots_by_key: dict[str, TechnicalDataRowSlot] = {}
-        if layout_mode in {"netqui", "netqui_1pol"}:
+        if _replace_netqui_table(
+            page,
+            tables,
+            adapter=adapter,
+            registered_fonts=registered_fonts,
+        ):
+            pass
+        else:
+            table_slots_by_key: dict[str, TechnicalDataRowSlot] = {}
             for table_slot in _technical_data_row_slots(page, layout_mode=layout_mode):
                 if key := _normalize_technical_key(table_slot.label):
                     table_slots_by_key[key] = table_slot
                 if inferred_label := _infer_field_label_from_template_text(table_slot.label):
                     table_slots_by_key[_normalize_technical_key(inferred_label)] = table_slot
-        for label in FIELD_LABELS:
-            if label not in slots:
-                continue
-            slot = slots[label]
-            text = replacements[label]
-            table_slot = table_slots_by_key.get(_normalize_technical_key(label))
-            if table_slot is not None:
-                rendered_text, is_missing = _text_or_placeholder(text)
-                _insert_wrapped_text(
-                    page,
-                    table_slot.value_rect,
-                    rendered_text,
-                    origin=None,
-                    font_name=table_slot.value_font_name,
-                    font_size=_technical_table_font_size(table_slot.value_font_size, layout_mode),
-                    color=MISSING_VALUE_COLOR if is_missing else slot.color,
-                    registered_fonts=registered_fonts,
-                    center_vertically=True,
-                )
-            else:
-                _insert_replacement_slot_text(page, slot, text, registered_fonts=registered_fonts)
-
-        _redraw_template_table_separators(doc[0], adapter)
+            for label in FIELD_LABELS:
+                if label not in slots:
+                    continue
+                slot = slots[label]
+                text = replacements[label]
+                table_slot = table_slots_by_key.get(_normalize_technical_key(label))
+                if table_slot is not None:
+                    rendered_text, is_missing = _text_or_placeholder(text)
+                    _insert_wrapped_text(
+                        page,
+                        table_slot.value_rect,
+                        rendered_text,
+                        origin=None,
+                        font_name=table_slot.value_font_name,
+                        font_size=_technical_table_font_size(table_slot.value_font_size, layout_mode),
+                        color=MISSING_VALUE_COLOR if is_missing else slot.color,
+                        registered_fonts=registered_fonts,
+                        center_vertically=True,
+                    )
+                else:
+                    _insert_replacement_slot_text(page, slot, text, registered_fonts=registered_fonts)
+            _insert_performance_extra_rows(
+                doc,
+                page,
+                slots,
+                tables,
+                adapter=adapter,
+                registered_fonts=registered_fonts,
+            )
+            _redraw_template_table_separators(doc[0], adapter)
         emit_progress("datasheet", next_step, total_steps, "Embedding chart assets")
         _replace_chart_images(
             doc,
