@@ -69,7 +69,6 @@ FIELD_LABEL_ALIASES = {
         "F/B Ratio",
     ),
     "VSWR": ("VSWR",),
-    "Polarization": ("Polarization",),
     "Impedance": (
         "Impedance",
         "Nominal Impedance",
@@ -311,7 +310,6 @@ def build_performance_fields(extract_workbook: Path) -> dict[str, str]:
         "Beam Efficiency": f"{_round_half_up(beam_eff)} %*",
         "Front-to-Back Ratio": _format_int_with_suffix(front_to_back, "dB"),
         "VSWR": _format_vswr_limit(max_vswr),
-        "Polarization": _polarization_text(ffs_summary),
         "Impedance": _format_int_with_suffix(ref_impedance, "Ohm"),
     }
 

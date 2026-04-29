@@ -141,6 +141,13 @@ NETQUI_1POL_TEMPLATE_MANIFEST = TemplateManifest(
     technical_layout_mode="netqui_1pol",
 )
 
+NETQUI_1POL_PLACEHOLDER_TEMPLATE_MANIFEST = TemplateManifest(
+    key="netqui_1pol_placeholder",
+    chart_layout=NETQUI_1POL_TEMPLATE_MANIFEST.chart_layout,
+    table_layout=NETQUI_TEMPLATE_MANIFEST.table_layout,
+    technical_layout_mode="netqui_1pol",
+)
+
 RFE_TEMPLATE_MANIFEST = TemplateManifest(
     key="rfe",
     chart_layout=TemplateChartManifest(
@@ -182,6 +189,15 @@ NETQUI_1POL_TEMPLATE_ADAPTER = DatasheetTemplateAdapter(
     manifest=NETQUI_1POL_TEMPLATE_MANIFEST,
 )
 
+NETQUI_1POL_PLACEHOLDER_TEMPLATE_ADAPTER = DatasheetTemplateAdapter(
+    key="netqui_1pol_placeholder",
+    display_name="Netqui 1Pol Placeholder Datasheet",
+    filename_tokens=("netqui - 1pol - placeholder",),
+    chart_layout_mode="netqui_1pol_placeholder",
+    technical_layout_mode="netqui_1pol",
+    manifest=NETQUI_1POL_PLACEHOLDER_TEMPLATE_MANIFEST,
+)
+
 RFE_TEMPLATE_ADAPTER = DatasheetTemplateAdapter(
     key="rfe",
     display_name="RFE Datasheet",
@@ -190,6 +206,7 @@ RFE_TEMPLATE_ADAPTER = DatasheetTemplateAdapter(
 )
 
 KNOWN_TEMPLATE_ADAPTERS = (
+    NETQUI_1POL_PLACEHOLDER_TEMPLATE_ADAPTER,
     NETQUI_1POL_TEMPLATE_ADAPTER,
     NETQUI_TEMPLATE_ADAPTER,
     RFE_TEMPLATE_ADAPTER,
