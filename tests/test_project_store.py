@@ -60,6 +60,7 @@ class ProjectStoreTests(unittest.TestCase):
             settings={"smooth": 7, "grid_color": "#4b5563"},
             presets={"Tight": {"smooth": 7, "grid_color": "#4b5563"}},
             active_preset="Tight",
+            radiation_pattern_frequencies_ghz=[3.0, 1.5, 1.5000004],
             run_state={"history": [{"action": "created"}], "stages": {"beam": {"status": "success"}}},
         )
 
@@ -72,6 +73,7 @@ class ProjectStoreTests(unittest.TestCase):
         self.assertEqual(loaded.technical_data_file, "Input data/tech.xlsx")
         self.assertEqual(loaded.settings, {})
         self.assertEqual(loaded.presets, {})
+        self.assertEqual(loaded.radiation_pattern_frequencies_ghz, [1.5, 3.0])
         self.assertEqual(loaded.run_state["stages"]["beam"]["status"], "success")
 
     def test_duplicate_export_and_import_bundle(self) -> None:
@@ -122,8 +124,14 @@ class ProjectStoreTests(unittest.TestCase):
 
         self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA_VERSION)
         self.assertIn("technical_data_file", payload)
+        self.assertNotIn("radiation_pattern_frequencies_ghz", payload)
         self.assertNotIn("settings", payload)
         self.assertNotIn("presets", payload)
+
+    def test_legacy_project_without_radiation_frequency_selection_stays_defaulted(self) -> None:
+        project = ProjectRecord.from_dict({"name": "Legacy", "slug": "legacy"})
+
+        self.assertIsNone(project.radiation_pattern_frequencies_ghz)
 
     def test_google_sheet_url_paths_are_preserved(self) -> None:
         url = "https://docs.google.com/spreadsheets/d/sheet123/edit#gid=0"

@@ -45,6 +45,13 @@ def _span_for_text(page: fitz.Page, text: str) -> fitz.Rect:
     raise AssertionError(f"Text not found in rendered page: {text}")
 
 
+def _font_size_for_text(page: fitz.Page, text: str) -> float:
+    for span in _extract_page_spans(page):
+        if span.text == text:
+            return span.size
+    raise AssertionError(f"Text not found in rendered page: {text}")
+
+
 def _horizontal_table_segments(page: fitz.Page) -> list[tuple[float, float, float]]:
     segments: list[tuple[float, float, float]] = []
     for drawing in page.get_drawings():
@@ -230,21 +237,24 @@ class DatasheetVisualRegressionTests(unittest.TestCase):
             page = doc[0]
             text = page.get_text("text")
             self.assertIn("~4,2 kg (Total for the inseparable", text)
-            self.assertIn("pair, including bracket and", text)
-            self.assertIn("radome)", text)
+            self.assertIn("pair, including bracket and radome)", text)
             self.assertIn("2x N-type Female (RP-SMA for", text)
             self.assertIn("prototypes)", text)
-            self.assertIn("Custom Quick-Release Slide", text)
-            self.assertIn("Mount (for 80x40 mm profiles)", text)
+            self.assertIn("Custom Quick-Release Slide Mount", text)
+            self.assertIn("(for 80x40 mm profiles)", text)
 
             weight = _span_for_text(page, "Weight")
             first_weight_line = _span_for_text(page, "~4,2 kg (Total for the inseparable")
-            wrapped_weight = _span_for_text(page, "pair, including bracket and")
+            wrapped_weight = _span_for_text(page, "pair, including bracket and radome)")
             self.assertGreater(first_weight_line.x0, weight.x1)
             self.assertGreater(wrapped_weight.x0, weight.x1)
             self.assertGreater(wrapped_weight.y0, first_weight_line.y0)
             self.assertLess(wrapped_weight.x1, 548.0)
             self.assertNotIn("Dimensions (H x W", text)
+
+            electrical_font_size = _font_size_for_text(page, "4400 - 5000 MHz")
+            mechanical_font_size = _font_size_for_text(page, "Aluminium, ABS")
+            self.assertAlmostEqual(electrical_font_size, mechanical_font_size, places=2)
 
 
 if __name__ == "__main__":

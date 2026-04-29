@@ -19,7 +19,13 @@ from datasheet.tables import (
 from datasheet_pdf import (
     ChartReplacement,
     _build_chart_replacements,
+    _build_netqui_1pol_placeholder_chart_replacements,
+    _build_netqui_1pol_selected_chart_replacements,
+    _build_rfe_selected_chart_replacements,
+    _collect_chart_slots,
+    _find_combined_polar_series_assets,
     _find_combined_polar_triplet_assets,
+    _find_selected_combined_polar_assets,
     _legend_target_rect,
     _layout_split_chart_rects,
     _find_beamwidth_plane_asset,
@@ -30,11 +36,20 @@ from datasheet_pdf import (
     _svg_to_pdf_bytes,
     _extract_page_spans,
     _replace_exact_span_text,
+    _replace_header_placeholders,
+    _replace_chart_images,
+    _update_footer_dates,
     build_datasheet_pdf,
     build_replacements_from_workbook,
     load_technical_data_workbook,
 )
-from datasheet.templates import NETQUI_1POL_TEMPLATE_ADAPTER, NETQUI_TEMPLATE_ADAPTER, RFE_TEMPLATE_ADAPTER, resolve_template_adapter
+from datasheet.templates import (
+    NETQUI_1POL_PLACEHOLDER_TEMPLATE_ADAPTER,
+    NETQUI_1POL_TEMPLATE_ADAPTER,
+    NETQUI_TEMPLATE_ADAPTER,
+    RFE_TEMPLATE_ADAPTER,
+    resolve_template_adapter,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -49,7 +64,6 @@ FIELD_ROWS = [
     ("Beam Efficiency", "96 %*"),
     ("Front-to-Back Ratio", "27 dB"),
     ("VSWR", "<1.8"),
-    ("Polarization", "Dual Linear H + V"),
     ("Impedance", "50 Ohm"),
 ]
 
@@ -151,6 +165,7 @@ class DatasheetPdfTests(unittest.TestCase):
         reverse_polar_slot_order: bool = False,
         add_legend_handles: bool = False,
         add_technical_data: bool = False,
+        omit_first_technical_value_separator: bool = False,
         metadata: dict[str, str] | None = None,
         xml_metadata: str | None = None,
         field_rows: list[tuple[str, str]] | None = None,
@@ -170,10 +185,13 @@ class DatasheetPdfTests(unittest.TestCase):
                     ("Enviromental", "Template IP"),
                 ]
                 tech_y = 174.0
-                for label, value in tech_rows:
+                for index, (label, value) in enumerate(tech_rows):
                     page.insert_text((38.0, tech_y), label, fontsize=7, fontname="helv", color=(0.14, 0.12, 0.12))
                     page.insert_text((140.0, tech_y), value, fontsize=7, fontname="helv", color=(0.25, 0.25, 0.25))
-                    page.draw_line((36.638, tech_y + 6.0), (299.0, tech_y + 6.0), color=(0.14, 0.12, 0.12), width=0.25)
+                    if omit_first_technical_value_separator and index == 0:
+                        page.draw_line((36.638, tech_y + 6.0), (138.0, tech_y + 6.0), color=(0.14, 0.12, 0.12), width=0.25)
+                    else:
+                        page.draw_line((36.638, tech_y + 6.0), (299.0, tech_y + 6.0), color=(0.14, 0.12, 0.12), width=0.25)
                     tech_y += 12.0
                 page.insert_text((36.0, 300.0), "PERFORMANCE", fontsize=8, fontname="helv", color=(0.14, 0.12, 0.12))
                 y = 316.0
@@ -219,6 +237,8 @@ class DatasheetPdfTests(unittest.TestCase):
             charts_page.insert_text((360.0, 354.0), "Beamwidth Azimuth V -6 dB", fontsize=7, fontname="helv")
             charts_page.insert_text((360.0, 370.0), "Beamwidth Elevation H -6 dB", fontsize=7, fontname="helv")
             charts_page.insert_text((360.0, 386.0), "Beamwidth Elevation V -6 dB", fontsize=7, fontname="helv")
+            charts_page.insert_text((self.page2_azimuth_rect.x0, self.page2_azimuth_rect.y0 - 18.0), "AZIMUTH PATTERN", fontsize=8, fontname="helv", color=(0.9, 0.0, 0.0))
+            charts_page.insert_text((self.page2_elevation_rect.x0, self.page2_elevation_rect.y0 - 18.0), "ELEVATION PATTERN", fontsize=8, fontname="helv", color=(0.9, 0.0, 0.0))
             charts_page.insert_text((28.0, 616.0), "H - Port Pattern Azimuth 5.5 GHz", fontsize=7, fontname="helv")
             charts_page.insert_text((28.0, 632.0), "V - Port Pattern Azimuth 5.5 GHz", fontsize=7, fontname="helv")
             charts_page.insert_text((208.0, 616.0), "H - Port Pattern Elevation 5.5 GHz", fontsize=7, fontname="helv")
@@ -467,7 +487,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(replacements["Beam Efficiency"], "98 %*")
         self.assertEqual(replacements["Front-to-Back Ratio"], "28 dB")
         self.assertEqual(replacements["VSWR"], "<1.9")
-        self.assertEqual(replacements["Polarization"], "Dual Linear H + V")
+        self.assertNotIn("Polarization", replacements)
         self.assertEqual(replacements["Impedance"], "50 Ohm")
 
     def test_build_replacements_from_workbook_handles_single_far_field_summary(self) -> None:
@@ -512,7 +532,7 @@ class DatasheetPdfTests(unittest.TestCase):
 
         self.assertEqual(replacements["Azimuth Beam Width -3 dB/-6dB"], "8\N{DEGREE SIGN} / 11\N{DEGREE SIGN}")
         self.assertEqual(replacements["Elevation Beam Width -3 dB/-6dB"], "7\N{DEGREE SIGN} / 10\N{DEGREE SIGN}")
-        self.assertEqual(replacements["Polarization"], "Single Polarization")
+        self.assertNotIn("Polarization", replacements)
 
     def test_build_datasheet_pdf_replaces_template_values(self) -> None:
         build_datasheet_pdf(
@@ -640,6 +660,22 @@ class DatasheetPdfTests(unittest.TestCase):
 
         self.assertEqual([(row.label, row.value) for row in extras], [("Custom Performance", "Custom performance value")])
 
+    def test_table_resolver_uses_excel_as_only_polarization_source(self) -> None:
+        tables = resolve_datasheet_tables(
+            {"Gain": "19.5 dBi"},
+            [
+                DatasheetTableRow(section="Electrical Data", label="Polarization", value="Single linear, Vertical"),
+                DatasheetTableRow(section="Performance", label="Gain", value="Manual gain"),
+            ],
+            adapter=NETQUI_TEMPLATE_ADAPTER,
+        )
+
+        self.assertEqual(row_for_fixed_label(tables, "Polarization").value, "Single linear, Vertical")
+        self.assertEqual(row_for_fixed_label(tables, "Gain").value, "19.5 dBi")
+
+        missing = resolve_datasheet_tables({"Gain": "19.5 dBi"}, [], adapter=NETQUI_TEMPLATE_ADAPTER)
+        self.assertIsNone(row_for_fixed_label(missing, "Polarization"))
+
     def test_table_resolver_maps_netqui_template_aliases(self) -> None:
         tables = resolve_datasheet_tables(
             {},
@@ -711,6 +747,29 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertNotIn("Template connector", page_text)
         self.assertAlmostEqual(custom_bottom_line - previous_line, 12.0, places=1)
 
+    def test_netqui_placeholder_header_replaces_sku_inside_span_and_footer_date(self) -> None:
+        entries = [
+            DatasheetTableRow(label="Antenna Name", value="Sample Horn", canonical_key="antenna name"),
+            DatasheetTableRow(label="SKU", value="SH123", canonical_key="product id"),
+        ]
+        with fitz.open() as doc:
+            page = doc.new_page(width=596.0, height=842.0)
+            page.insert_text((40.0, 80.0), "ANTENNA NAME", fontsize=12, fontname="helv")
+            page.insert_text((40.0, 100.0), "SKU: PRODUCT_ID_PLACEHOLDER", fontsize=12, fontname="helv")
+            page.insert_text((40.0, 800.0), "05-2025 v1", fontsize=7, fontname="helv")
+
+            registered_fonts: set[str] = set()
+            _replace_header_placeholders(doc, entries, registered_fonts=registered_fonts)
+            _update_footer_dates(doc, datetime(2026, 4, 29), registered_fonts=registered_fonts)
+
+            text = page.get_text()
+
+        self.assertIn("Sample Horn", text)
+        self.assertIn("SKU: SH123", text)
+        self.assertIn("04-2026", text)
+        self.assertNotIn("PRODUCT_ID_PLACEHOLDER", text)
+        self.assertNotIn("05-2025 v1", text)
+
     def test_build_datasheet_pdf_adds_sectioned_custom_rows_without_overriding_generated_values(self) -> None:
         self._write_template_pdf(add_technical_data=True)
         pd.DataFrame(
@@ -742,6 +801,39 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertIn("19.5 dBi", page_text)
         self.assertNotIn("Manual gain", page_text)
 
+    def test_build_datasheet_pdf_restores_missing_rfe_technical_separator_segments(self) -> None:
+        self._write_template_pdf(add_technical_data=True, omit_first_technical_value_separator=True)
+        self._write_technical_workbook(
+            [
+                ("Antenna Name", "Sample Horn"),
+                ("Product ID", "SH123"),
+                ("Radio Connection", "Waveguide input"),
+            ]
+        )
+
+        build_datasheet_pdf(
+            output=self.output_pdf,
+            template=self.template_pdf,
+            extract_workbook=self.extract_workbook,
+            technical_data_workbook=self.technical_workbook,
+        )
+
+        with fitz.open(self.output_pdf) as doc:
+            page = doc[0]
+            radio_span = next(span for span in _extract_page_spans(page) if span.text == "Radio Connection")
+            expected_y = round(radio_span.origin[1] + 6.0, 1)
+            restored_lines = [
+                drawing["rect"]
+                for drawing in page.get_drawings()
+                if drawing.get("rect")
+                and abs(drawing["rect"].y0 - expected_y) <= 0.4
+                and abs(drawing["rect"].y1 - drawing["rect"].y0) <= 0.3
+                and drawing["rect"].x0 <= 37.0
+                and drawing["rect"].x1 >= 298.0
+            ]
+
+        self.assertTrue(restored_lines)
+
     def test_build_datasheet_pdf_matches_alternate_performance_labels(self) -> None:
         self._write_template_pdf(
             field_rows=[
@@ -769,7 +861,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertIn("H 20°, V 20° / H 30°, V 29°", page_text)
         self.assertIn("H 20°, V 20° / H 29°, V 30°", page_text)
         self.assertIn("<1.9", page_text)
-        self.assertIn("Dual Linear H + V", page_text)
+        self.assertIn("text_placeholder", page_text)
         self.assertIn("50 Ohm", page_text)
         self.assertNotIn("Old gain", page_text)
 
@@ -799,7 +891,6 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertIn("4900 - 7125 MHz", page_text)
         self.assertIn("19.5 dBi", page_text)
         self.assertIn("50 Ohm", page_text)
-        self.assertIn("Dual Linear H + V", page_text)
         self.assertNotIn("Log-periodic Antenna", page_text)
         self.assertNotIn("1142 x 200 x 618 mm", page_text)
         self.assertNotIn("6.7 kg", page_text)
@@ -814,6 +905,7 @@ class DatasheetPdfTests(unittest.TestCase):
                 ("Technical Data", "Radio Connection", "Waveguide input"),
                 ("Mechanical Data", "Custom Mechanical Note", "Mechanical custom value"),
                 ("Electrical Data", "Custom Electrical Note", "Electrical custom value"),
+                ("Electrical Data", "Polarization", "Single linear, Vertical"),
                 ("Performance", "Gain", "Manual gain"),
             ]
         ).to_excel(self.technical_workbook, sheet_name="Sheet1", index=False, header=False)
@@ -835,6 +927,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertIn("Mechanical custom value", page_text)
         self.assertIn("Custom Electrical", page_text)
         self.assertIn("Electrical custom value", page_text)
+        self.assertIn("Single linear, Vertical", page_text)
         self.assertIn("19.5 dBi", page_text)
         self.assertNotIn("Manual gain", page_text)
 
@@ -1185,6 +1278,16 @@ class DatasheetPdfTests(unittest.TestCase):
 
         self.assertEqual(adapter.key, "netqui_1pol")
 
+    def test_netqui_1pol_placeholder_template_resolves_before_regular_1pol(self) -> None:
+        template_path = self.root / "Datasheet - Netqui - 1Pol - Placeholder.pdf"
+        self._write_netqui_chart_template_pdf()
+        self.template_pdf.replace(template_path)
+
+        with fitz.open(template_path) as doc:
+            adapter = resolve_template_adapter(template_path, doc)
+
+        self.assertEqual(adapter.key, "netqui_1pol_placeholder")
+
     def test_netqui_separator_redraw_does_not_join_blank_bottom_rules(self) -> None:
         self._write_netqui_technical_template_pdf()
         with fitz.open(self.template_pdf) as doc:
@@ -1293,6 +1396,240 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(triplet["low"], assets[0][0])
         self.assertEqual(triplet["mid"], assets[2][0])
         self.assertEqual(triplet["high"], assets[3][0])
+
+    def test_netqui_1pol_placeholder_selects_six_unique_radiation_assets(self) -> None:
+        assets = []
+        for index, frequency in enumerate((4.9, 5.3, 5.8, 6.2, 6.7, 7.125), start=1):
+            path = self.polar_combined_eh_dir / f"extract-polar-{frequency:.3f}-GHz-e-h-plane-combined.svg"
+            legend = self.polar_combined_eh_dir / f"extract-polar-{frequency:.3f}-GHz-e-h-plane-combined-legend.svg"
+            self._write_svg(path, f"#{index}{index}{index}{index}{index}{index}", width=140, height=140)
+            self._write_svg(legend, "#ffffff", width=150, height=70)
+            assets.append((path, legend, frequency))
+        update_artifact_manifest(
+            self.root,
+            "extract",
+            polar_combined_planes=[
+                build_asset_record(path, legend_path=legend, frequency_ghz=frequency, plane_mode="e-h-plane")
+                for path, legend, frequency in assets
+            ],
+        )
+        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
+
+        selected = _find_combined_polar_series_assets(
+            self.output_pdf,
+            self.extract_workbook,
+            manifest,
+            chart_key="polar_combined_planes",
+            count=6,
+        )
+
+        self.assertEqual(selected, [path for path, _legend, _frequency in assets])
+
+    def test_netqui_1pol_placeholder_replaces_six_radiation_slots_on_chart_page(self) -> None:
+        self._write_netqui_chart_template_pdf()
+        assets = []
+        for index, frequency in enumerate((4.9, 5.3, 5.8, 6.2, 6.7, 7.125), start=1):
+            path = self.polar_combined_eh_dir / f"extract-polar-{frequency:.3f}-GHz-e-h-plane-combined.svg"
+            legend = self.polar_combined_eh_dir / f"extract-polar-{frequency:.3f}-GHz-e-h-plane-combined-legend.svg"
+            self._write_svg(path, f"#{index}{index}{index}{index}{index}{index}", width=140, height=140)
+            self._write_svg(legend, "#ffffff", width=150, height=70)
+            assets.append((path, legend, frequency))
+        update_artifact_manifest(
+            self.root,
+            "extract",
+            gain=build_asset_record(self.gain_svg, legend_path=self.gain_legend_svg),
+            vswr=build_asset_record(self.vswr_svg),
+            beamwidth_planes=[
+                build_asset_record(self.beamwidth_e_plane_h_svg, legend_path=self.beamwidth_e_plane_h_legend_svg, plane="e-plane", polarization="H"),
+                build_asset_record(self.beamwidth_h_plane_h_svg, legend_path=self.beamwidth_h_plane_h_legend_svg, plane="h-plane", polarization="H"),
+            ],
+            polar_combined_planes=[
+                build_asset_record(path, legend_path=legend, frequency_ghz=frequency, plane_mode="e-h-plane")
+                for path, legend, frequency in assets
+            ],
+        )
+        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
+
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_netqui_1pol_placeholder_chart_replacements(
+                doc[1],
+                sorted(_collect_chart_slots(doc[1]), key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1)),
+                self.output_pdf,
+                self.extract_workbook,
+                manifest,
+            )
+
+        radiation = [replacement for replacement in replacements if replacement.kind.startswith("radiation_")]
+        self.assertEqual(len(radiation), 6)
+        self.assertEqual([replacement.asset_path for replacement in radiation], [path for path, _legend, _frequency in assets])
+        self.assertLess(radiation[0].rect.y0, radiation[3].rect.y0)
+
+    def test_selected_radiation_frequencies_match_exact_assets_only(self) -> None:
+        update_artifact_manifest(
+            self.root,
+            "extract",
+            polar_combined_planes=[
+                build_asset_record(self.combined_eh_low_svg, legend_path=self.combined_eh_low_legend_svg, frequency_ghz=4.9, plane_mode="e-h-plane"),
+                build_asset_record(self.combined_eh_mid_svg, legend_path=self.combined_eh_mid_legend_svg, frequency_ghz=6.0, plane_mode="e-h-plane"),
+                build_asset_record(self.combined_eh_high_svg, legend_path=self.combined_eh_high_legend_svg, frequency_ghz=7.125, plane_mode="e-h-plane"),
+            ],
+        )
+        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
+
+        selected = _find_selected_combined_polar_assets(
+            self.output_pdf,
+            self.extract_workbook,
+            [4.9, 7.125],
+            manifest,
+            chart_key="polar_combined_planes",
+        )
+
+        self.assertEqual(selected, [self.combined_eh_low_svg, self.combined_eh_high_svg])
+        with self.assertRaisesRegex(ValueError, "Rerun Plots only or adjust the selected radiation frequencies"):
+            _find_selected_combined_polar_assets(
+                self.output_pdf,
+                self.extract_workbook,
+                [4.91],
+                manifest,
+                chart_key="polar_combined_planes",
+            )
+
+    def test_netqui_1pol_selected_radiation_frequencies_replace_only_requested_assets(self) -> None:
+        self._write_netqui_chart_template_pdf()
+        update_artifact_manifest(
+            self.root,
+            "extract",
+            gain=build_asset_record(self.gain_svg, legend_path=self.gain_legend_svg),
+            vswr=build_asset_record(self.vswr_svg),
+            beamwidth_planes=[
+                build_asset_record(self.beamwidth_e_plane_h_svg, legend_path=self.beamwidth_e_plane_h_legend_svg, plane="e-plane", polarization="H"),
+                build_asset_record(self.beamwidth_h_plane_h_svg, legend_path=self.beamwidth_h_plane_h_legend_svg, plane="h-plane", polarization="H"),
+            ],
+            polar_combined_planes=[
+                build_asset_record(self.combined_eh_low_svg, legend_path=self.combined_eh_low_legend_svg, frequency_ghz=4.9, plane_mode="e-h-plane"),
+                build_asset_record(self.combined_eh_mid_svg, legend_path=self.combined_eh_mid_legend_svg, frequency_ghz=6.0, plane_mode="e-h-plane"),
+                build_asset_record(self.combined_eh_high_svg, legend_path=self.combined_eh_high_legend_svg, frequency_ghz=7.125, plane_mode="e-h-plane"),
+            ],
+        )
+        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
+
+        with fitz.open(self.template_pdf) as doc:
+            replacements = _build_netqui_1pol_selected_chart_replacements(
+                doc[1],
+                sorted(_collect_chart_slots(doc[1]), key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1)),
+                self.output_pdf,
+                self.extract_workbook,
+                manifest,
+                [7.125, 4.9],
+            )
+
+        radiation = [replacement for replacement in replacements if replacement.kind.startswith("radiation_")]
+        self.assertEqual([replacement.asset_path for replacement in radiation], [self.combined_eh_high_svg, self.combined_eh_low_svg])
+        self.assertEqual(len(radiation), 2)
+
+    def test_rfe_selected_radiation_frequencies_stack_under_pattern_headings(self) -> None:
+        self._write_template_pdf(reverse_polar_slot_order=True)
+        azimuth_49 = self.polar_azimuth_dir / "extract-polar-azimuth-4.900-GHz.svg"
+        azimuth_60 = self.polar_azimuth_dir / "extract-polar-azimuth-6.000-GHz.svg"
+        elevation_49 = self.polar_elevation_dir / "extract-polar-elevation-4.900-GHz.svg"
+        elevation_60 = self.polar_elevation_dir / "extract-polar-elevation-6.000-GHz.svg"
+        for path in (azimuth_49, azimuth_60, elevation_49, elevation_60):
+            self._write_svg(path, "#336699", width=140, height=140)
+            self._write_svg(path.with_name(path.stem + "-legend.svg"), "#ffffff", width=150, height=70)
+        update_artifact_manifest(
+            self.root,
+            "extract",
+            gain=build_asset_record(self.gain_svg),
+            beamwidth=build_asset_record(self.beamwidth_svg),
+            polar_single=[
+                build_asset_record(azimuth_49, legend_path=azimuth_49.with_name(azimuth_49.stem + "-legend.svg"), plane="azimuth", frequency_ghz=4.9),
+                build_asset_record(elevation_49, legend_path=elevation_49.with_name(elevation_49.stem + "-legend.svg"), plane="elevation", frequency_ghz=4.9),
+                build_asset_record(azimuth_60, legend_path=azimuth_60.with_name(azimuth_60.stem + "-legend.svg"), plane="azimuth", frequency_ghz=6.0),
+                build_asset_record(elevation_60, legend_path=elevation_60.with_name(elevation_60.stem + "-legend.svg"), plane="elevation", frequency_ghz=6.0),
+            ],
+        )
+        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
+
+        with fitz.open(self.template_pdf) as doc:
+            replacements, remaining, _base_slots = _build_rfe_selected_chart_replacements(
+                doc[1],
+                sorted(_collect_chart_slots(doc[1]), key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1)),
+                self.output_pdf,
+                self.extract_workbook,
+                manifest,
+                RFE_TEMPLATE_ADAPTER,
+                [4.9, 6.0],
+            )
+
+        by_kind = {replacement.kind: replacement for replacement in replacements}
+        self.assertFalse(remaining)
+        self.assertEqual(by_kind["azimuth_1"].asset_path, azimuth_49)
+        self.assertEqual(by_kind["elevation_1"].asset_path, elevation_49)
+        self.assertEqual(by_kind["azimuth_2"].asset_path, azimuth_60)
+        self.assertEqual(by_kind["elevation_2"].asset_path, elevation_60)
+        self.assertLess(by_kind["azimuth_1"].rect.y0, by_kind["azimuth_2"].rect.y0)
+        self.assertAlmostEqual(by_kind["azimuth_1"].rect.x0, by_kind["azimuth_2"].rect.x0, delta=0.1)
+        assert by_kind["azimuth_1"].legend_rect is not None
+        self.assertAlmostEqual(
+            (by_kind["azimuth_1"].rect.x0 + by_kind["azimuth_1"].rect.x1) / 2.0,
+            (by_kind["azimuth_1"].legend_rect.x0 + by_kind["azimuth_1"].legend_rect.x1) / 2.0,
+            delta=0.1,
+        )
+        self.assertAlmostEqual(by_kind["azimuth_1"].legend_rect.width, by_kind["azimuth_1"].rect.width, delta=0.1)
+        self.assertLess(by_kind["azimuth_1"].rect.y1, by_kind["azimuth_1"].legend_rect.y0)
+        legend_target = _legend_target_rect(by_kind["azimuth_1"], _shared_side_legend_scale(replacements))
+        self.assertAlmostEqual(
+            (by_kind["azimuth_1"].rect.x0 + by_kind["azimuth_1"].rect.x1) / 2.0,
+            (legend_target.x0 + legend_target.x1) / 2.0,
+            delta=0.1,
+        )
+
+    def test_rfe_selected_radiation_pages_remove_old_legends_and_use_template_heading_style(self) -> None:
+        self._write_template_pdf(reverse_polar_slot_order=True)
+        records = []
+        for frequency in (4.9, 6.0, 7.1):
+            azimuth = self.polar_azimuth_dir / f"extract-polar-azimuth-{frequency:.3f}-GHz.svg"
+            elevation = self.polar_elevation_dir / f"extract-polar-elevation-{frequency:.3f}-GHz.svg"
+            for path in (azimuth, elevation):
+                legend = path.with_name(path.stem + "-legend.svg")
+                self._write_svg(path, "#336699", width=140, height=140)
+                self._write_svg(legend, "#ffffff", width=150, height=70)
+            records.extend(
+                [
+                    build_asset_record(azimuth, legend_path=azimuth.with_name(azimuth.stem + "-legend.svg"), plane="azimuth", frequency_ghz=frequency),
+                    build_asset_record(elevation, legend_path=elevation.with_name(elevation.stem + "-legend.svg"), plane="elevation", frequency_ghz=frequency),
+                ]
+            )
+        update_artifact_manifest(
+            self.root,
+            "extract",
+            gain=build_asset_record(self.gain_svg),
+            beamwidth=build_asset_record(self.beamwidth_svg),
+            polar_single=records,
+        )
+        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
+
+        with fitz.open(self.template_pdf) as doc:
+            _replace_chart_images(
+                doc,
+                self.output_pdf,
+                self.extract_workbook,
+                artifact_manifest=manifest,
+                adapter=RFE_TEMPLATE_ADAPTER,
+                selected_radiation_frequencies=[4.9, 6.0, 7.1],
+            )
+            first_page_text = doc[1].get_text()
+            self.assertNotIn("Port Pattern", first_page_text)
+            self.assertGreaterEqual(doc.page_count, 3)
+            continuation_spans = _extract_page_spans(doc[2])
+            azimuth_heading = next(span for span in continuation_spans if span.text == "AZIMUTH PATTERN")
+            red = (azimuth_heading.color >> 16) & 0xFF
+            green = (azimuth_heading.color >> 8) & 0xFF
+            blue = azimuth_heading.color & 0xFF
+
+        self.assertGreater(red, 200)
+        self.assertLess(green, 80)
+        self.assertLess(blue, 80)
 
     def test_build_chart_replacements_prefers_artifact_manifest_assets(self) -> None:
         manifest_gain_legend = self.root / "manifest-legends" / "gain-key.svg"
@@ -1435,7 +1772,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(solid_runs, 1)
         self.assertGreaterEqual(dashed_runs, 3)
 
-    def test_build_replacements_from_workbook_derives_polarization_from_source_file(self) -> None:
+    def test_build_replacements_from_workbook_does_not_emit_polarization(self) -> None:
         ffs_summary = pd.DataFrame(
             [
                 {
@@ -1493,7 +1830,7 @@ class DatasheetPdfTests(unittest.TestCase):
 
         replacements = build_replacements_from_workbook(self.extract_workbook)
 
-        self.assertEqual(replacements["Polarization"], "Dual Linear H + V")
+        self.assertNotIn("Polarization", replacements)
         self.assertEqual(replacements["Gain"], "19.5 dBi")
 
     def test_build_datasheet_pdf_uses_myriad_font_for_myriad_template(self) -> None:

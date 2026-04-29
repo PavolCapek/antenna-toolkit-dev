@@ -39,7 +39,7 @@ from datasheet.tables import (
     resolve_datasheet_tables,
     row_for_fixed_label,
 )
-from datasheet.templates import DatasheetTemplateAdapter, TemplateChartManifest, TemplateChartSlot
+from datasheet.templates import DatasheetTemplateAdapter, NETQUI_1POL_TEMPLATE_MANIFEST, TemplateChartManifest, TemplateChartSlot
 from datasheet.layouts.netqui_1pol import (
     NETQUI_POLAR_LEGEND_SCALE_CAP,
     NETQUI_SIDE_LEGEND_SCALE_CAP,
@@ -811,6 +811,13 @@ def _replace_technical_table(
             registered_fonts=registered_fonts,
             center_vertically=layout_mode in {"netqui", "netqui_1pol"},
         )
+        page.draw_line(
+            (36.638, slot.row_bottom),
+            (slot.table_right, slot.row_bottom),
+            color=(0.13669031858444214, 0.12195010483264923, 0.1252918243408203),
+            width=0.25,
+            overlay=True,
+        )
     extra_entries = extra_rows_for_sections(tables, used_keys=used_keys, section_filter=is_mechanical_section)
     if not extra_entries:
         return
@@ -1066,6 +1073,7 @@ def _replace_netqui_table(
         [slot for slot in slots if slot.label_rect.x0 >= 280.0],
     ]
     line_color = (0.13669031858444214, 0.12195010483264923, 0.1252918243408203)
+    prepared_groups: list[tuple[list[TechnicalDataRowSlot], list[TechnicalDataRowSlot], float, float]] = []
     for group in groups:
         if not group:
             continue
@@ -1084,21 +1092,47 @@ def _replace_netqui_table(
             for extra in extra_rows:
                 layout_slots.append(_netqui_extra_row_slot(prototype, extra.label, y, row_height))
                 y += row_step
+        prepared_groups.append((group, layout_slots, base_font_size, bottom_limit))
 
-        rows: list[tuple[TechnicalDataRowSlot, str, bool, bool, float, str]] = []
-        font_size = base_font_size
-        for candidate_font_size in (base_font_size, base_font_size - 0.35, base_font_size - 0.7, base_font_size - 1.0, base_font_size - 1.3):
-            font_size = max(7.4, candidate_font_size)
-            rows = _netqui_row_layout(
+    if not prepared_groups:
+        return False
+
+    group_font_sizes: list[float] = []
+    for _group, layout_slots, base_font_size, bottom_limit in prepared_groups:
+        selected_font_size = max(7.0, base_font_size - 2.0)
+        for candidate_font_size in (
+            base_font_size,
+            base_font_size - 0.35,
+            base_font_size - 0.7,
+            base_font_size - 1.0,
+            base_font_size - 1.3,
+            base_font_size - 1.6,
+            base_font_size - 2.0,
+        ):
+            candidate_font_size = max(7.0, candidate_font_size)
+            rows_for_candidate = _netqui_row_layout(
                 page,
                 layout_slots,
                 tables,
-                font_size=font_size,
+                font_size=candidate_font_size,
                 bottom_limit=bottom_limit,
                 registered_fonts=registered_fonts,
             )
-            if _netqui_rows_bottom(rows) <= bottom_limit:
+            if _netqui_rows_bottom(rows_for_candidate) <= bottom_limit:
+                selected_font_size = candidate_font_size
                 break
+        group_font_sizes.append(selected_font_size)
+    shared_font_size = min(group_font_sizes)
+
+    for group, layout_slots, _base_font_size, _bottom_limit in prepared_groups:
+        rows = _netqui_row_layout(
+            page,
+            layout_slots,
+            tables,
+            font_size=shared_font_size,
+            bottom_limit=_bottom_limit,
+            registered_fonts=registered_fonts,
+        )
         if not rows:
             continue
         table_left = 36.638 if group[0].label_rect.x0 < 280.0 else max(302.25, min(slot.label_rect.x0 for slot in group))
@@ -1127,7 +1161,7 @@ def _replace_netqui_table(
                 slot.label,
                 origin=None,
                 font_name=slot.label_font_name,
-                font_size=font_size,
+                font_size=shared_font_size,
                 color=slot.label_color,
                 registered_fonts=registered_fonts,
                 center_vertically=True,
@@ -1139,7 +1173,7 @@ def _replace_netqui_table(
                 text,
                 origin=None,
                 font_name=slot.value_font_name,
-                font_size=font_size,
+                font_size=shared_font_size,
                 color=value_color,
                 registered_fonts=registered_fonts,
                 center_vertically=True,
@@ -1331,21 +1365,48 @@ def _replace_header_placeholders(
 ) -> dict[str, str]:
     data_by_key = _technical_data_by_key(entries)
     replacements: dict[str, str] = {}
-    for key, placeholder in (("antenna name", "ANTENNA NAME"), ("product id", "PRODUCT_ID_PLACEHOLDER")):
+    placeholder_groups = (
+        ("antenna name", ("ANTENNA NAME",)),
+        ("product id", ("PRODUCT_ID_PLACEHOLDER", "PRODUCT_OD_PLACEHOLDER")),
+    )
+    for key, placeholders in placeholder_groups:
         entry = data_by_key.get(key)
         text, is_missing = _text_or_placeholder(entry.value if entry is not None else "")
         replacements[key] = text
         for page in doc:
-            spans = [span for span in _extract_page_spans(page) if span.text == placeholder]
+            spans = [
+                (span, placeholder)
+                for span in _extract_page_spans(page)
+                for placeholder in placeholders
+                if placeholder in span.text
+            ]
             for span in spans:
+                source_span, placeholder = span
+                replacement_text = source_span.text.replace(placeholder, text)
                 _replace_exact_span_text(
                     page,
-                    span,
-                    text,
+                    source_span,
+                    replacement_text,
                     registered_fonts=registered_fonts,
                     color=MISSING_VALUE_COLOR if is_missing else None,
                 )
     return replacements
+
+
+def _update_footer_dates(
+    doc: fitz.Document,
+    generated_at: datetime,
+    *,
+    registered_fonts: set[str],
+) -> None:
+    replacement = generated_at.strftime("%m-%Y")
+    pattern = re.compile(r"^\s*\d{2}-\d{4}(?:\s+v\d+)?\s*$", re.IGNORECASE)
+    for page in doc:
+        for span in _extract_page_spans(page):
+            text = span.text.replace("\u200b", "").strip()
+            if not pattern.match(text):
+                continue
+            _replace_exact_span_text(page, span, replacement, registered_fonts=registered_fonts)
 
 
 def _update_footer_page_numbers(
@@ -2065,22 +2126,171 @@ def _frequency_triplet_targets(extract_workbook: Path) -> tuple[float, float, fl
     return fmin, (fmin + fmax) / 2.0, fmax
 
 
-def _select_unique_frequency_triplet(assets: dict[float, Path], targets: tuple[float, float, float]) -> dict[str, Path]:
-    if len(assets) < 3:
-        raise ValueError("Netqui 1Pol requires at least three combined polar radiation plot frequencies.")
+def _frequency_series_targets(extract_workbook: Path, count: int) -> tuple[float, ...]:
+    if count <= 0:
+        return ()
+    low, _mid, high = _frequency_triplet_targets(extract_workbook)
+    if count == 1:
+        return (low,)
+    step = (high - low) / float(count - 1)
+    return tuple(low + step * index for index in range(count))
+
+
+def _select_unique_frequency_assets(assets: dict[float, Path], targets: tuple[float, ...], roles: tuple[str, ...]) -> dict[str, Path]:
+    if len(assets) < len(roles):
+        raise ValueError(f"Netqui 1Pol requires at least {len(roles)} combined polar radiation plot frequencies.")
 
     selected: dict[str, Path] = {}
     used: set[float] = set()
-    for role, target in zip(("low", "mid", "high"), targets):
+    for role, target in zip(roles, targets):
         remaining = [frequency for frequency in assets if frequency not in used]
         if not remaining:
             break
         frequency = min(remaining, key=lambda value: (abs(value - target), value))
         used.add(frequency)
         selected[role] = assets[frequency]
-    if set(selected) != {"low", "mid", "high"}:
-        raise ValueError("Netqui 1Pol could not select three unique combined polar radiation plots.")
+    if set(selected) != set(roles):
+        raise ValueError(f"Netqui 1Pol could not select {len(roles)} unique combined polar radiation plots.")
     return selected
+
+
+def _select_unique_frequency_triplet(assets: dict[float, Path], targets: tuple[float, float, float]) -> dict[str, Path]:
+    return _select_unique_frequency_assets(assets, targets, ("low", "mid", "high"))
+
+
+def _normalize_selected_radiation_frequencies(values: list[float] | tuple[float, ...] | None) -> list[float] | None:
+    if values is None:
+        return None
+    selected: set[float] = set()
+    for raw in values:
+        try:
+            value = round(float(raw), 6)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            selected.add(value)
+    return sorted(selected)
+
+
+def _selected_frequency_asset_map(
+    assets: dict[float, Path],
+    selected_frequencies: list[float],
+    *,
+    label: str,
+    tolerance: float = 0.0005,
+) -> list[Path]:
+    selected: list[Path] = []
+    for requested in selected_frequencies:
+        matches = [
+            frequency
+            for frequency in assets
+            if abs(float(frequency) - float(requested)) <= tolerance
+        ]
+        if not matches:
+            available = ", ".join(f"{frequency:g}" for frequency in sorted(assets)) or "none"
+            raise ValueError(
+                f"Missing required {label} radiation plot asset for {requested:g} GHz. "
+                f"Rerun Plots only or adjust the selected radiation frequencies. Available: {available}"
+            )
+        frequency = min(matches, key=lambda value: (abs(value - requested), value))
+        selected.append(assets[frequency])
+    return selected
+
+
+def _manifest_polar_single_assets(artifact_manifest: dict[str, object] | None) -> dict[str, dict[float, Path]]:
+    if not isinstance(artifact_manifest, dict):
+        return {"azimuth": {}, "elevation": {}}
+    charts = artifact_manifest.get("charts")
+    if not isinstance(charts, dict):
+        return {"azimuth": {}, "elevation": {}}
+    records = charts.get("polar_single")
+    if not isinstance(records, list):
+        return {"azimuth": {}, "elevation": {}}
+
+    by_plane: dict[str, dict[float, Path]] = {"azimuth": {}, "elevation": {}}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        plane = str(record.get("plane") or "").strip().lower()
+        if plane not in by_plane:
+            continue
+        try:
+            frequency = round(float(record.get("frequency_ghz")), 6)
+        except (TypeError, ValueError):
+            continue
+        path = _manifest_svg_path(record)
+        if path is not None:
+            by_plane[plane].setdefault(frequency, path)
+    return by_plane
+
+
+def _filesystem_polar_single_assets(output: Path, extract_workbook: Path) -> dict[str, dict[float, Path]]:
+    by_plane: dict[str, dict[float, Path]] = {"azimuth": {}, "elevation": {}}
+    for directory in _candidate_dirs(output, extract_workbook):
+        for prefix in _candidate_prefixes(output, extract_workbook):
+            for plane in by_plane:
+                base_dir = directory / "polar_single" / plane
+                for pattern in (
+                    f"{prefix}-polar-{plane}-*-GHz.svg",
+                    f"{prefix}_polar_{plane}_*_GHz.svg",
+                ):
+                    for candidate in sorted(base_dir.glob(pattern)):
+                        frequency = _parse_frequency_from_polar_asset(candidate, plane)
+                        if frequency is not None:
+                            by_plane[plane].setdefault(round(frequency, 6), candidate)
+    return by_plane
+
+
+def _find_selected_polar_single_asset_pairs(
+    output: Path,
+    extract_workbook: Path,
+    selected_frequencies: list[float],
+    artifact_manifest: dict[str, object] | None,
+) -> list[tuple[Path, Path]]:
+    by_plane = _manifest_polar_single_assets(artifact_manifest)
+    if not by_plane["azimuth"] or not by_plane["elevation"]:
+        filesystem = _filesystem_polar_single_assets(output, extract_workbook)
+        for plane in ("azimuth", "elevation"):
+            by_plane[plane].update(filesystem[plane])
+    azimuth = _selected_frequency_asset_map(by_plane["azimuth"], selected_frequencies, label="azimuth")
+    elevation = _selected_frequency_asset_map(by_plane["elevation"], selected_frequencies, label="elevation")
+    return list(zip(azimuth, elevation))
+
+
+def _find_selected_combined_polar_assets(
+    output: Path,
+    extract_workbook: Path,
+    selected_frequencies: list[float],
+    artifact_manifest: dict[str, object] | None,
+    *,
+    chart_key: str,
+) -> list[Path]:
+    assets = _manifest_combined_polar_assets(artifact_manifest, chart_key=chart_key)
+    if not assets:
+        for directory in _candidate_dirs(output, extract_workbook):
+            for prefix in _candidate_prefixes(output, extract_workbook):
+                if chart_key == "polar_combined_planes":
+                    combined_dirs = (directory / "polar_combined" / "e-h-plane",)
+                    patterns = (
+                        f"{prefix}-polar-*-GHz-e-h-plane-combined.svg",
+                        f"{prefix}_polar_*_GHz_e_h_plane_combined.svg",
+                    )
+                else:
+                    combined_dirs = (
+                        directory / "polar_combined" / "azimuth-elevation",
+                        directory / "polar_combined",
+                    )
+                    patterns = (
+                        f"{prefix}-polar-*-GHz-combined.svg",
+                        f"{prefix}_polar_*_GHz_combined.svg",
+                    )
+                for pattern in patterns:
+                    for combined_dir in combined_dirs:
+                        for candidate in sorted(combined_dir.glob(pattern)):
+                            frequency = _parse_frequency_from_combined_polar_asset(candidate)
+                            if frequency is not None:
+                                assets.setdefault(round(frequency, 6), candidate)
+    return _selected_frequency_asset_map(assets, selected_frequencies, label="combined E/H-plane")
 
 
 def _find_combined_polar_triplet_assets(
@@ -2124,6 +2334,52 @@ def _find_combined_polar_triplet_assets(
             f"Rerun Plots only for this project. Checked: {checked_list}"
         )
     return _select_unique_frequency_triplet(assets, _frequency_triplet_targets(extract_workbook))
+
+
+def _find_combined_polar_series_assets(
+    output: Path,
+    extract_workbook: Path,
+    artifact_manifest: dict[str, object] | None = None,
+    *,
+    chart_key: str = "polar_combined",
+    count: int,
+) -> list[Path]:
+    assets = _manifest_combined_polar_assets(artifact_manifest, chart_key=chart_key)
+    checked: list[Path] = []
+    if not assets:
+        for directory in _candidate_dirs(output, extract_workbook):
+            for prefix in _candidate_prefixes(output, extract_workbook):
+                if chart_key == "polar_combined_planes":
+                    combined_dirs = (directory / "polar_combined" / "e-h-plane",)
+                    patterns = (
+                        f"{prefix}-polar-*-GHz-e-h-plane-combined.svg",
+                        f"{prefix}_polar_*_GHz_e_h_plane_combined.svg",
+                    )
+                else:
+                    combined_dirs = (
+                        directory / "polar_combined" / "azimuth-elevation",
+                        directory / "polar_combined",
+                    )
+                    patterns = (
+                        f"{prefix}-polar-*-GHz-combined.svg",
+                        f"{prefix}_polar_*_GHz_combined.svg",
+                    )
+                for pattern in patterns:
+                    for combined_dir in combined_dirs:
+                        checked.append(combined_dir / pattern)
+                        for candidate in sorted(combined_dir.glob(pattern)):
+                            frequency = _parse_frequency_from_combined_polar_asset(candidate)
+                            if frequency is not None:
+                                assets.setdefault(frequency, candidate)
+    if not assets:
+        checked_list = ", ".join(str(path) for path in checked) if checked else "none"
+        raise ValueError(
+            "Missing required combined polar radiation plot assets for Netqui 1Pol. "
+            f"Rerun Plots only for this project. Checked: {checked_list}"
+        )
+    roles = tuple(f"frequency_{index + 1}" for index in range(count))
+    selected = _select_unique_frequency_assets(assets, _frequency_series_targets(extract_workbook, count), roles)
+    return [selected[role] for role in roles]
 
 
 def _beamwidth_polarization_suffixes(extract_workbook: Path) -> list[str]:
@@ -2744,10 +3000,18 @@ def _center_rect_with_size(container_rect: fitz.Rect, width: float, height: floa
     return fitz.Rect(center_x - half_width, center_y - half_height, center_x + half_width, center_y + half_height)
 
 
+def _is_polar_radiation_replacement(kind: str) -> bool:
+    return (
+        kind.startswith("radiation_")
+        or kind.startswith("azimuth_")
+        or kind.startswith("elevation_")
+    )
+
+
 def _shared_side_legend_scale(replacements: list[ChartReplacement]) -> float | None:
     scales: list[float] = []
     for replacement in replacements:
-        if replacement.kind.startswith("radiation_"):
+        if _is_polar_radiation_replacement(replacement.kind):
             continue
         if replacement.legend_rect is None or replacement.legend_asset_path is None:
             continue
@@ -2778,7 +3042,7 @@ def _legend_target_rect(replacement: ChartReplacement, shared_side_scale: float 
         scale = min(container_rect.width / native_width, container_rect.height / native_height)
     if replacement.legend_scale_cap is not None:
         scale = min(scale, float(replacement.legend_scale_cap))
-    if replacement.legend_scale_cap is not None and not replacement.kind.startswith("radiation_"):
+    if replacement.legend_scale_cap is not None and not _is_polar_radiation_replacement(replacement.kind):
         height = native_height * scale
         center_y = (container_rect.y0 + container_rect.y1) / 2.0
         return fitz.Rect(container_rect.x0, center_y - height / 2.0, container_rect.x0 + native_width * scale, center_y + height / 2.0)
@@ -2791,38 +3055,7 @@ def _place_svg_as_vector(page: fitz.Page, target_rect: fitz.Rect, svg_path: Path
         page.show_pdf_page(target_rect, pdf_doc, 0, keep_proportion=True, overlay=True)
 
 
-def _replace_chart_images(
-    doc: fitz.Document,
-    output: Path,
-    extract_workbook: Path,
-    *,
-    artifact_manifest: dict[str, object] | None = None,
-    adapter: DatasheetTemplateAdapter | None = None,
-) -> None:
-    if doc.page_count < 2:
-        return
-
-    chart_manifest = adapter.manifest.chart_layout if adapter is not None and adapter.manifest is not None else None
-    if chart_manifest is not None and chart_manifest.page_index is not None:
-        if chart_manifest.page_index >= doc.page_count:
-            raise ValueError(f"Datasheet template does not contain configured chart page {chart_manifest.page_index + 1}.")
-        page = doc[chart_manifest.page_index]
-        if len(_collect_chart_slots(page)) < chart_manifest.min_image_slots:
-            raise ValueError(
-                f"Datasheet template chart page does not contain the expected {chart_manifest.min_image_slots} image slots."
-            )
-    else:
-        min_image_slots = chart_manifest.min_image_slots if chart_manifest is not None else 2
-        page = next((candidate for candidate in doc[1:] if len(_collect_chart_slots(candidate)) >= min_image_slots), None)
-    if page is None:
-        raise ValueError("Datasheet template does not contain the expected chart image slots.")
-    replacements = _build_chart_replacements(
-        page,
-        output,
-        extract_workbook,
-        artifact_manifest=artifact_manifest,
-        adapter=adapter,
-    )
+def _apply_chart_replacements_to_page(page: fitz.Page, replacements: list[ChartReplacement]) -> None:
     for replacement in replacements:
         page.add_redact_annot(replacement.erase_rect or replacement.rect, fill=(1.0, 1.0, 1.0))
         if replacement.legend_rect is not None:
@@ -2832,8 +3065,529 @@ def _replace_chart_images(
     for replacement in replacements:
         _place_svg_as_vector(page, replacement.rect, replacement.asset_path)
         if replacement.legend_rect is not None and replacement.legend_asset_path is not None:
-            legend_scale = None if replacement.kind.startswith("radiation_") else shared_side_scale
+            legend_scale = None if _is_polar_radiation_replacement(replacement.kind) else shared_side_scale
             _place_svg_as_vector(page, _legend_target_rect(replacement, legend_scale), replacement.legend_asset_path)
+
+
+def _netqui_six_radiation_slots(page: fitz.Page, base_slots: list[ChartSlot]) -> list[fitz.Rect]:
+    source = [fitz.Rect(slot.rect) for slot in base_slots[:3]]
+    if len(source) < 3:
+        return source
+    top = min(rect.y0 for rect in source)
+    original_height = max(rect.height for rect in source)
+    bottom_limit = page.rect.height - 78.0
+    bottom = min(bottom_limit, top + original_height * 2.0 + 8.0)
+    row_gap = 8.0
+    row_height = (bottom - top - row_gap) / 2.0
+    if row_height < 92.0:
+        return source
+    rows: list[fitz.Rect] = []
+    for row_index in range(2):
+        y0 = top + row_index * (row_height + row_gap)
+        y1 = y0 + row_height
+        for rect in source:
+            rows.append(fitz.Rect(rect.x0, y0, rect.x1, y1))
+    return rows
+
+
+def _netqui_radiation_slots(page: fitz.Page, base_slots: list[ChartSlot], count: int) -> list[fitz.Rect]:
+    source = [fitz.Rect(slot.rect) for slot in base_slots[:3]]
+    if count <= 0 or not source:
+        return []
+    columns = min(3, len(source))
+    row_count = math.ceil(count / columns)
+    top = min(rect.y0 for rect in source)
+    bottom_limit = page.rect.height - 78.0
+    row_gap = 8.0
+    native_height = max(rect.height for rect in source)
+    row_height = min(native_height, (bottom_limit - top - row_gap * max(0, row_count - 1)) / max(1, row_count))
+    if row_height < 90.0 and row_count > 1:
+        row_count = 1
+        row_height = min(native_height, bottom_limit - top)
+    slots: list[fitz.Rect] = []
+    for row_index in range(row_count):
+        y0 = top + row_index * (row_height + row_gap)
+        y1 = y0 + row_height
+        if y1 > bottom_limit:
+            break
+        for column_index in range(columns):
+            if len(slots) >= count:
+                break
+            rect = source[column_index]
+            slots.append(fitz.Rect(rect.x0, y0, rect.x1, y1))
+    return slots
+
+
+def _build_netqui_1pol_placeholder_chart_replacements(
+    page: fitz.Page,
+    ordered_slots: list[ChartSlot],
+    output: Path,
+    extract_workbook: Path,
+    artifact_manifest: dict[str, object] | None = None,
+    selected_radiation_frequencies: list[float] | None = None,
+) -> list[ChartReplacement]:
+    aligned_slots = _align_netqui_1pol_cartesian_slots(ordered_slots)
+    if len(aligned_slots) < 7:
+        raise ValueError("Netqui 1Pol placeholder template requires at least seven chart image slots.")
+    replacements = _build_manifest_chart_replacements(
+        page,
+        aligned_slots,
+        output,
+        extract_workbook,
+        NETQUI_1POL_TEMPLATE_MANIFEST.chart_layout,
+        _extract_page_spans(page),
+        artifact_manifest=artifact_manifest,
+    )
+    if selected_radiation_frequencies is None:
+        radiation_assets = _find_combined_polar_series_assets(
+            output,
+            extract_workbook,
+            artifact_manifest=artifact_manifest,
+            chart_key="polar_combined_planes",
+            count=6,
+        )
+    else:
+        radiation_assets = _find_selected_combined_polar_assets(
+            output,
+            extract_workbook,
+            selected_radiation_frequencies,
+            artifact_manifest,
+            chart_key="polar_combined_planes",
+        )
+    radiation_slots = _netqui_radiation_slots(page, aligned_slots[4:7], len(radiation_assets))
+    non_radiation = [replacement for replacement in replacements if not replacement.kind.startswith("radiation_")]
+    for index, asset in enumerate(radiation_assets[: len(radiation_slots)]):
+        legend_asset = _legend_asset_path(asset, artifact_manifest)
+        plot_rect, legend_rect = netqui_polar_rects(radiation_slots[index])
+        non_radiation.append(
+            ChartReplacement(
+                f"radiation_{index + 1}",
+                plot_rect,
+                asset,
+                legend_rect=legend_rect if legend_asset.exists() else None,
+                legend_asset_path=legend_asset if legend_asset.exists() else None,
+                erase_rect=radiation_slots[index],
+                legend_scale_cap=NETQUI_POLAR_LEGEND_SCALE_CAP,
+            )
+        )
+    return non_radiation
+
+
+def _append_netqui_1pol_placeholder_radiation_page(
+    doc: fitz.Document,
+    after_page_index: int,
+    base_slots: list[ChartSlot],
+    radiation_assets: list[Path],
+    artifact_manifest: dict[str, object] | None,
+) -> None:
+    if not radiation_assets:
+        return
+    source = [fitz.Rect(slot.rect) for slot in base_slots[:3]]
+    if len(source) < 3:
+        return
+    previous_page = doc[after_page_index]
+    page = doc.new_page(pno=after_page_index + 1, width=previous_page.rect.width, height=previous_page.rect.height)
+    page.insert_text((36.0, 60.0), "RADIATION PATTERNS", fontsize=12.0, fontname="helv", color=(0.0, 0.0, 0.0))
+    page.insert_text((36.0, page.rect.height - 38.0), "01-2000 v1", fontsize=7.0, fontname="helv", color=(0.0, 0.0, 0.0))
+    page.insert_text(
+        (page.rect.width / 2.0 - 96.0, page.rect.height - 22.0),
+        "(c) NETQUI j. s. a.     www.netqui.com      sales@netqui.com",
+        fontsize=7.0,
+        fontname="helv",
+        color=(0.0, 0.0, 0.0),
+    )
+    top = 112.0
+    height = max(rect.height for rect in source)
+    slots = [fitz.Rect(rect.x0, top, rect.x1, top + height) for rect in source]
+    replacements: list[ChartReplacement] = []
+    for index, asset in enumerate(radiation_assets[:3]):
+        legend_asset = _legend_asset_path(asset, artifact_manifest)
+        plot_rect, legend_rect = netqui_polar_rects(slots[index])
+        replacements.append(
+            ChartReplacement(
+                f"radiation_continued_{index + 1}",
+                plot_rect,
+                asset,
+                legend_rect=legend_rect if legend_asset.exists() else None,
+                legend_asset_path=legend_asset if legend_asset.exists() else None,
+                erase_rect=slots[index],
+                legend_scale_cap=NETQUI_POLAR_LEGEND_SCALE_CAP,
+            )
+        )
+    _apply_chart_replacements_to_page(page, replacements)
+
+
+def _append_netqui_radiation_pages(
+    doc: fitz.Document,
+    after_page_index: int,
+    base_slots: list[ChartSlot],
+    radiation_assets: list[Path],
+    artifact_manifest: dict[str, object] | None,
+) -> None:
+    remaining = list(radiation_assets)
+    insert_after = after_page_index
+    while remaining:
+        chunk, remaining = remaining[:3], remaining[3:]
+        _append_netqui_1pol_placeholder_radiation_page(doc, insert_after, base_slots, chunk, artifact_manifest)
+        insert_after += 1
+
+
+def _build_netqui_1pol_selected_chart_replacements(
+    page: fitz.Page,
+    ordered_slots: list[ChartSlot],
+    output: Path,
+    extract_workbook: Path,
+    artifact_manifest: dict[str, object] | None,
+    selected_radiation_frequencies: list[float],
+) -> list[ChartReplacement]:
+    aligned_slots = _align_netqui_1pol_cartesian_slots(ordered_slots)
+    replacements = _build_manifest_chart_replacements(
+        page,
+        aligned_slots,
+        output,
+        extract_workbook,
+        NETQUI_1POL_TEMPLATE_MANIFEST.chart_layout,
+        _extract_page_spans(page),
+        artifact_manifest=artifact_manifest,
+    )
+    replacements = [replacement for replacement in replacements if not replacement.kind.startswith("radiation_")]
+    radiation_assets = _find_selected_combined_polar_assets(
+        output,
+        extract_workbook,
+        selected_radiation_frequencies,
+        artifact_manifest,
+        chart_key="polar_combined_planes",
+    )
+    radiation_slots = _netqui_radiation_slots(page, aligned_slots[4:7], len(radiation_assets))
+    for index, asset in enumerate(radiation_assets[: len(radiation_slots)]):
+        legend_asset = _legend_asset_path(asset, artifact_manifest)
+        plot_rect, legend_rect = netqui_polar_rects(radiation_slots[index])
+        replacements.append(
+            ChartReplacement(
+                f"radiation_{index + 1}",
+                plot_rect,
+                asset,
+                legend_rect=legend_rect if legend_asset.exists() else None,
+                legend_asset_path=legend_asset if legend_asset.exists() else None,
+                erase_rect=radiation_slots[index],
+                legend_scale_cap=NETQUI_POLAR_LEGEND_SCALE_CAP,
+            )
+        )
+    return replacements
+
+
+def _rfe_polar_rects(slot_rect: fitz.Rect) -> tuple[fitz.Rect, fitz.Rect]:
+    full = fitz.Rect(slot_rect)
+    legend_height = min(max(full.height * 0.18, 20.0), 28.0)
+    plot = fitz.Rect(full.x0, full.y0, full.x1, full.y1 - legend_height - 2.0)
+    plot_width = min(plot.width, plot.height)
+    plot_center_x = (plot.x0 + plot.x1) / 2.0
+    plot = fitz.Rect(plot_center_x - plot_width / 2.0, plot.y0, plot_center_x + plot_width / 2.0, plot.y0 + plot_width)
+    legend = fitz.Rect(plot.x0, full.y1 - legend_height, plot.x1, full.y1)
+    return plot, legend
+
+
+def _rfe_heading_span(spans: list[TextSpan], text: str) -> TextSpan | None:
+    target = text.strip().upper()
+    return next((span for span in spans if span.text.strip().upper() == target), None)
+
+
+def _insert_rfe_heading(page: fitz.Page, text: str, x: float, y: float, source_span: TextSpan | None) -> None:
+    font_name = source_span.font if source_span is not None else ("MyriadPro-Semibold" if MYRIAD_FONT_FILES["MyriadPro-Semibold"].exists() else "helv")
+    font_size = float(source_span.size) if source_span is not None else 10.0
+    color = _int_color_to_rgb(source_span.color) if source_span is not None else (0.9, 0.0, 0.0)
+    pdf_font_name, fontfile, _font_path = _register_pdf_font(page, font_name, set(), required_text=text)
+    page.insert_text((x, y), text, fontsize=font_size, fontname=pdf_font_name, fontfile=fontfile, color=color)
+
+
+def _rfe_template_polar_legend_rects(spans: list[TextSpan]) -> list[fitz.Rect]:
+    rects: list[fitz.Rect] = []
+    for span in spans:
+        text = span.text.strip()
+        if "Port Pattern" not in text and not (re.search(r"\b(?:Azimuth|Elevation)\b", text, re.IGNORECASE) and re.search(r"\bGHz\b", text, re.IGNORECASE)):
+            continue
+        rect = fitz.Rect(span.bbox)
+        rects.append(fitz.Rect(rect.x0 - 34.0, rect.y0 - 20.0, rect.x1 + 34.0, rect.y1 + 8.0))
+    return rects
+
+
+def _erase_page_rects(page: fitz.Page, rects: list[fitz.Rect]) -> None:
+    if not rects:
+        return
+    for rect in rects:
+        page.add_redact_annot(rect, fill=(1.0, 1.0, 1.0))
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+
+
+def _rfe_radiation_slot_pairs(page: fitz.Page, azimuth_slot: ChartSlot, elevation_slot: ChartSlot, count: int) -> list[tuple[fitz.Rect, fitz.Rect]]:
+    if count <= 0:
+        return []
+    row_gap = 16.0
+    bottom_limit = page.rect.height - 54.0
+    row_height = max(60.0, azimuth_slot.rect.height)
+    pairs: list[tuple[fitz.Rect, fitz.Rect]] = []
+    for index in range(count):
+        y0 = azimuth_slot.rect.y0 + index * (row_height + row_gap)
+        y1 = y0 + row_height
+        if y1 > bottom_limit:
+            break
+        pairs.append((
+            fitz.Rect(azimuth_slot.rect.x0, y0, azimuth_slot.rect.x1, y1),
+            fitz.Rect(elevation_slot.rect.x0, y0, elevation_slot.rect.x1, y1),
+        ))
+    return pairs
+
+
+def _build_rfe_selected_chart_replacements(
+    page: fitz.Page,
+    ordered_slots: list[ChartSlot],
+    output: Path,
+    extract_workbook: Path,
+    artifact_manifest: dict[str, object] | None,
+    adapter: DatasheetTemplateAdapter,
+    selected_radiation_frequencies: list[float],
+) -> tuple[list[ChartReplacement], list[tuple[Path, Path]], list[ChartSlot]]:
+    spans = _extract_page_spans(page)
+    ordered_slots = order_chart_slots_first_two_then_x(ordered_slots)
+    replacements = _build_manifest_chart_replacements(
+        page,
+        ordered_slots,
+        output,
+        extract_workbook,
+        adapter.manifest.chart_layout,
+        spans,
+        artifact_manifest=artifact_manifest,
+    )
+    replacements = [replacement for replacement in replacements if replacement.kind not in {"azimuth", "elevation"}]
+    if len(ordered_slots) < 4:
+        return replacements, [], []
+    azimuth_slot, elevation_slot = ordered_slots[2], ordered_slots[3]
+    pairs = _find_selected_polar_single_asset_pairs(output, extract_workbook, selected_radiation_frequencies, artifact_manifest)
+    slot_pairs = _rfe_radiation_slot_pairs(page, azimuth_slot, elevation_slot, len(pairs))
+    for index, ((azimuth_asset, elevation_asset), (azimuth_rect, elevation_rect)) in enumerate(zip(pairs, slot_pairs), start=1):
+        for kind, asset, rect in (
+            (f"azimuth_{index}", azimuth_asset, azimuth_rect),
+            (f"elevation_{index}", elevation_asset, elevation_rect),
+        ):
+            legend_asset = _legend_asset_path(asset, artifact_manifest)
+            plot_rect, legend_rect = _rfe_polar_rects(rect)
+            replacements.append(
+                ChartReplacement(
+                    kind,
+                    plot_rect,
+                    asset,
+                    legend_rect=legend_rect if legend_asset.exists() else None,
+                    legend_asset_path=legend_asset if legend_asset.exists() else None,
+                    erase_rect=rect,
+                    legend_scale_cap=NETQUI_POLAR_LEGEND_SCALE_CAP,
+                )
+            )
+    return replacements, pairs[len(slot_pairs):], [azimuth_slot, elevation_slot]
+
+
+def _append_rfe_radiation_pages(
+    doc: fitz.Document,
+    after_page_index: int,
+    base_slots: list[ChartSlot],
+    remaining_pairs: list[tuple[Path, Path]],
+    artifact_manifest: dict[str, object] | None,
+) -> None:
+    if len(base_slots) < 2:
+        return
+    azimuth_source, elevation_source = base_slots[0], base_slots[1]
+    insert_after = after_page_index
+    remaining = list(remaining_pairs)
+    while remaining:
+        previous_page = doc[insert_after]
+        previous_spans = _extract_page_spans(previous_page)
+        azimuth_heading = _rfe_heading_span(previous_spans, "AZIMUTH PATTERN")
+        elevation_heading = _rfe_heading_span(previous_spans, "ELEVATION PATTERN")
+        page = doc.new_page(pno=insert_after + 1, width=previous_page.rect.width, height=previous_page.rect.height)
+        _insert_rfe_heading(page, "AZIMUTH PATTERN", azimuth_source.rect.x0, 50.0, azimuth_heading)
+        _insert_rfe_heading(page, "ELEVATION PATTERN", elevation_source.rect.x0, 50.0, elevation_heading)
+        top = 76.0
+        azimuth_slot = ChartSlot(fitz.Rect(azimuth_source.rect.x0, top, azimuth_source.rect.x1, top + azimuth_source.rect.height), "")
+        elevation_slot = ChartSlot(fitz.Rect(elevation_source.rect.x0, top, elevation_source.rect.x1, top + elevation_source.rect.height), "")
+        slot_pairs = _rfe_radiation_slot_pairs(page, azimuth_slot, elevation_slot, len(remaining))
+        if not slot_pairs:
+            raise ValueError("RFE continuation page does not have enough space for selected radiation pattern plots.")
+        replacements: list[ChartReplacement] = []
+        for index, ((azimuth_asset, elevation_asset), (azimuth_rect, elevation_rect)) in enumerate(zip(remaining, slot_pairs), start=1):
+            for kind, asset, rect in (
+                (f"azimuth_continued_{index}", azimuth_asset, azimuth_rect),
+                (f"elevation_continued_{index}", elevation_asset, elevation_rect),
+            ):
+                legend_asset = _legend_asset_path(asset, artifact_manifest)
+                plot_rect, legend_rect = _rfe_polar_rects(rect)
+                replacements.append(
+                    ChartReplacement(
+                        kind,
+                        plot_rect,
+                        asset,
+                        legend_rect=legend_rect if legend_asset.exists() else None,
+                        legend_asset_path=legend_asset if legend_asset.exists() else None,
+                        erase_rect=rect,
+                        legend_scale_cap=NETQUI_POLAR_LEGEND_SCALE_CAP,
+                    )
+                )
+        _apply_chart_replacements_to_page(page, replacements)
+        remaining = remaining[len(slot_pairs):]
+        insert_after += 1
+
+
+def _replace_netqui_1pol_placeholder_chart_images(
+    doc: fitz.Document,
+    output: Path,
+    extract_workbook: Path,
+    *,
+    artifact_manifest: dict[str, object] | None = None,
+    selected_radiation_frequencies: list[float] | None = None,
+) -> bool:
+    if doc.page_count < 2:
+        return False
+    page = doc[1]
+    slots = _collect_chart_slots(page)
+    if len(slots) < 7:
+        return False
+    ordered_slots = sorted(slots, key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
+    replacements = _build_netqui_1pol_placeholder_chart_replacements(
+        page,
+        ordered_slots,
+        output,
+        extract_workbook,
+        artifact_manifest=artifact_manifest,
+        selected_radiation_frequencies=selected_radiation_frequencies,
+    )
+    _apply_chart_replacements_to_page(page, replacements)
+    radiation_count = sum(1 for replacement in replacements if replacement.kind.startswith("radiation_"))
+    target_count = 6 if selected_radiation_frequencies is None else len(selected_radiation_frequencies)
+    if radiation_count < target_count:
+        if selected_radiation_frequencies is None:
+            radiation_assets = _find_combined_polar_series_assets(
+                output,
+                extract_workbook,
+                artifact_manifest=artifact_manifest,
+                chart_key="polar_combined_planes",
+                count=6,
+            )
+        else:
+            radiation_assets = _find_selected_combined_polar_assets(
+                output,
+                extract_workbook,
+                selected_radiation_frequencies,
+                artifact_manifest,
+                chart_key="polar_combined_planes",
+            )
+        aligned_slots = _align_netqui_1pol_cartesian_slots(ordered_slots)
+        _append_netqui_radiation_pages(
+            doc,
+            1,
+            aligned_slots[4:7],
+            radiation_assets[radiation_count:],
+            artifact_manifest,
+        )
+    return True
+
+
+def _replace_chart_images(
+    doc: fitz.Document,
+    output: Path,
+    extract_workbook: Path,
+    *,
+    artifact_manifest: dict[str, object] | None = None,
+    adapter: DatasheetTemplateAdapter | None = None,
+    selected_radiation_frequencies: list[float] | None = None,
+) -> None:
+    if doc.page_count < 2:
+        return
+    if adapter is not None and adapter.chart_layout_mode == "netqui_1pol_placeholder":
+        if not _replace_netqui_1pol_placeholder_chart_images(
+            doc,
+            output,
+            extract_workbook,
+            artifact_manifest=artifact_manifest,
+            selected_radiation_frequencies=selected_radiation_frequencies,
+        ):
+            raise ValueError("Netqui 1Pol placeholder template does not contain the expected chart image slots.")
+        return
+
+    chart_manifest = adapter.manifest.chart_layout if adapter is not None and adapter.manifest is not None else None
+    page_index: int | None = None
+    if chart_manifest is not None and chart_manifest.page_index is not None:
+        if chart_manifest.page_index >= doc.page_count:
+            raise ValueError(f"Datasheet template does not contain configured chart page {chart_manifest.page_index + 1}.")
+        page_index = chart_manifest.page_index
+        page = doc[chart_manifest.page_index]
+        if len(_collect_chart_slots(page)) < chart_manifest.min_image_slots:
+            raise ValueError(
+                f"Datasheet template chart page does not contain the expected {chart_manifest.min_image_slots} image slots."
+            )
+    else:
+        min_image_slots = chart_manifest.min_image_slots if chart_manifest is not None else 2
+        page = None
+        for index in range(1, doc.page_count):
+            candidate = doc[index]
+            if len(_collect_chart_slots(candidate)) >= min_image_slots:
+                page = candidate
+                page_index = index
+                break
+    if page is None:
+        raise ValueError("Datasheet template does not contain the expected chart image slots.")
+
+    if selected_radiation_frequencies is not None and adapter is not None:
+        ordered_slots = sorted(_collect_chart_slots(page), key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
+        if adapter.chart_layout_mode == "netqui_1pol":
+            replacements = _build_netqui_1pol_selected_chart_replacements(
+                page,
+                ordered_slots,
+                output,
+                extract_workbook,
+                artifact_manifest,
+                selected_radiation_frequencies,
+            )
+            _apply_chart_replacements_to_page(page, replacements)
+            radiation_count = sum(1 for replacement in replacements if replacement.kind.startswith("radiation_"))
+            radiation_assets = _find_selected_combined_polar_assets(
+                output,
+                extract_workbook,
+                selected_radiation_frequencies,
+                artifact_manifest,
+                chart_key="polar_combined_planes",
+            )
+            if radiation_count < len(radiation_assets):
+                aligned_slots = _align_netqui_1pol_cartesian_slots(ordered_slots)
+                _append_netqui_radiation_pages(
+                    doc,
+                    int(page_index or 1),
+                    aligned_slots[4:7],
+                    radiation_assets[radiation_count:],
+                    artifact_manifest,
+                )
+            return
+        if adapter.key in {"rfe", "generic"}:
+            _erase_page_rects(page, _rfe_template_polar_legend_rects(_extract_page_spans(page)))
+            replacements, remaining_pairs, base_slots = _build_rfe_selected_chart_replacements(
+                page,
+                ordered_slots,
+                output,
+                extract_workbook,
+                artifact_manifest,
+                adapter,
+                selected_radiation_frequencies,
+            )
+            _apply_chart_replacements_to_page(page, replacements)
+            if remaining_pairs:
+                _append_rfe_radiation_pages(doc, int(page_index or 1), base_slots, remaining_pairs, artifact_manifest)
+            return
+
+    replacements = _build_chart_replacements(
+        page,
+        output,
+        extract_workbook,
+        artifact_manifest=artifact_manifest,
+        adapter=adapter,
+    )
+    _apply_chart_replacements_to_page(page, replacements)
 
 
 def build_datasheet_pdf(
@@ -2842,6 +3596,7 @@ def build_datasheet_pdf(
     extract_workbook: Path,
     technical_data_workbook: Path | None = None,
     metadata_author: str | None = None,
+    radiation_frequencies_ghz: list[float] | tuple[float, ...] | None = None,
 ) -> dict[str, str]:
     total_steps = 4 if technical_data_workbook else 3
     emit_progress("datasheet", 1, total_steps, f"Loading {extract_workbook.name}")
@@ -2861,6 +3616,12 @@ def build_datasheet_pdf(
         model = context.model
         replacements = dict(model.performance_fields)
         tables = resolve_datasheet_tables(model.performance_fields, model.technical_entries, adapter=adapter)
+        for label in FIELD_LABELS:
+            if label in replacements:
+                continue
+            row = row_for_fixed_label(tables, label)
+            if row is not None:
+                replacements[label] = row.value
         now = datetime.now().astimezone()
         output_metadata = _build_pdf_metadata(doc.metadata, output, now, metadata_author=metadata_author)
         page = doc[0]
@@ -2906,7 +3667,7 @@ def build_datasheet_pdf(
                 if label not in slots:
                     continue
                 slot = slots[label]
-                text = replacements[label]
+                text = replacements.get(label, TECHNICAL_DATA_PLACEHOLDER)
                 table_slot = table_slots_by_key.get(_normalize_technical_key(label))
                 if table_slot is not None:
                     rendered_text, is_missing = _text_or_placeholder(text)
@@ -2939,7 +3700,9 @@ def build_datasheet_pdf(
             extract_workbook,
             artifact_manifest=model.artifact_manifest,
             adapter=adapter,
+            selected_radiation_frequencies=_normalize_selected_radiation_frequencies(radiation_frequencies_ghz),
         )
+        _update_footer_dates(doc, now, registered_fonts=registered_fonts)
         doc.set_metadata(output_metadata)
         if hasattr(doc, "set_xml_metadata"):
             doc.set_xml_metadata(_build_xmp_metadata(output_metadata, now, now))
@@ -2956,7 +3719,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--extract-workbook", type=Path, required=True, help="Extracted workbook path.")
     parser.add_argument("--technical-data-workbook", type=Path, help="Technical Data Excel workbook path.")
     parser.add_argument("--metadata-author", help="Author value to write into the PDF metadata.")
+    parser.add_argument("--radiation-frequencies-ghz", help="Comma-separated radiation pattern frequencies to include in GHz.")
     return parser.parse_args()
+
+
+def _parse_radiation_frequencies_arg(value: str | None) -> list[float] | None:
+    if value is None:
+        return None
+    parsed: list[float] = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parsed.append(float(item))
+    return _normalize_selected_radiation_frequencies(parsed) or []
 
 
 def main() -> int:
@@ -2968,6 +3744,7 @@ def main() -> int:
             extract_workbook=args.extract_workbook,
             technical_data_workbook=args.technical_data_workbook,
             metadata_author=args.metadata_author,
+            radiation_frequencies_ghz=_parse_radiation_frequencies_arg(args.radiation_frequencies_ghz),
         )
     except Exception as exc:
         print(f"ERROR: {exc}")
@@ -2975,7 +3752,7 @@ def main() -> int:
 
     print(f"Wrote datasheet PDF to {args.output}")
     for label in FIELD_LABELS:
-        print(f"{label}: {replacements[label]}")
+        print(f"{label}: {replacements.get(label, TECHNICAL_DATA_PLACEHOLDER)}")
     return 0
 
 

@@ -32,7 +32,7 @@ from studio_support import (
 )
 from project_store import (
     CURRENT_PROJECT_SCHEMA_VERSION, ProjectRecord, ProjectStore, resolve_project_path,
-    sanitize_project_slug, serialize_workspace_path, utc_now_iso,
+    normalize_radiation_frequencies, sanitize_project_slug, serialize_workspace_path, utc_now_iso,
 )
 from legend_utils import detect_polarization
 from pipeline.commands import build_plot_command, build_vswr_command
@@ -71,7 +71,7 @@ STAGE_DEFINITIONS = [
 ]
 STAGE_LABELS = dict(STAGE_DEFINITIONS)
 PLOT_ASSET_STYLE_VERSION = 3
-DATASHEET_RENDER_VERSION = 2
+DATASHEET_RENDER_VERSION = 3
 DATASHEET_TEMPLATE_DIR = THIS_DIR / "Templates"
 LEGACY_DATASHEET_TEMPLATE_ALIASES = {
     "Datasheet.pdf": "Datasheet - RFE.pdf",
@@ -80,6 +80,7 @@ LEGACY_DATASHEET_TEMPLATE_ALIASES = {
 GOOGLE_SHEETS_OAUTH_CLIENT_KEY = "google_sheets_oauth_client_json"
 GOOGLE_SHEETS_TOKEN_FILENAME = "google_sheets_token.json"
 GOOGLE_SHEETS_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+FFS_FREQ_RE_FALLBACK = re.compile(r"(?i)freq[^0-9]*([0-9.eE+-]+)\s*([GMk]?Hz)?")
 THEME_OPTIONS = [
     ("light", "Canvas"),
     ("dark", "Midnight"),
@@ -391,6 +392,99 @@ def clean_run_state(run_state: dict[str, object] | None) -> dict[str, object]:
     return cleaned
 
 
+def _unit_to_ghz(unit: str | None) -> float:
+    key = str(unit or "").strip().lower()
+    if key == "hz":
+        return 1e-9
+    if key == "khz":
+        return 1e-6
+    if key == "mhz":
+        return 1e-3
+    return 1.0
+
+
+def _normalize_frequency_block_values(values: list[float]) -> list[float]:
+    finite = [value for value in values if value > 0]
+    if not finite:
+        return []
+    factor = 1e-9 if max(finite) > 1e6 else 1.0
+    return sorted({round(value * factor, 6) for value in finite if value * factor > 0})
+
+
+def _float_tokens(raw_line: str) -> list[float]:
+    values: list[float] = []
+    for token in raw_line.split():
+        try:
+            values.append(float(token))
+        except ValueError:
+            continue
+    return values
+
+
+def read_ffs_frequency_headers(path: str | Path) -> list[float]:
+    def add_fallback_value(raw_line: str, values: list[float]) -> None:
+        match = FFS_FREQ_RE_FALLBACK.search(raw_line)
+        if not match:
+            return
+        try:
+            values.append(float(match.group(1)) * _unit_to_ghz(match.group(2)))
+        except ValueError:
+            pass
+
+    values_by_unit: list[float] = []
+    try:
+        with Path(path).open("r", encoding="utf-8", errors="ignore") as handle:
+            iterator = iter(handle)
+            for line in iterator:
+                add_fallback_value(line, values_by_unit)
+                if line.strip() != "// #Frequencies":
+                    continue
+                count_line = ""
+                for count_line in iterator:
+                    add_fallback_value(count_line, values_by_unit)
+                    if count_line.strip():
+                        break
+                if not count_line:
+                    continue
+                try:
+                    count = int(float(count_line.strip()))
+                except ValueError:
+                    continue
+                for marker_line in iterator:
+                    add_fallback_value(marker_line, values_by_unit)
+                    if "Radiated/Accepted/Stimulated Power" in marker_line:
+                        break
+                else:
+                    continue
+                values: list[float] = []
+                record: list[float] = []
+                for raw in iterator:
+                    if raw.lstrip().startswith("//") and record:
+                        break
+                    add_fallback_value(raw, values_by_unit)
+                    tokens = _float_tokens(raw)
+                    if not tokens:
+                        if record:
+                            values.append(record[-1])
+                            record = []
+                            if len(values) >= count:
+                                break
+                        continue
+                    record.extend(tokens)
+                    if len(record) >= 4:
+                        values.append(record[-1])
+                        record = []
+                        if len(values) >= count:
+                            break
+                if record and len(values) < count:
+                    values.append(record[-1])
+                if values:
+                    return _normalize_frequency_block_values(values)
+    except OSError:
+        return []
+    return sorted({round(value, 6) for value in values_by_unit if value > 0})
+
+
 def project_key(value: str) -> str:
     return "".join(ch for ch in value.lower() if ch.isalnum())
 
@@ -540,6 +634,58 @@ class ResponsiveCardPanel(QWidget):
             row = index // columns
             column = index % columns
             self.grid.addWidget(card, row, column)
+
+
+class ResponsiveInputsPanel(QWidget):
+    def __init__(self, main_min_width: int = 520, side_width: int = 400):
+        super().__init__()
+        self.main_min_width = max(360, main_min_width)
+        self.side_width = max(320, side_width)
+        self._main: QWidget | None = None
+        self._side: QWidget | None = None
+        self._stacked: bool | None = None
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(12)
+        self.grid.setVerticalSpacing(12)
+
+    def set_cards(self, main: QWidget, side: QWidget) -> None:
+        self._main = main
+        self._side = side
+        self.refresh_layout(force=True)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.refresh_layout()
+
+    def _should_stack(self) -> bool:
+        width = max(0, self.width())
+        gap = max(0, self.grid.horizontalSpacing())
+        return width < self.main_min_width + self.side_width + gap
+
+    def refresh_layout(self, force: bool = False) -> None:
+        if self._main is None or self._side is None:
+            return
+        stacked = self._should_stack()
+        if not force and stacked == self._stacked:
+            return
+        self._stacked = stacked
+        while self.grid.count():
+            self.grid.takeAt(0)
+        if stacked:
+            self._side.setMaximumWidth(16777215)
+            self.grid.setColumnStretch(0, 1)
+            self.grid.setColumnStretch(1, 0)
+            self.grid.setColumnMinimumWidth(1, 0)
+            self.grid.addWidget(self._main, 0, 0)
+            self.grid.addWidget(self._side, 1, 0)
+            return
+        self._side.setMaximumWidth(self.side_width)
+        self.grid.setColumnStretch(0, 1)
+        self.grid.setColumnStretch(1, 0)
+        self.grid.setColumnMinimumWidth(1, self.side_width)
+        self.grid.addWidget(self._main, 0, 0)
+        self.grid.addWidget(self._side, 0, 1)
 
 
 class ResponsiveButtonPanel(QWidget):
@@ -979,6 +1125,8 @@ class ModernMainWindow(QMainWindow):
         self._loading_project = False
         self._applying_preset_values = False
         self._suppress_ffs_item_change = False
+        self._suppress_radiation_frequency_change = False
+        self._project_radiation_frequencies: list[float] | None = None
         self._refresh_cache: dict[str, object] = {}
         self._refresh_cache_enabled = False
         self._refresh_timer = QTimer(self)
@@ -1456,6 +1604,30 @@ class ModernMainWindow(QMainWindow):
         ])
         ffs_card.body.addWidget(ffs_actions)
 
+        radiation_card = Card("Radiation pattern frequencies", "Datasheet")
+        self.radiation_frequency_card = radiation_card
+        radiation_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        radiation_help = QLabel("Choose which available far-field frequencies are included in datasheet radiation pattern sections.")
+        radiation_help.setWordWrap(True)
+        radiation_help.setObjectName("helper")
+        radiation_card.body.addWidget(radiation_help)
+        self.radiation_frequency_list = QListWidget()
+        self.radiation_frequency_list.setMinimumHeight(130)
+        self.radiation_frequency_list.setToolTip("Checked frequencies are placed into the datasheet radiation pattern section for this project.")
+        self.radiation_frequency_list.itemChanged.connect(self.on_radiation_frequency_item_changed)
+        radiation_card.body.addWidget(self.radiation_frequency_list)
+        self.radiation_frequency_state_label = QLabel("Add far-field files to populate available frequencies.")
+        self.radiation_frequency_state_label.setObjectName("helper")
+        self.radiation_frequency_state_label.setWordWrap(True)
+        radiation_card.body.addWidget(self.radiation_frequency_state_label)
+        self.radiation_defaults_button = QPushButton("Defaults"); self.radiation_defaults_button.clicked.connect(self.select_default_radiation_frequencies)
+        self.radiation_select_all_button = QPushButton("Select all"); self.radiation_select_all_button.clicked.connect(self.select_all_radiation_frequencies)
+        self.radiation_clear_button = QPushButton("Clear"); self.radiation_clear_button.clicked.connect(self.clear_radiation_frequencies)
+        radiation_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=110)
+        self.radiation_actions = radiation_actions
+        radiation_actions.set_buttons([self.radiation_defaults_button, self.radiation_select_all_button, self.radiation_clear_button])
+        radiation_card.body.addWidget(radiation_actions)
+
         s2p_card = Card("Touchstone file", "VSWR")
         s2p_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.s2p_field = QLineEdit("")
@@ -1499,17 +1671,18 @@ class ModernMainWindow(QMainWindow):
             self.open_technical_data_button,
         ])
         technical_data_card.body.addWidget(technical_data_actions)
-        inputs_left = QWidget()
-        inputs_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        inputs_left_layout = QVBoxLayout(inputs_left)
-        inputs_left_layout.setContentsMargins(0, 0, 0, 0)
-        inputs_left_layout.setSpacing(12)
-        inputs_left_layout.addWidget(s2p_card)
-        inputs_left_layout.addWidget(technical_data_card)
-        inputs_panel = ResponsiveCardPanel(max_columns=1, min_card_width=360)
+        inputs_side = QWidget()
+        inputs_side.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        inputs_side_layout = QVBoxLayout(inputs_side)
+        inputs_side_layout.setContentsMargins(0, 0, 0, 0)
+        inputs_side_layout.setSpacing(12)
+        inputs_side_layout.addWidget(s2p_card)
+        inputs_side_layout.addWidget(technical_data_card)
+        inputs_side_layout.addWidget(radiation_card)
+        inputs_panel = ResponsiveInputsPanel(main_min_width=520, side_width=400)
         self.inputs_panel = inputs_panel
         inputs_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        inputs_panel.set_cards([inputs_left, ffs_card])
+        inputs_panel.set_cards(ffs_card, inputs_side)
         inputs_lay.addWidget(inputs_panel)
         inputs_lay.addStretch(1)
 
@@ -1896,6 +2069,7 @@ class ModernMainWindow(QMainWindow):
     def on_datasheet_template_selected(self, *_args) -> None:
         self.store.set("datasheet_template", self.selected_datasheet_template_name())
         self._mark_project_dirty()
+        self.refresh_radiation_frequency_list()
 
     def _set_readiness_action(self, text: str, callback, enabled: bool = True, tooltip: str = "") -> None:
         previous = getattr(self, "_readiness_action_callback", None)
@@ -2176,7 +2350,8 @@ class ModernMainWindow(QMainWindow):
                 "command_panel_min_card_width": 430,
                 "command_left_max_width": 16777215,
                 "readiness_panel_min_card_width": 150,
-                "inputs_panel_min_card_width": 320,
+                "inputs_main_min_width": 460,
+                "inputs_side_width": 360,
                 "processing_panel_min_card_width": 300,
                 "ranges_panel_min_card_width": 300,
                 "colors_panel_min_card_width": 300,
@@ -2229,7 +2404,8 @@ class ModernMainWindow(QMainWindow):
             "command_panel_min_card_width": 360,
             "command_left_max_width": 390,
             "readiness_panel_min_card_width": 170,
-            "inputs_panel_min_card_width": 360,
+            "inputs_main_min_width": 520,
+            "inputs_side_width": 400,
             "processing_panel_min_card_width": 320,
             "ranges_panel_min_card_width": 320,
             "colors_panel_min_card_width": 320,
@@ -2295,7 +2471,6 @@ class ModernMainWindow(QMainWindow):
         for panel, min_width in (
             (self.command_panel, int(metrics["command_panel_min_card_width"])),
             (self.readiness_panel, int(metrics["readiness_panel_min_card_width"])),
-            (self.inputs_panel, int(metrics["inputs_panel_min_card_width"])),
             (self.processing_panel, int(metrics["processing_panel_min_card_width"])),
             (self.ranges_panel, int(metrics["ranges_panel_min_card_width"])),
             (self.colors_panel, int(metrics["colors_panel_min_card_width"])),
@@ -2304,6 +2479,11 @@ class ModernMainWindow(QMainWindow):
             panel.grid.setHorizontalSpacing(panel_gap)
             panel.grid.setVerticalSpacing(panel_gap)
             panel.refresh_layout(force=True)
+        self.inputs_panel.main_min_width = int(metrics["inputs_main_min_width"])
+        self.inputs_panel.side_width = int(metrics["inputs_side_width"])
+        self.inputs_panel.grid.setHorizontalSpacing(panel_gap)
+        self.inputs_panel.grid.setVerticalSpacing(panel_gap)
+        self.inputs_panel.refresh_layout(force=True)
         button_gap = int(metrics["button_gap"])
         for panel, min_width in (
             (self.hero_actions, int(metrics["hero_min_button_width"])),
@@ -2605,6 +2785,156 @@ class ModernMainWindow(QMainWindow):
             })
         return items
 
+    def selected_radiation_frequencies(self) -> list[float]:
+        if not hasattr(self, "radiation_frequency_list"):
+            return []
+        values: list[float] = []
+        for index in range(self.radiation_frequency_list.count()):
+            item = self.radiation_frequency_list.item(index)
+            if item.checkState() != Qt.Checked:
+                continue
+            try:
+                values.append(round(float(item.data(Qt.UserRole)), 6))
+            except (TypeError, ValueError):
+                continue
+        return sorted(set(values))
+
+    def radiation_frequencies_arg(self) -> str | None:
+        if self._project_radiation_frequencies is None:
+            return None
+        return ",".join(f"{value:.6f}".rstrip("0").rstrip(".") for value in self.selected_radiation_frequencies())
+
+    def _selected_radiation_set(self) -> set[float]:
+        stored = normalize_radiation_frequencies(self._project_radiation_frequencies)
+        if stored is not None:
+            return set(stored)
+        return set(self._default_radiation_frequencies())
+
+    def _available_radiation_frequencies(self) -> list[float]:
+        frequencies: set[float] = set()
+        for path in self.selected_ffs():
+            frequencies.update(read_ffs_frequency_headers(path))
+        if frequencies:
+            return sorted(frequencies)
+        manifest_path = self.project_results_dir() / f"{self.deduced_beam_output().stem}-artifacts.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        charts = manifest.get("charts", {}) if isinstance(manifest, dict) else {}
+        if not isinstance(charts, dict):
+            return []
+        for key in ("polar_combined_planes", "polar_combined", "polar_single"):
+            records = charts.get(key)
+            if not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                try:
+                    value = round(float(record.get("frequency_ghz")), 6)
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    frequencies.add(value)
+        return sorted(frequencies)
+
+    def _closest_available_frequencies(self, targets: list[float], count: int) -> list[float]:
+        available = self._available_radiation_frequencies()
+        if not available or count <= 0:
+            return []
+        selected: list[float] = []
+        for target in targets:
+            remaining = [value for value in available if value not in selected]
+            if not remaining:
+                break
+            selected.append(min(remaining, key=lambda value: (abs(value - target), value)))
+        return selected[:count]
+
+    def _default_radiation_frequencies(self) -> list[float]:
+        available = self._available_radiation_frequencies()
+        if not available:
+            return []
+        template_name = self.selected_datasheet_template_name().lower() if hasattr(self, "datasheet_template_combo") else ""
+        if "netqui" in template_name and "1pol" in template_name and "placeholder" in template_name:
+            count = min(6, len(available))
+        elif "netqui" in template_name and "1pol" in template_name:
+            count = min(3, len(available))
+        else:
+            count = 1
+        if count == 1:
+            targets = [(available[0] + available[-1]) / 2.0]
+        else:
+            step = (available[-1] - available[0]) / float(count - 1)
+            targets = [available[0] + step * index for index in range(count)]
+        return self._closest_available_frequencies(targets, count)
+
+    def refresh_radiation_frequency_list(self) -> None:
+        if not hasattr(self, "radiation_frequency_list"):
+            return
+        available = self._available_radiation_frequencies() if self.active_project_slug else []
+        selected = self._selected_radiation_set()
+        self._suppress_radiation_frequency_change = True
+        self.radiation_frequency_list.clear()
+        for value in available:
+            item = QListWidgetItem(f"{value:g} GHz")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            item.setData(Qt.UserRole, value)
+            item.setCheckState(Qt.Checked if value in selected else Qt.Unchecked)
+            self.radiation_frequency_list.addItem(item)
+        self._suppress_radiation_frequency_change = False
+        has_project = bool(self.active_project_slug)
+        has_available = bool(available)
+        self.radiation_frequency_list.setEnabled(has_project and has_available)
+        self.radiation_defaults_button.setEnabled(has_project and has_available)
+        self.radiation_select_all_button.setEnabled(has_project and has_available)
+        self.radiation_clear_button.setEnabled(has_project and has_available)
+        self._update_radiation_frequency_state_label(has_project=has_project, available_count=len(available))
+
+    def _update_radiation_frequency_state_label(self, *, has_project: bool | None = None, available_count: int | None = None) -> None:
+        if not hasattr(self, "radiation_frequency_state_label"):
+            return
+        has_project = bool(self.active_project_slug) if has_project is None else has_project
+        available_count = self.radiation_frequency_list.count() if available_count is None else available_count
+        if not has_project:
+            self.radiation_frequency_state_label.setText("Create or select a project first.")
+        elif available_count <= 0:
+            self.radiation_frequency_state_label.setText("No radiation frequencies found in enabled far-field files yet.")
+        else:
+            checked = len(self.selected_radiation_frequencies())
+            self.radiation_frequency_state_label.setText(f"{checked}/{available_count} frequencies selected for datasheets.")
+
+    def _set_radiation_frequency_selection(self, values: list[float]) -> None:
+        selected = set(normalize_radiation_frequencies(values) or [])
+        self._suppress_radiation_frequency_change = True
+        for index in range(self.radiation_frequency_list.count()):
+            item = self.radiation_frequency_list.item(index)
+            try:
+                value = round(float(item.data(Qt.UserRole)), 6)
+            except (TypeError, ValueError):
+                value = 0.0
+            item.setCheckState(Qt.Checked if value in selected else Qt.Unchecked)
+        self._suppress_radiation_frequency_change = False
+        self._project_radiation_frequencies = sorted(selected)
+        self._update_radiation_frequency_state_label()
+        self._mark_project_dirty()
+
+    def on_radiation_frequency_item_changed(self, _item: QListWidgetItem) -> None:
+        if self._loading_project or self._suppress_radiation_frequency_change:
+            return
+        self._project_radiation_frequencies = self.selected_radiation_frequencies()
+        self._update_radiation_frequency_state_label()
+        self._mark_project_dirty()
+
+    def select_default_radiation_frequencies(self) -> None:
+        self._set_radiation_frequency_selection(self._default_radiation_frequencies())
+
+    def select_all_radiation_frequencies(self) -> None:
+        self._set_radiation_frequency_selection(self._available_radiation_frequencies())
+
+    def clear_radiation_frequencies(self) -> None:
+        self._set_radiation_frequency_selection([])
+
     def _selected_ffs_paths(self) -> list[str]:
         return [self._item_path(item) for item in self.ffs_list.selectedItems()]
 
@@ -2693,6 +3023,7 @@ class ModernMainWindow(QMainWindow):
             snapshot["touchstone"] = self._path_fingerprint(self.selected_s2p())
         if stage_key == "datasheet":
             snapshot["technical_data"] = self._technical_data_snapshot()
+            snapshot["radiation_pattern_frequencies_ghz"] = None if self._project_radiation_frequencies is None else self.selected_radiation_frequencies()
         if stage_key in {"extract", "plot", "datasheet"}:
             snapshot["beam_workbook"] = self._path_fingerprint(self.deduced_beam_output())
         if stage_key == "datasheet":
@@ -3477,6 +3808,7 @@ class ModernMainWindow(QMainWindow):
             settings={},
             presets={},
             active_preset=self.project_active_preset,
+            radiation_pattern_frequencies_ghz=None if self._project_radiation_frequencies is None else self.selected_radiation_frequencies(),
             run_state=clean_run_state(dict(self.project_run_state)),
         )
 
@@ -3521,6 +3853,7 @@ class ModernMainWindow(QMainWindow):
             self._update_ffs_action_state()
             self._refresh_project_summary()
             self._update_project_action_state()
+            self.refresh_radiation_frequency_list()
         finally:
             if not was_enabled:
                 self._refresh_cache = {}
@@ -3565,6 +3898,10 @@ class ModernMainWindow(QMainWindow):
             self.google_credentials_button,
             self.clear_technical_data_button,
             self.open_technical_data_button,
+            self.radiation_frequency_list,
+            self.radiation_defaults_button,
+            self.radiation_select_all_button,
+            self.radiation_clear_button,
             self.datasheet_template_combo,
             self.pdf_metadata_author,
         ):
@@ -3716,6 +4053,7 @@ class ModernMainWindow(QMainWindow):
             self.active_project_name = ""
             self.project_active_preset = ""
             self.project_run_state = {}
+            self._project_radiation_frequencies = None
             self._saved_project_signature = ""
             self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
             self._pending_stage_keys = []
@@ -3727,6 +4065,7 @@ class ModernMainWindow(QMainWindow):
             self._loading_project = False
             self.store.set("active_project", "")
             self.refresh_preset_list(select_name=self.global_active_preset)
+            self.refresh_radiation_frequency_list()
             self.refresh_derived_paths()
             return
         project = self.project_store.load_project(slug)
@@ -3754,6 +4093,7 @@ class ModernMainWindow(QMainWindow):
         self.active_project_slug = project.slug
         self.active_project_name = project.name
         self.project_run_state = dict(project.run_state)
+        self._project_radiation_frequencies = normalize_radiation_frequencies(project.radiation_pattern_frequencies_ghz)
         self._loaded_project_schema_version = int(project.schema_version or 1)
         self._pending_stage_keys = []
         self._current_stage_key = ""
@@ -3783,6 +4123,7 @@ class ModernMainWindow(QMainWindow):
         self.store.set("vswr_s2p", touchstone)
         self.store.set("technical_data_xlsx", technical_data)
         self._loading_project = False
+        self.refresh_radiation_frequency_list()
         self._capture_saved_project_signature(self.current_project())
         if self._loaded_project_schema_version < CURRENT_PROJECT_SCHEMA_VERSION:
             self.save_active_project()
@@ -3837,6 +4178,7 @@ class ModernMainWindow(QMainWindow):
             settings={},
             presets={},
             active_preset=self.current_preset_name(),
+            radiation_pattern_frequencies_ghz=None,
             run_state={},
         )
         project.record_activity("created")
@@ -4911,6 +5253,9 @@ class ModernMainWindow(QMainWindow):
             "--metadata-author",
             self.selected_pdf_metadata_author(),
         ]
+        radiation_frequencies = self.radiation_frequencies_arg()
+        if radiation_frequencies is not None:
+            args.extend(["--radiation-frequencies-ghz", radiation_frequencies])
         self._save_project_if_dirty()
         self._enqueue_stage("datasheet", args)
 
@@ -5034,23 +5379,24 @@ class ModernMainWindow(QMainWindow):
         )
         self._enqueue_stage("vswr", args_vswr)
         if args_extract:
-            self._enqueue_stage(
-                "datasheet",
-                [
-                    which_python(),
-                    "-u",
-                    SCRIPT_DATASHEET,
-                    str(self.deduced_datasheet_output()),
-                    "--template",
-                    str(template_path),
-                    "--extract-workbook",
-                    str(self.deduced_extract_output()),
-                    "--technical-data-workbook",
-                    technical_data_workbook,
-                    "--metadata-author",
-                    self.selected_pdf_metadata_author(),
-                ],
-            )
+            datasheet_args = [
+                which_python(),
+                "-u",
+                SCRIPT_DATASHEET,
+                str(self.deduced_datasheet_output()),
+                "--template",
+                str(template_path),
+                "--extract-workbook",
+                str(self.deduced_extract_output()),
+                "--technical-data-workbook",
+                technical_data_workbook,
+                "--metadata-author",
+                self.selected_pdf_metadata_author(),
+            ]
+            radiation_frequencies = self.radiation_frequencies_arg()
+            if radiation_frequencies is not None:
+                datasheet_args.extend(["--radiation-frequencies-ghz", radiation_frequencies])
+            self._enqueue_stage("datasheet", datasheet_args)
 
     def _restore_geometry(self):
         width = self.store.get("window_width", None)

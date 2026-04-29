@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
 
 import studio_support as qt_module
 import antenna_toolkit_studio as studio_module
-from antenna_toolkit_studio import ModernMainWindow, StepperField
+from antenna_toolkit_studio import ModernMainWindow, StepperField, read_ffs_frequency_headers
 from project_store import ProjectRecord, ProjectStore
 
 
@@ -147,6 +147,84 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.window.save_project_changes()
         loaded = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded.ffs_items[0]["port_label"], "Port 1")
+
+    def test_radiation_frequency_checklist_is_project_only_and_marks_datasheet_stale(self) -> None:
+        ffs_path = Path(self.temp_dir.name) / "sample.ffs"
+        ffs_path.write_text(
+            "\n".join(
+                [
+                    "// #Frequencies",
+                    "3",
+                    "Radiated/Accepted/Stimulated Power",
+                    "0.1",
+                    "0.2",
+                    "0.3",
+                    "0.3e9",
+                    "",
+                    "0.1",
+                    "0.2",
+                    "0.3",
+                    "1.5e9",
+                    "",
+                    "0.1",
+                    "0.2",
+                    "0.3",
+                    "3.0e9",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        self.window._add_ffs_files([str(ffs_path)])
+        self.window.refresh_radiation_frequency_list()
+        self.app.processEvents()
+
+        self.assertEqual(self.window.radiation_frequency_list.count(), 3)
+        self.assertIsNone(self.window._project_radiation_frequencies)
+        self.assertEqual(self.window.selected_radiation_frequencies(), [1.5])
+        self.window.save_project_changes()
+        self.assertNotIn("radiation_pattern_frequencies_ghz", self.window.collect_preset_values())
+        initial_snapshot = self.window._current_stage_snapshot("datasheet")
+
+        self.window.radiation_frequency_list.item(0).setCheckState(Qt.Checked)
+        self.app.processEvents()
+
+        self.assertTrue(self.window.has_unsaved_project_changes())
+        self.assertEqual(self.window.selected_radiation_frequencies(), [0.3, 1.5])
+        self.assertNotEqual(initial_snapshot["radiation_pattern_frequencies_ghz"], self.window._current_stage_snapshot("datasheet")["radiation_pattern_frequencies_ghz"])
+        self.window.save_project_changes()
+        loaded = self.window.project_store.load_project(self.project.slug)
+        self.assertEqual(loaded.radiation_pattern_frequencies_ghz, [0.3, 1.5])
+
+    def test_ffs_frequency_header_reader_uses_frequency_field_not_power_values(self) -> None:
+        ffs_path = Path(self.temp_dir.name) / "cst.ffs"
+        ffs_path.write_text(
+            "\n".join(
+                [
+                    "// CST Farfield Source File",
+                    "// #Frequencies",
+                    "3",
+                    "",
+                    "// Radiated/Accepted/Stimulated Power , Frequency",
+                    "4.378965e-01",
+                    "4.499397e-01",
+                    "5.000000e-01",
+                    "4.700000e+09",
+                    "",
+                    "4.816199e-01",
+                    "4.947527e-01",
+                    "5.000000e-01",
+                    "4.800000e+09",
+                    "",
+                    "4.644630e-01",
+                    "4.721338e-01",
+                    "5.000000e-01",
+                    "4.900000e+09",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(read_ffs_frequency_headers(ffs_path), [4.7, 4.8, 4.9])
 
     def test_command_left_column_is_narrower_on_desktop_layout(self) -> None:
         self.window._compact_layout = False
@@ -816,10 +894,15 @@ class StudioDirtyStateTests(unittest.TestCase):
         ffs_path = Path(self.temp_dir.name) / "sample.ffs"
         s2p_path = Path(self.temp_dir.name) / "sample.s2p"
         technical_data_path = Path(self.temp_dir.name) / "technical.xlsx"
-        ffs_path.write_text("ffs", encoding="utf-8")
+        ffs_path.write_text(
+            "// #Frequencies\n2\nRadiated/Accepted/Stimulated Power\n0.1\n0.2\n0.3\n4.9e9\n\n0.1\n0.2\n0.3\n6.0e9\n",
+            encoding="utf-8",
+        )
         s2p_path.write_text("s2p", encoding="utf-8")
         technical_data_path.write_text("xlsx", encoding="utf-8")
         self.window._add_ffs_files([{"path": str(ffs_path), "enabled": True, "port_label": "Port 1"}])
+        self.window.refresh_radiation_frequency_list()
+        self.window._set_radiation_frequency_selection([4.9, 6.0])
         self.window._set_touchstone(str(s2p_path))
         self.window._set_technical_data(str(technical_data_path))
         self.window.pdf_metadata_author.setText("Pipeline Author")
@@ -864,6 +947,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(Path(queued_args["datasheet"][queued_args["datasheet"].index("--template") + 1]).name, "Datasheet - RFE.pdf")
         self.assertIn("--metadata-author", queued_args["datasheet"])
         self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--metadata-author") + 1], "Pipeline Author")
+        self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--radiation-frequencies-ghz") + 1], "4.9,6")
 
     def test_run_plot_passes_beamwidth_db_colors(self) -> None:
         beam_output = self.window.deduced_beam_output()
@@ -955,12 +1039,17 @@ class StudioDirtyStateTests(unittest.TestCase):
         ffs_path = Path(self.temp_dir.name) / "sample.ffs"
         s2p_path = Path(self.temp_dir.name) / "sample.s2p"
         cached_xlsx = Path(self.temp_dir.name) / "cached-google.xlsx"
-        ffs_path.write_text("ffs", encoding="utf-8")
+        ffs_path.write_text(
+            "// #Frequencies\n1\nRadiated/Accepted/Stimulated Power\n0.1\n0.2\n0.3\n0.3e9\n",
+            encoding="utf-8",
+        )
         s2p_path.write_text("s2p", encoding="utf-8")
         cached_xlsx.write_text("xlsx", encoding="utf-8")
         self.window.deduced_extract_output().parent.mkdir(parents=True, exist_ok=True)
         self.window.deduced_extract_output().write_text("extract", encoding="utf-8")
         self.window._add_ffs_files([str(ffs_path)])
+        self.window.refresh_radiation_frequency_list()
+        self.window._set_radiation_frequency_selection([0.3])
         self.window._set_touchstone(str(s2p_path))
         self.window._set_technical_data("https://docs.google.com/spreadsheets/d/sheet123abc/edit")
         self.app.processEvents()
@@ -984,6 +1073,7 @@ class StudioDirtyStateTests(unittest.TestCase):
             queued_args["datasheet"][queued_args["datasheet"].index("--technical-data-workbook") + 1],
             str(cached_xlsx),
         )
+        self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--radiation-frequencies-ghz") + 1], "0.3")
 
     def test_running_progress_updates_summary_and_stage_rows(self) -> None:
         with mock.patch.object(self.window.proc, "enqueue"):

@@ -12,7 +12,23 @@ from urllib.parse import urlparse
 
 PROJECTS_DIRNAME = "Projects"
 PROJECT_FILE_NAME = "project.json"
-CURRENT_PROJECT_SCHEMA_VERSION = 6
+CURRENT_PROJECT_SCHEMA_VERSION = 7
+
+
+def normalize_radiation_frequencies(payload: object) -> list[float] | None:
+    if payload is None:
+        return None
+    if not isinstance(payload, list):
+        return []
+    values: set[float] = set()
+    for raw in payload:
+        try:
+            value = round(float(raw), 6)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            values.add(value)
+    return sorted(values)
 
 
 def utc_now_iso() -> str:
@@ -86,6 +102,7 @@ class ProjectRecord:
     settings: dict[str, Any] = field(default_factory=dict)
     presets: dict[str, dict[str, Any]] = field(default_factory=dict)
     active_preset: str = ""
+    radiation_pattern_frequencies_ghz: list[float] | None = None
     run_state: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -105,6 +122,9 @@ class ProjectRecord:
         if not isinstance(presets, dict):
             presets = {}
         active_preset = str(payload.get("active_preset", "")).strip()
+        radiation_pattern_frequencies_ghz = normalize_radiation_frequencies(
+            payload.get("radiation_pattern_frequencies_ghz") if "radiation_pattern_frequencies_ghz" in payload else None
+        )
         run_state = payload.get("run_state", payload.get("run_metadata", {}))
         if not isinstance(run_state, dict):
             run_state = {}
@@ -118,11 +138,12 @@ class ProjectRecord:
             settings=settings,
             presets={str(key): value for key, value in presets.items() if isinstance(value, dict)},
             active_preset=active_preset,
+            radiation_pattern_frequencies_ghz=radiation_pattern_frequencies_ghz,
             run_state=run_state,
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": CURRENT_PROJECT_SCHEMA_VERSION,
             "name": self.name,
             "slug": self.slug,
@@ -132,6 +153,9 @@ class ProjectRecord:
             "active_preset": self.active_preset,
             "run_state": self.run_state,
         }
+        if self.radiation_pattern_frequencies_ghz is not None:
+            payload["radiation_pattern_frequencies_ghz"] = normalize_radiation_frequencies(self.radiation_pattern_frequencies_ghz) or []
+        return payload
 
     @property
     def ffs_files(self) -> list[str]:
@@ -267,6 +291,7 @@ class ProjectStore:
             settings={},
             presets={},
             active_preset=source.active_preset,
+            radiation_pattern_frequencies_ghz=list(source.radiation_pattern_frequencies_ghz or []),
             run_state={},
         )
         source_dir = source.project_dir(self.root)
