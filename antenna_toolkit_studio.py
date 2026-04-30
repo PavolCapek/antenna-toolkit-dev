@@ -3276,9 +3276,47 @@ class ModernMainWindow(QMainWindow):
 
     def _needed_rerun_stage_keys(self) -> list[str]:
         failed = self._latest_failed_stage_key()
+        needed = set(self._stale_stage_keys())
         if failed and self._stage_is_applicable(failed):
-            return [failed]
-        return self._stale_stage_keys()
+            needed.add(failed)
+        return [
+            stage_key
+            for stage_key, _label in STAGE_DEFINITIONS
+            if stage_key in needed and self._stage_is_applicable(stage_key)
+        ]
+
+    def _stage_label_list(self, stage_keys: list[str]) -> str:
+        return ", ".join(STAGE_LABELS.get(key, key.title()) for key in stage_keys)
+
+    def _skipped_rerun_stage_keys(self, needed_stage_keys: list[str]) -> list[str]:
+        needed = set(needed_stage_keys)
+        return [
+            stage_key
+            for stage_key, _label in STAGE_DEFINITIONS
+            if (
+                stage_key not in needed
+                and self._stage_is_applicable(stage_key)
+                and self._stage_output_exists(stage_key)
+                and not self._stage_is_stale(stage_key)
+            )
+        ]
+
+    def _recovery_plan_text(self) -> str:
+        needed = self._needed_rerun_stage_keys()
+        if not needed:
+            return "No failed or stale outputs need rerun."
+        failed = self._latest_failed_stage_key()
+        stale = [key for key in self._stale_stage_keys() if key in needed and key != failed]
+        parts: list[str] = []
+        if failed and failed in needed:
+            parts.append(f"failed: {STAGE_LABELS.get(failed, failed.title())}")
+        if stale:
+            parts.append(f"stale: {self._stage_label_list(stale)}")
+        summary = "Run Needed Only will rerun " + "; ".join(parts or [self._stage_label_list(needed)]) + "."
+        skipped = self._skipped_rerun_stage_keys(needed)
+        if skipped:
+            summary += f" It will skip current outputs: {self._stage_label_list(skipped)}."
+        return summary
 
     def _chip_rgba(self, color: QColor, alpha: int) -> str:
         return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
@@ -3542,20 +3580,17 @@ class ModernMainWindow(QMainWindow):
             return
 
         if latest_failed:
-            self.readiness_summary.setText(f"Last run failed in {STAGE_LABELS.get(latest_failed, latest_failed.title())}. Retry after reviewing the console output.")
+            self.readiness_summary.setText(self._recovery_plan_text())
             self._set_readiness_action("Run Failed Stage", self.run_needed_outputs, tooltip="Retry only the failed stage.")
             return
 
         if stale_stages:
-            labels = ", ".join(STAGE_LABELS[key] for key in stale_stages[:3])
-            if len(stale_stages) > 3:
-                labels += ", ..."
             stale_details = [self._stage_stale_detail(key) for key in stale_stages]
             stale_details = [detail for detail in stale_details if detail]
             if stale_details:
-                self.readiness_summary.setText(f"{stale_details[0]} Stale outputs: {labels}.")
+                self.readiness_summary.setText(f"{stale_details[0]} {self._recovery_plan_text()}")
             else:
-                self.readiness_summary.setText(f"Saved inputs, settings, or generation rules changed since the last successful run. Rebuild the stale outputs: {labels}.")
+                self.readiness_summary.setText(self._recovery_plan_text())
             self._set_readiness_action("Run Stale Outputs", self.run_needed_outputs, tooltip="Rebuild only the stale outputs.")
             return
 
@@ -3650,11 +3685,9 @@ class ModernMainWindow(QMainWindow):
         else:
             latest_failed = self._latest_failed_stage_key()
             if latest_failed:
-                self.run_summary.setText(f"Last run failed in {STAGE_LABELS.get(latest_failed, latest_failed.title())}.")
+                self.run_summary.setText(self._recovery_plan_text())
             elif stale_stages:
-                self.run_summary.setText(
-                    "Outputs need rerun: " + ", ".join(STAGE_LABELS[key] for key in stale_stages)
-                )
+                self.run_summary.setText(self._recovery_plan_text())
             elif any(self._stage_is_applicable(stage_key) and self._stage_output_exists(stage_key) for stage_key, _label in STAGE_DEFINITIONS):
                 self.run_summary.setText("Outputs are up to date.")
             else:
@@ -3890,6 +3923,7 @@ class ModernMainWindow(QMainWindow):
         self.project_run_vswr_action.setEnabled(has_project)
         needed_stage_keys = self._needed_rerun_stage_keys() if has_project else []
         self.project_run_needed_action.setEnabled(has_project and not is_running and bool(needed_stage_keys))
+        self.project_run_needed_action.setText("Run failed/stale only")
         self.project_import_action.setEnabled(True)
         self.project_export_action.setEnabled(has_project)
         has_generated_outputs = any(self._cached_path_exists(path) for path in self._all_generated_output_files()) if has_project else False
@@ -3926,6 +3960,13 @@ class ModernMainWindow(QMainWindow):
         self.btn_clear_outputs.setEnabled(has_project and not is_running and has_generated_outputs)
         self.btn_run_needed.setEnabled(has_project and not is_running and bool(needed_stage_keys))
         self.btn_run_needed.setVisible(has_project and bool(needed_stage_keys))
+        if needed_stage_keys:
+            needed_label = self._stage_label_list(needed_stage_keys)
+            self.btn_run_needed.setToolTip(f"Run only failed or stale outputs: {needed_label}.")
+            self.project_run_needed_action.setToolTip(self._recovery_plan_text())
+        else:
+            self.btn_run_needed.setToolTip("No failed or stale outputs need rerun.")
+            self.project_run_needed_action.setToolTip("No failed or stale outputs need rerun.")
         self.btn_cancel.setEnabled(has_project and is_running)
         self.btn_cancel.setVisible(has_project and is_running)
         self._update_preset_action_state()

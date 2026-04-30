@@ -266,6 +266,39 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.assertEqual([call.args[0] for call in enqueue.call_args_list], ["beam", "plot"])
 
+    def test_needed_rerun_combines_failed_and_stale_with_skip_summary(self) -> None:
+        self.window.project_run_state = {
+            "stages": {
+                "beam": {
+                    "status": "success",
+                    "last_success_at": "2026-04-30T09:00:00Z",
+                    "snapshot": self.window._current_stage_snapshot("beam"),
+                },
+                "plot": {
+                    "status": "failed",
+                    "last_finished_at": "2026-04-30T11:00:00Z",
+                },
+                "vswr": {
+                    "status": "success",
+                    "last_success_at": "2026-04-30T09:00:00Z",
+                    "snapshot": self.window._current_stage_snapshot("vswr"),
+                },
+            }
+        }
+        with (
+            mock.patch.object(self.window, "_stale_stage_keys", return_value=["vswr"]),
+            mock.patch.object(self.window, "_stage_is_applicable", return_value=True),
+            mock.patch.object(self.window, "_stage_output_exists", return_value=True),
+            mock.patch.object(self.window, "_stage_is_stale", side_effect=lambda key: key == "vswr"),
+        ):
+            self.assertEqual(self.window._needed_rerun_stage_keys(), ["plot", "vswr"])
+            summary = self.window._recovery_plan_text()
+
+        self.assertIn("failed: Plots", summary)
+        self.assertIn("stale: VSWR", summary)
+        self.assertIn("skip current outputs", summary)
+        self.assertIn("Workbook", summary)
+
     def test_ffs_frequency_header_reader_uses_frequency_field_not_power_values(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "cst.ffs"
         ffs_path.write_text(
@@ -902,10 +935,11 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertFalse(self.window.pipeline_details.isHidden())
         self.assertEqual(self.window.ffs_list.minimumHeight(), 170)
 
-    def test_pipeline_buttons_show_only_full_and_cancel(self) -> None:
+    def test_pipeline_buttons_include_recovery_action(self) -> None:
         labels = [button.text() for button in self.window.hero_actions._buttons]
 
-        self.assertEqual(labels, ["Run Full Pipeline", "Clear Generated Files"])
+        self.assertEqual(labels, ["Run Full Pipeline", "Run Needed Only", "Clear Generated Files"])
+        self.assertFalse(self.window.btn_run_needed.isVisible())
 
     def test_pipeline_stage_list_gates_actions_by_output_state(self) -> None:
         self.assertEqual(set(self.window.stage_open_buttons.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
