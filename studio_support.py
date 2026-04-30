@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -20,6 +21,9 @@ SCRIPT_EXTRACT = str(THIS_DIR / "extract_data_xlsx.py")
 SCRIPT_DATASHEET = str(THIS_DIR / "datasheet_pdf.py")
 SCRIPT_PLOT = str(THIS_DIR / "plot.py")
 SCRIPT_VSWR = str(THIS_DIR / "plot_vswr.py")
+import logging
+logger = logging.getLogger(__name__)
+
 DEFAULT_GRID_COLOR = "#6f7a81"
 DEFAULT_LINE_COLORS = [
     ("Sky", "#2bb6f6"),
@@ -149,16 +153,16 @@ def resolve_state_file(filename: str, legacy_path: Path | None = None) -> Path:
     state_path = app_state_dir() / filename
     try:
         state_path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Ignored exception: %s", e)
     if legacy_path and legacy_path.exists() and not state_path.exists():
         try:
             shutil.copy2(legacy_path, state_path)
         except Exception:
             try:
                 state_path.write_text(legacy_path.read_text(encoding="utf-8"), encoding="utf-8")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Ignored exception: %s", e)
     return state_path
 
 
@@ -224,8 +228,8 @@ def open_in_file_manager(path: str | Path):
     if is_url(path):
         try:
             webbrowser.open(str(path))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Ignored exception: %s", e)
         return
     p = Path(path)
     try:
@@ -238,8 +242,8 @@ def open_in_file_manager(path: str | Path):
                 os.system(f"open {shlex.quote(str(p))}")
         else:
             os.system(f"xdg-open {shlex.quote(str(p if p.is_dir() else p.parent))} >/dev/null 2>&1 &")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Ignored exception: %s", e)
 
 
 def resolve_workspace_path(path: str | Path | None) -> Path:
@@ -284,8 +288,8 @@ class Persist:
         self.data = {}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Ignored exception: %s", e)
         try:
             if path.exists():
                 self.data = json.loads(path.read_text(encoding="utf-8"))
@@ -296,8 +300,8 @@ class Persist:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Ignored exception: %s", e)
 
     def get(self, key: str, default=None):
         return self.data.get(key, default)
@@ -318,8 +322,8 @@ class PresetFileStore:
         self.legacy_directories = list(legacy_directories or [])
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Ignored exception: %s", e)
 
     def _path_for_name(self, name: str) -> Path:
         encoded = quote(name.strip(), safe="")
@@ -329,12 +333,14 @@ class PresetFileStore:
         presets: dict[str, dict[str, object]] = {}
         try:
             candidates = sorted(self.directory.glob("*.json"))
-        except Exception:
+        except Exception as e:
+            logger.warning("Error, returning early: %s", e)
             return presets
         for path in candidates:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as e:
+                logger.warning("Ignored exception: %s", e)
                 continue
             if isinstance(payload, dict) and isinstance(payload.get("name"), str):
                 name = payload["name"].strip()
@@ -354,16 +360,16 @@ class PresetFileStore:
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Ignored exception: %s", e)
 
     def delete_preset(self, name: str) -> None:
         path = self._path_for_name(name)
         try:
             if path.exists():
                 path.unlink()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Ignored exception: %s", e)
 
     def rename_preset(self, old_name: str, new_name: str, values: dict[str, object]) -> None:
         if old_name != new_name:
@@ -379,8 +385,8 @@ class PresetFileStore:
             for path in self.directory.glob("*.json"):
                 if path.resolve() not in desired_paths:
                     path.unlink()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Ignored exception: %s", e)
 
     def migrate_from_state(self, store: Persist, key: str = PRESET_STORE_KEY) -> dict[str, dict[str, object]]:
         merged = self.load_presets()
@@ -470,8 +476,8 @@ class Proc:
         if hasattr(self.win, "on_proc_step_started"):
             try:
                 self.win.on_proc_step_started(list(self.running_cmd), cmd_str)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Ignored exception: %s", e)
         self.win.log(f"\n$ {cmd_str}\n", color="#8aa2b8", channel="meta")
         self.proc.start(program, args)
 
@@ -516,12 +522,13 @@ class Proc:
             try:
                 self.win.on_proc_progress(dict(payload))
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Ignored exception: %s", e)
         try:
             current = int(payload.get("current", 0))
             total = int(payload.get("total", 0))
-        except Exception:
+        except Exception as e:
+            logger.warning("Error, returning early: %s", e)
             return
         if total > 0:
             self.win.set_progress(int(round(max(0.0, min(1.0, current / total)) * 100)))
@@ -531,8 +538,8 @@ class Proc:
             try:
                 self.win.on_proc_progress_percent(int(pct))
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Ignored exception: %s", e)
         self.win.set_progress(int(pct))
 
     def _maybe_progress_from_text(self, text: str):
@@ -544,7 +551,8 @@ class Proc:
                 payload_text = line[len("AT_PROGRESS "):].strip()
                 try:
                     payload = json.loads(payload_text)
-                except Exception:
+                except Exception as e:
+                    logger.warning("Ignored exception: %s", e)
                     continue
                 if not isinstance(payload, dict):
                     continue
@@ -556,7 +564,8 @@ class Proc:
                     current = int(payload["current"])
                     total = int(payload["total"])
                     label = str(payload["label"]).strip()
-                except Exception:
+                except Exception as e:
+                    logger.warning("Ignored exception: %s", e)
                     continue
                 if not stage or total <= 0:
                     continue
@@ -582,7 +591,7 @@ class Proc:
         if hasattr(self.win, "on_proc_step_finished"):
             try:
                 self.win.on_proc_step_finished(list(self.running_cmd or []), int(exit_code), exit_status)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Ignored exception: %s", e)
         self.win.on_proc_finished()
         self._dequeue_and_start()

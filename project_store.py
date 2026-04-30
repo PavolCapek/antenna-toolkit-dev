@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import zipfile
@@ -12,6 +13,7 @@ from urllib.parse import urlparse
 
 PROJECTS_DIRNAME = "Projects"
 PROJECT_FILE_NAME = "project.json"
+logger = logging.getLogger(__name__)
 CURRENT_PROJECT_SCHEMA_VERSION = 7
 
 
@@ -237,7 +239,8 @@ class ProjectStore:
                 continue
             try:
                 payload = json.loads(project_file.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as e:
+                logger.warning("Ignored exception: %s", e)
                 continue
             projects.append(ProjectRecord.from_dict(payload))
         return sorted(projects, key=lambda item: (item.name.lower(), item.slug.lower()))
