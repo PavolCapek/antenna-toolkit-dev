@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from pipeline.commands import build_plot_command, build_vswr_command
+from pipeline.run_context import RunContext
 from pipeline.settings import PresetSettings
 
 
@@ -99,6 +101,37 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertEqual(command[command.index("--ymax") + 1], "4.0")
         self.assertEqual(command[command.index("--smooth-window") + 1], "7")
         self.assertEqual(command[command.index("--legend-labels") + 1], "Port 1")
+
+    def test_commands_accept_run_context(self) -> None:
+        settings = PresetSettings(plot_line_1="#101010", plot_line_2="#202020")
+        context = RunContext(
+            project_slug="demo",
+            project_dir=Path("project"),
+            beam_output=Path("project/demo.xlsx"),
+            extract_output=Path("project/demo-extracted-data.xlsx"),
+            datasheet_output=Path("project/demo-datasheet.pdf"),
+            vswr_output=Path("project/demo-vswr.svg"),
+            settings=settings,
+            polar_port_labels_json='{"one.ffs":"P1"}',
+            touchstone_path="Input data/demo.s2p",
+        )
+
+        plot_command = build_plot_command(
+            python_executable="python",
+            script_path="plot.py",
+            context=context,
+        )
+        self.assertIn(str(context.beam_output), plot_command)
+        self.assertIn("project", plot_command)
+        self.assertEqual(plot_command[plot_command.index("--polar-port-labels-json") + 1], '{"one.ffs":"P1"}')
+
+        vswr_command = build_vswr_command(
+            python_executable="python",
+            script_path="plot_vswr.py",
+            context=context,
+        )
+        self.assertIn("Input data/demo.s2p", vswr_command)
+        self.assertIn(str(context.vswr_output), vswr_command)
 
 
 if __name__ == "__main__":

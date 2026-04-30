@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pipeline.run_context import RunContext
 from pipeline.settings import PresetSettings
 
 
@@ -25,11 +26,19 @@ def build_plot_command(
     *,
     python_executable: str,
     script_path: str,
-    input_workbook: str | Path,
-    out_dir: str | Path,
-    settings: PresetSettings,
-    polar_port_labels_json: str,
+    input_workbook: str | Path | None = None,
+    out_dir: str | Path | None = None,
+    settings: PresetSettings | None = None,
+    polar_port_labels_json: str = "",
+    context: RunContext | None = None,
 ) -> list[str]:
+    if context is not None:
+        input_workbook = context.beam_output
+        out_dir = context.project_dir
+        settings = context.settings
+        polar_port_labels_json = context.polar_port_labels_json
+    if input_workbook is None or out_dir is None or settings is None:
+        raise ValueError("build_plot_command requires input_workbook, out_dir, and settings")
     args = [
         python_executable,
         "-u",
@@ -116,10 +125,17 @@ def build_vswr_command(
     *,
     python_executable: str,
     script_path: str,
-    touchstone_path: str | Path,
-    output_path: str | Path,
-    settings: PresetSettings,
+    touchstone_path: str | Path | None = None,
+    output_path: str | Path | None = None,
+    settings: PresetSettings | None = None,
+    context: RunContext | None = None,
 ) -> list[str]:
+    if context is not None:
+        touchstone_path = context.touchstone_path
+        output_path = context.vswr_output
+        settings = context.settings
+    if touchstone_path is None or output_path is None or settings is None:
+        raise ValueError("build_vswr_command requires touchstone_path, output_path, and settings")
     args = [
         python_executable,
         "-u",

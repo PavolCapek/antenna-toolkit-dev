@@ -8,6 +8,7 @@ from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox
 
 from pipeline.commands import build_plot_command, build_vswr_command
+from pipeline.run_context import RunContext
 from project_store import utc_now_iso
 from studio_runtime import (
     GoogleSheetDownloadError,
@@ -29,6 +30,20 @@ from studio_support import (
 
 
 class StudioRunMixin:
+    def _build_run_context(self, settings=None, touchstone_path: str | None = None) -> RunContext:
+        active_settings = settings or self.current_preset_settings()
+        return RunContext(
+            project_slug=str(self.active_project_slug or ""),
+            project_dir=self.project_results_dir(),
+            beam_output=self.deduced_beam_output(),
+            extract_output=self.deduced_extract_output(),
+            datasheet_output=self.deduced_datasheet_output(),
+            vswr_output=self.deduced_vswr_output(),
+            settings=active_settings,
+            polar_port_labels_json=self.polar_port_labels_json(),
+            touchstone_path=str(touchstone_path if touchstone_path is not None else (self.selected_s2p() or "")),
+        )
+
     def set_busy(self, on: bool):
         self.busy.setVisible(on)
         if on:
@@ -261,10 +276,11 @@ class StudioRunMixin:
                 self.status(str(exc))
                 return False
         settings = self.current_preset_settings()
+        context = self._build_run_context(settings=settings)
         self._save_project_if_dirty()
         for stage_key in stage_keys:
             if stage_key == "beam":
-                args = [which_python(), "-u", SCRIPT_BEAM, str(self.deduced_beam_output())] + self.selected_ffs() + [
+                args = [which_python(), "-u", SCRIPT_BEAM, str(context.beam_output)] + self.selected_ffs() + [
                     "--smooth", str(self.beam_smooth.value()),
                     "--theta-window", str(self.theta_window.value()),
                 ]
@@ -277,29 +293,24 @@ class StudioRunMixin:
                 args = build_plot_command(
                     python_executable=which_python(),
                     script_path=SCRIPT_PLOT,
-                    input_workbook=self.deduced_beam_output(),
-                    out_dir=self.project_results_dir(),
-                    settings=settings,
-                    polar_port_labels_json=self.polar_port_labels_json(),
+                    context=context,
                 )
             elif stage_key == "vswr":
                 args = build_vswr_command(
                     python_executable=which_python(),
                     script_path=SCRIPT_VSWR,
-                    touchstone_path=self.selected_s2p(),
-                    output_path=self.deduced_vswr_output(),
-                    settings=settings,
+                    context=context,
                 )
             elif stage_key == "datasheet":
                 args = [
                     which_python(),
                     "-u",
                     SCRIPT_DATASHEET,
-                    str(self.deduced_datasheet_output()),
+                    str(context.datasheet_output),
                     "--template",
                     str(self.selected_datasheet_template_path()),
                     "--extract-workbook",
-                    str(self.deduced_extract_output()),
+                    str(context.extract_output),
                     "--technical-data-workbook",
                     technical_data_workbook,
                     "--metadata-author",
@@ -569,14 +580,11 @@ class StudioRunMixin:
     def run_plot(self):
         if not self._run_preflight_passes(["plot"], "Plots Preflight"):
             return
-        xlsx = self.deduced_beam_output()
+        context = self._build_run_context()
         args = build_plot_command(
             python_executable=which_python(),
             script_path=SCRIPT_PLOT,
-            input_workbook=xlsx,
-            out_dir=self.project_results_dir(),
-            settings=self.current_preset_settings(),
-            polar_port_labels_json=self.polar_port_labels_json(),
+            context=context,
         )
         self._save_project_if_dirty()
         self._enqueue_stage("plot", args)
@@ -584,13 +592,11 @@ class StudioRunMixin:
     def run_vswr(self):
         if not self._run_preflight_passes(["vswr"], "VSWR Preflight"):
             return
-        s2p = self.selected_s2p()
+        context = self._build_run_context(touchstone_path=self.selected_s2p())
         args = build_vswr_command(
             python_executable=which_python(),
             script_path=SCRIPT_VSWR,
-            touchstone_path=s2p,
-            output_path=self.deduced_vswr_output(),
-            settings=self.current_preset_settings(),
+            context=context,
         )
         self._save_project_if_dirty()
         self._enqueue_stage("vswr", args)
@@ -598,10 +604,10 @@ class StudioRunMixin:
     def run_full(self):
         if not self._run_preflight_passes(["beam", "extract", "plot", "vswr", "datasheet"], "Full Pipeline Preflight"):
             return
-        out = str(self.deduced_beam_output())
+        context = self._build_run_context()
+        out = str(context.beam_output)
         ffs = self.selected_ffs()
         template_path = self.selected_datasheet_template_path()
-        s2p = self.selected_s2p()
         try:
             technical_data_workbook = self.prepare_technical_data_workbook()
         except GoogleSheetDownloadError as exc:
@@ -620,22 +626,18 @@ class StudioRunMixin:
             self._enqueue_stage("extract", args_extract)
 
         settings = self.current_preset_settings()
+        context = self._build_run_context(settings=settings)
         args_plot = build_plot_command(
             python_executable=which_python(),
             script_path=SCRIPT_PLOT,
-            input_workbook=out,
-            out_dir=self.project_results_dir(),
-            settings=settings,
-            polar_port_labels_json=self.polar_port_labels_json(),
+            context=context,
         )
         self._enqueue_stage("plot", args_plot)
 
         args_vswr = build_vswr_command(
             python_executable=which_python(),
             script_path=SCRIPT_VSWR,
-            touchstone_path=s2p,
-            output_path=self.deduced_vswr_output(),
-            settings=settings,
+            context=context,
         )
         self._enqueue_stage("vswr", args_vswr)
         if args_extract:
@@ -643,11 +645,11 @@ class StudioRunMixin:
                 which_python(),
                 "-u",
                 SCRIPT_DATASHEET,
-                str(self.deduced_datasheet_output()),
+                str(context.datasheet_output),
                 "--template",
                 str(template_path),
                 "--extract-workbook",
-                str(self.deduced_extract_output()),
+                str(context.extract_output),
                 "--technical-data-workbook",
                 technical_data_workbook,
                 "--metadata-author",
