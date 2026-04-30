@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
 import studio_support as qt_module
 import antenna_toolkit_studio as studio_module
 from antenna_toolkit_studio import ModernMainWindow, StepperField, read_ffs_frequency_headers
+from studio_support import DEFAULT_COLOR_OPTIONS
 from project_store import ProjectRecord, ProjectStore
 
 
@@ -92,6 +93,26 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset has unsaved changes")
         self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
+
+    def test_style_color_selectors_share_palette_with_previews(self) -> None:
+        selectors = [
+            self.window.plot_grid,
+            self.window.plot_line1,
+            self.window.plot_line2,
+            self.window.polar_azimuth_line1.color_selector,
+            self.window.polar_azimuth_line2.color_selector,
+            self.window.polar_elevation_line1.color_selector,
+            self.window.polar_elevation_line2.color_selector,
+            self.window.beamwidth_3db_color,
+            self.window.beamwidth_6db_color,
+            self.window.beamwidth_10db_color,
+        ]
+        expected_colors = [color for _name, color in DEFAULT_COLOR_OPTIONS]
+
+        for selector in selectors:
+            combo = selector.combo
+            self.assertEqual([combo.itemData(i) for i in range(combo.count() - 1)], expected_colors)
+            self.assertTrue(all(not combo.itemIcon(i).isNull() for i in range(combo.count())))
 
     def test_active_global_preset_loads_clean_on_reset(self) -> None:
         preset = self.window.collect_preset_values()

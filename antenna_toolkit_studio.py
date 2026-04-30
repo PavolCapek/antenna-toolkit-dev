@@ -10,8 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from PySide6.QtCore import Qt, QTimer, QByteArray, Signal
-from PySide6.QtGui import QColor, QPalette, QTextCursor, QFont
+from PySide6.QtCore import Qt, QTimer, QByteArray, Signal, QSize
+from PySide6.QtGui import QColor, QPalette, QTextCursor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QAbstractItemView,
@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from studio_support import (
     THIS_DIR, SCRIPT_BEAM, SCRIPT_EXTRACT, SCRIPT_DATASHEET, SCRIPT_PLOT, SCRIPT_VSWR,
     suggest_preset_name, normalize_preset_payload, PresetFileStore, preset_storage_dir, legacy_preset_storage_dirs,
-    DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, DEFAULT_BEAMWIDTH_DB_COLORS, Persist, Proc, resolve_state_file, app_state_dir, is_url,
+    DEFAULT_GRID_COLOR, DEFAULT_LINE_COLORS, DEFAULT_COLOR_OPTIONS, DEFAULT_BEAMWIDTH_DB_COLORS, Persist, Proc, resolve_state_file, app_state_dir, is_url,
     which_python, open_in_file_manager, resolve_workspace_path,
     display_workspace_path, deduce_project_name, normalized_project_stem,
 )
@@ -55,13 +55,6 @@ APP_TITLE = "Antenna Toolkit Studio"
 STATE_FILE = resolve_state_file(".nova_qt_studio_state.json", THIS_DIR / ".nova_qt_studio_state.json")
 COMPACT_SCREEN_HEIGHT = 1200
 COMPACT_WINDOW_WIDTH = 1360
-GREY_COLOR_OPTIONS = [
-    ("Charcoal", "#4b5563"),
-    ("Slate", "#6b7280"),
-    ("Steel", "#858c96"),
-    ("Silver", "#a1a1aa"),
-    ("Mist", "#c4c7cf"),
-]
 STAGE_DEFINITIONS = [
     ("beam", "Workbook"),
     ("extract", "Extract"),
@@ -858,7 +851,7 @@ class StudioColorSelector(QWidget):
         self.store = store
         self.key = key
         self.default = default
-        self.presets = presets or DEFAULT_LINE_COLORS
+        self.presets = presets or DEFAULT_COLOR_OPTIONS
         self.preset_colors = [value for _, value in self.presets]
         self.custom_color = self._normalize(store.get(key, default), default)
         self.current_color = self.custom_color
@@ -874,10 +867,12 @@ class StudioColorSelector(QWidget):
         self.prev_btn.clicked.connect(lambda: self.step_preset(-1))
 
         self.combo = NoWheelComboBox()
+        self.combo.setIconSize(QSize(18, 18))
         self.setFocusProxy(self.combo)
         for name, value in self.presets:
-            self.combo.addItem(f"{name} ({value})", value)
-        self.combo.addItem("Custom", "__custom__")
+            color = self._normalize(value, default)
+            self.combo.addItem(self._color_icon(color), f"{name} ({color.upper()})", color)
+        self.combo.addItem(self._color_icon(self.custom_color), f"Custom ({self.custom_color.upper()})", "__custom__")
         self.combo.currentIndexChanged.connect(self._on_combo_changed)
 
         self.next_btn = QPushButton(">")
@@ -906,6 +901,11 @@ class StudioColorSelector(QWidget):
         color = QColor(value or fallback)
         return color.name() if color.isValid() else QColor(fallback).name()
 
+    def _color_icon(self, value: str) -> QIcon:
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(QColor(value))
+        return QIcon(pixmap)
+
     def color(self) -> str:
         return self.current_color
 
@@ -921,6 +921,9 @@ class StudioColorSelector(QWidget):
                 break
 
         self.combo.blockSignals(True)
+        custom_index = self.combo.count() - 1
+        self.combo.setItemIcon(custom_index, self._color_icon(color))
+        self.combo.setItemText(custom_index, f"Custom ({color.upper()})")
         self.combo.setCurrentIndex(match_index if match_index >= 0 else self.combo.count() - 1)
         self.combo.blockSignals(False)
         self.pick.setText(color.upper())
@@ -1795,7 +1798,7 @@ class ModernMainWindow(QMainWindow):
         add_form_row(vswr_range_form, "VSWR y tick", StepperField(self.vswr_ystep), "Spacing between VSWR y-axis tick labels.")
         vswr_range_card.body.addLayout(vswr_range_form)
 
-        self.plot_grid = StudioColorSelector(self.store, "grid_color", DEFAULT_GRID_COLOR, presets=GREY_COLOR_OPTIONS)
+        self.plot_grid = StudioColorSelector(self.store, "grid_color", DEFAULT_GRID_COLOR)
         self.cartesian_grid_line_width = TrimmedDoubleSpinBox(); self.cartesian_grid_line_width.setRange(0.1, 10.0); self.cartesian_grid_line_width.setDecimals(2); self.cartesian_grid_line_width.setSingleStep(0.1); self.cartesian_grid_line_width.setValue(float(self.store.get("cartesian_grid_line_width", self.store.get("plot_grid_line_width", 0.9)))); self.cartesian_grid_line_width.valueChanged.connect(lambda v: self.store.set("cartesian_grid_line_width", float(v)))
         self.polar_grid_line_width = TrimmedDoubleSpinBox(); self.polar_grid_line_width.setRange(0.1, 10.0); self.polar_grid_line_width.setDecimals(2); self.polar_grid_line_width.setSingleStep(0.1); self.polar_grid_line_width.setValue(float(self.store.get("polar_grid_line_width", self.store.get("plot_grid_line_width", 0.9)))); self.polar_grid_line_width.valueChanged.connect(lambda v: self.store.set("polar_grid_line_width", float(v)))
         self.plot_line1 = StudioColorSelector(self.store, "plot_line_1", DEFAULT_LINE_COLORS[0][1])
@@ -1804,9 +1807,9 @@ class ModernMainWindow(QMainWindow):
         self.polar_azimuth_line2 = PolarLineStyleSelector(self.store, "polar_azimuth_line_2_color", "polar_azimuth_line_2_style", self.store.get("plot_line_2", DEFAULT_LINE_COLORS[1][1]), "solid")
         self.polar_elevation_line1 = PolarLineStyleSelector(self.store, "polar_elevation_line_1_color", "polar_elevation_line_1_style", self.store.get("plot_line_1", DEFAULT_LINE_COLORS[0][1]), "dashed")
         self.polar_elevation_line2 = PolarLineStyleSelector(self.store, "polar_elevation_line_2_color", "polar_elevation_line_2_style", self.store.get("plot_line_2", DEFAULT_LINE_COLORS[1][1]), "dashed")
-        self.beamwidth_3db_color = StudioColorSelector(self.store, "beamwidth_3db_color", DEFAULT_BEAMWIDTH_DB_COLORS[0][1], presets=DEFAULT_BEAMWIDTH_DB_COLORS)
-        self.beamwidth_6db_color = StudioColorSelector(self.store, "beamwidth_6db_color", DEFAULT_BEAMWIDTH_DB_COLORS[1][1], presets=DEFAULT_BEAMWIDTH_DB_COLORS)
-        self.beamwidth_10db_color = StudioColorSelector(self.store, "beamwidth_10db_color", DEFAULT_BEAMWIDTH_DB_COLORS[2][1], presets=DEFAULT_BEAMWIDTH_DB_COLORS)
+        self.beamwidth_3db_color = StudioColorSelector(self.store, "beamwidth_3db_color", DEFAULT_BEAMWIDTH_DB_COLORS[0][1])
+        self.beamwidth_6db_color = StudioColorSelector(self.store, "beamwidth_6db_color", DEFAULT_BEAMWIDTH_DB_COLORS[1][1])
+        self.beamwidth_10db_color = StudioColorSelector(self.store, "beamwidth_10db_color", DEFAULT_BEAMWIDTH_DB_COLORS[2][1])
         self.cartesian_line_width = TrimmedDoubleSpinBox(); self.cartesian_line_width.setRange(0.1, 20.0); self.cartesian_line_width.setDecimals(2); self.cartesian_line_width.setSingleStep(0.1); self.cartesian_line_width.setValue(float(self.store.get("cartesian_line_width", self.store.get("plot_line_width", 2.0)))); self.cartesian_line_width.valueChanged.connect(lambda v: self.store.set("cartesian_line_width", float(v)))
         self.cartesian_figure_width = TrimmedDoubleSpinBox(); self.cartesian_figure_width.setRange(2.0, 24.0); self.cartesian_figure_width.setDecimals(2); self.cartesian_figure_width.setSingleStep(0.25); self.cartesian_figure_width.setValue(float(self.store.get("cartesian_figure_width", 12.0))); self.cartesian_figure_width.valueChanged.connect(lambda v: self.store.set("cartesian_figure_width", float(v)))
         self.cartesian_figure_height = TrimmedDoubleSpinBox(); self.cartesian_figure_height.setRange(1.0, 18.0); self.cartesian_figure_height.setDecimals(2); self.cartesian_figure_height.setSingleStep(0.25); self.cartesian_figure_height.setValue(float(self.store.get("cartesian_figure_height", 5.04))); self.cartesian_figure_height.valueChanged.connect(lambda v: self.store.set("cartesian_figure_height", float(v)))
@@ -1828,7 +1831,7 @@ class ModernMainWindow(QMainWindow):
         plot_color_form.setVerticalSpacing(8)
         plot_color_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         plot_color_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        add_form_row(plot_color_form, "Grid color", self.plot_grid, "Grid and axis color used across the cartesian, polar, and VSWR plots. Presets are neutral greys, with a custom color option.")
+        add_form_row(plot_color_form, "Grid color", self.plot_grid, "Grid and axis color used across the cartesian, polar, and VSWR plots.")
         add_form_row(plot_color_form, "Line color 1", self.plot_line1, "Primary line color used across the cartesian, polar, and VSWR plots.")
         add_form_row(plot_color_form, "Line color 2", self.plot_line2, "Secondary line color used across the cartesian, polar, and VSWR plots.")
         add_form_row(plot_color_form, "3 dB", self.beamwidth_3db_color, "Line color used for 3 dB E-plane and H-plane beamwidth plots.")
