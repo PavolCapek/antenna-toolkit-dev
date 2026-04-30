@@ -216,6 +216,29 @@ class StudioDirtyStateTests(unittest.TestCase):
         loaded = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded.radiation_pattern_frequencies_ghz, [0.3, 1.5])
 
+    def test_run_preflight_reports_all_full_pipeline_blockers(self) -> None:
+        missing_ffs = Path(self.temp_dir.name) / "missing.ffs"
+        self.window._add_ffs_files([str(missing_ffs)])
+        self.window.shared_fmin.setValue(6.0)
+        self.window.shared_fmax.setValue(5.0)
+        self.app.processEvents()
+
+        messages = self.window._run_preflight_messages(["beam", "extract", "plot", "vswr", "datasheet"])
+
+        self.assertTrue(any("missing .ffs" in message for message in messages))
+        self.assertTrue(any("Touchstone" in message for message in messages))
+        self.assertTrue(any("Technical Data" in message for message in messages))
+        self.assertTrue(any("frequency window" in message for message in messages))
+        self.assertGreaterEqual(len(messages), 4)
+
+    def test_run_button_shows_preflight_warning_without_starting(self) -> None:
+        with mock.patch("antenna_toolkit_studio.QMessageBox.warning") as warning:
+            self.window.run_beam()
+
+        warning.assert_called_once()
+        self.assertFalse(self.window.proc.queue)
+        self.assertIsNone(self.window.proc.running_cmd)
+
     def test_ffs_frequency_header_reader_uses_frequency_field_not_power_values(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "cst.ffs"
         ffs_path.write_text(

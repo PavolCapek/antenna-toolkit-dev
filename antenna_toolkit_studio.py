@@ -4911,6 +4911,86 @@ class ModernMainWindow(QMainWindow):
     def _missing_enabled_ffs(self) -> list[str]:
         return [path for path in self.selected_ffs() if not Path(path).exists()]
 
+    def _run_preflight_messages(self, stage_keys: list[str]) -> list[str]:
+        if not self.active_project_slug:
+            return ["Create or select a project first."]
+
+        requested = set(stage_keys)
+        messages: list[str] = []
+        needs_ffs = bool(requested & {"beam", "extract", "plot", "datasheet"})
+        needs_frequency = bool(requested & {"extract", "plot", "vswr", "datasheet"})
+        needs_touchstone = bool(requested & {"vswr", "datasheet"})
+        needs_technical_data = "datasheet" in requested
+        needs_template = "datasheet" in requested
+
+        ffs = self.selected_ffs()
+        missing_ffs = self._missing_enabled_ffs()
+        if needs_ffs and not ffs:
+            messages.append("Add at least one enabled .ffs file.")
+        if missing_ffs and (needs_ffs or "extract" in requested):
+            sample = ", ".join(display_workspace_path(path) for path in missing_ffs[:3])
+            more = " ..." if len(missing_ffs) > 3 else ""
+            messages.append(f"Fix or disable missing .ffs files: {sample}{more}")
+
+        s2p = self.selected_s2p()
+        touchstone_ready = bool(s2p) and Path(s2p).exists()
+        if needs_touchstone and not s2p:
+            messages.append("Select a Touchstone .s1p or .s2p file.")
+        elif s2p and not touchstone_ready and ("extract" in requested or needs_touchstone):
+            messages.append(f"Fix the missing Touchstone file: {display_workspace_path(s2p)}")
+
+        if "extract" in requested and not ffs and not touchstone_ready:
+            messages.append("Extract needs at least one valid .ffs file or a valid Touchstone file.")
+
+        if needs_technical_data:
+            technical_data = self.selected_technical_data()
+            if not technical_data:
+                messages.append("Select a Technical Data workbook or Google Sheet.")
+            elif is_url(technical_data) and not self.technical_data_is_google_sheet():
+                messages.append("Use a Google Sheet link or a local workbook for Technical Data.")
+            elif self.technical_data_is_google_sheet():
+                if not extract_google_sheet_id(technical_data):
+                    messages.append("The selected Google Sheet URL is missing a spreadsheet ID.")
+                elif not self.google_sheets_auth_configured():
+                    messages.append("Sign in to Google Sheets before generating the datasheet.")
+            elif not Path(technical_data).exists():
+                messages.append(f"Fix the missing Technical Data workbook: {display_workspace_path(technical_data)}")
+
+        if needs_template:
+            template_path = self.selected_datasheet_template_path()
+            if not template_path.exists():
+                messages.append(f"Select an available datasheet export style: {display_workspace_path(template_path)}")
+
+        if needs_frequency and not self._frequency_window_is_valid():
+            messages.append("Set a valid shared frequency window or clear it.")
+
+        if "plot" in requested:
+            workbook = self.deduced_beam_output()
+            if not workbook.exists() and "beam" not in requested:
+                messages.append("Generate the workbook before running Plots.")
+
+        if "datasheet" in requested:
+            extract_output = self.deduced_extract_output()
+            if not extract_output.exists() and "extract" not in requested:
+                messages.append("Generate the extract workbook before generating the datasheet.")
+            elif "extract" not in requested and self._stage_is_stale("extract"):
+                messages.append("Rerun Extract before generating the datasheet.")
+            if not self._stage_output_exists("plot") and "plot" not in requested:
+                messages.append("Generate plots before generating the datasheet.")
+            elif "plot" not in requested and self._stage_is_stale("plot"):
+                messages.append("Rerun Plots before generating the datasheet.")
+
+        return messages
+
+    def _run_preflight_passes(self, stage_keys: list[str], title: str) -> bool:
+        messages = self._run_preflight_messages(stage_keys)
+        if not messages:
+            return True
+        message = "\n".join(f"- {text}" for text in messages)
+        QMessageBox.warning(self, title, f"Fix these items before running:\n\n{message}")
+        self.status(messages[0])
+        return False
+
     def _detect_stage_key(self, args: list[str]) -> str:
         names = {Path(str(arg)).name.lower() for arg in args}
         mapping = {
@@ -5140,18 +5220,10 @@ class ModernMainWindow(QMainWindow):
         self.run_info.setText(text)
 
     def run_beam(self):
-        if not self.active_project_slug:
-            self.status("Create or select a project first")
-            return
-        missing = self._missing_enabled_ffs()
-        if missing:
-            self.status("Remove or fix missing far-field files before running")
+        if not self._run_preflight_passes(["beam"], "Workbook Preflight"):
             return
         out = str(self.deduced_beam_output())
         ffs = self.selected_ffs()
-        if not ffs:
-            self.status("Add at least one .ffs file")
-            return
         args = [which_python(), "-u", SCRIPT_BEAM, out] + ffs + [
             "--smooth", str(self.beam_smooth.value()),
             "--theta-window", str(self.theta_window.value())
@@ -5186,8 +5258,7 @@ class ModernMainWindow(QMainWindow):
         return args
 
     def run_extract(self):
-        if self.selected_ffs() and self._missing_enabled_ffs() and not (self.selected_s2p() and Path(self.selected_s2p()).exists()):
-            self.status("Remove or fix missing far-field files before running")
+        if not self._run_preflight_passes(["extract"], "Extract Preflight"):
             return
         args = self.build_extract_args()
         if not args:
@@ -5197,46 +5268,11 @@ class ModernMainWindow(QMainWindow):
         self._enqueue_stage("extract", args)
 
     def run_datasheet(self):
-        if not self.active_project_slug:
-            self.status("Create or select a project first")
+        if not self._run_preflight_passes(["datasheet"], "Datasheet Preflight"):
             return
         template_path = self.selected_datasheet_template_path()
-        if not template_path.exists():
-            self.status("Selected datasheet export style is missing")
-            return
-        if self._missing_enabled_ffs():
-            self.status("Remove or fix missing far-field files before generating the datasheet")
-            return
         s2p = self.selected_s2p()
-        if not s2p:
-            self.status("Select a Touchstone file before generating the datasheet")
-            return
-        if not Path(s2p).exists():
-            self.status("Selected Touchstone file is missing")
-            return
-        technical_data = self.selected_technical_data()
-        if not technical_data:
-            self.status("Select a Technical Data workbook before generating the datasheet")
-            return
-        if is_url(technical_data) and not self.technical_data_is_google_sheet():
-            self.status("Selected Technical Data URL is not a Google Sheet")
-            return
-        if not is_url(technical_data) and not Path(technical_data).exists():
-            self.status("Selected Technical Data workbook is missing")
-            return
         extract_output = self.deduced_extract_output()
-        if not extract_output.exists():
-            self.status("Generate the extract workbook first")
-            return
-        if self._stage_is_stale("extract"):
-            self.status("Extract output is stale. Run Extract Data again before generating the datasheet")
-            return
-        if not self._stage_output_exists("plot"):
-            self.status("Generate plots first so the datasheet can embed the chart assets")
-            return
-        if self._stage_is_stale("plot"):
-            self.status("Plot output is stale. Run Plots only again before generating the datasheet")
-            return
         try:
             technical_data_workbook = self.prepare_technical_data_workbook()
         except GoogleSheetDownloadError as exc:
@@ -5263,16 +5299,9 @@ class ModernMainWindow(QMainWindow):
         self._enqueue_stage("datasheet", args)
 
     def run_plot(self):
-        if not self.active_project_slug:
-            self.status("Create or select a project first")
-            return
-        if not self._frequency_window_is_valid():
-            self.status("Set a valid shared frequency window or clear it")
+        if not self._run_preflight_passes(["plot"], "Plots Preflight"):
             return
         xlsx = self.deduced_beam_output()
-        if not xlsx.exists():
-            self.status("Generate the workbook first")
-            return
         args = build_plot_command(
             python_executable=which_python(),
             script_path=SCRIPT_PLOT,
@@ -5285,19 +5314,9 @@ class ModernMainWindow(QMainWindow):
         self._enqueue_stage("plot", args)
 
     def run_vswr(self):
-        if not self.active_project_slug:
-            self.status("Create or select a project first")
-            return
-        if not self._frequency_window_is_valid():
-            self.status("Set a valid shared frequency window or clear it")
+        if not self._run_preflight_passes(["vswr"], "VSWR Preflight"):
             return
         s2p = self.selected_s2p()
-        if not s2p:
-            self.status("Select a .s1p or .s2p file")
-            return
-        if not Path(s2p).exists():
-            self.status("Selected Touchstone file is missing")
-            return
         args = build_vswr_command(
             python_executable=which_python(),
             script_path=SCRIPT_VSWR,
@@ -5309,42 +5328,12 @@ class ModernMainWindow(QMainWindow):
         self._enqueue_stage("vswr", args)
 
     def run_full(self):
-        if not self.active_project_slug:
-            self.status("Create or select a project first")
-            return
-        if not self._frequency_window_is_valid():
-            self.status("Set a valid shared frequency window or clear it")
-            return
-        missing = self._missing_enabled_ffs()
-        if missing:
-            self.status("Remove or fix missing far-field files before running")
+        if not self._run_preflight_passes(["beam", "extract", "plot", "vswr", "datasheet"], "Full Pipeline Preflight"):
             return
         out = str(self.deduced_beam_output())
         ffs = self.selected_ffs()
-        if not ffs:
-            self.status("Add at least one .ffs file")
-            return
         template_path = self.selected_datasheet_template_path()
-        if not template_path.exists():
-            self.status("Selected datasheet export style is missing")
-            return
         s2p = self.selected_s2p()
-        if not s2p:
-            self.status("Select a Touchstone file before running the full pipeline")
-            return
-        if not Path(s2p).exists():
-            self.status("Selected Touchstone file is missing")
-            return
-        technical_data = self.selected_technical_data()
-        if not technical_data:
-            self.status("Select a Technical Data workbook before running the full pipeline")
-            return
-        if is_url(technical_data) and not self.technical_data_is_google_sheet():
-            self.status("Selected Technical Data URL is not a Google Sheet")
-            return
-        if not is_url(technical_data) and not Path(technical_data).exists():
-            self.status("Selected Technical Data workbook is missing")
-            return
         try:
             technical_data_workbook = self.prepare_technical_data_workbook()
         except GoogleSheetDownloadError as exc:
