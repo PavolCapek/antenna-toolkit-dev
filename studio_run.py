@@ -8,6 +8,7 @@ from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox
 
 from pipeline.commands import build_plot_command, build_vswr_command
+from pipeline.preflight import collect_preflight_issues
 from pipeline.run_context import RunContext
 from project_store import utc_now_iso
 from studio_runtime import (
@@ -115,75 +116,39 @@ class StudioRunMixin:
         return [path for path in self.selected_ffs() if not Path(path).exists()]
 
     def _run_preflight_messages(self, stage_keys: list[str]) -> list[str]:
-        if not self.active_project_slug:
-            return ["Create or select a project first."]
-
-        requested = set(stage_keys)
-        messages: list[str] = []
-        needs_ffs = bool(requested & {"beam", "extract", "plot", "datasheet"})
-        needs_frequency = bool(requested & {"extract", "plot", "vswr", "datasheet"})
-        needs_touchstone = bool(requested & {"vswr", "datasheet"})
-        needs_technical_data = "datasheet" in requested
-        needs_template = "datasheet" in requested
-
-        ffs = self.selected_ffs()
+        enabled_ffs = self.selected_ffs()
         missing_ffs = self._missing_enabled_ffs()
-        if needs_ffs and not ffs:
-            messages.append("Add at least one enabled .ffs file.")
-        if missing_ffs and (needs_ffs or "extract" in requested):
-            sample = ", ".join(display_workspace_path(path) for path in missing_ffs[:3])
-            more = " ..." if len(missing_ffs) > 3 else ""
-            messages.append(f"Fix or disable missing .ffs files: {sample}{more}")
-
         s2p = self.selected_s2p()
+        technical_data = self.selected_technical_data()
+        technical_data_is_google_sheet = self.technical_data_is_google_sheet()
+        technical_data_exists = bool(technical_data) and Path(technical_data).exists()
         touchstone_ready = bool(s2p) and Path(s2p).exists()
-        if needs_touchstone and not s2p:
-            messages.append("Select a Touchstone .s1p or .s2p file.")
-        elif s2p and not touchstone_ready and ("extract" in requested or needs_touchstone):
-            messages.append(f"Fix the missing Touchstone file: {display_workspace_path(s2p)}")
-
-        if "extract" in requested and not ffs and not touchstone_ready:
-            messages.append("Extract needs at least one valid .ffs file or a valid Touchstone file.")
-
-        if needs_technical_data:
-            technical_data = self.selected_technical_data()
-            if not technical_data:
-                messages.append("Select a Technical Data workbook or Google Sheet.")
-            elif is_url(technical_data) and not self.technical_data_is_google_sheet():
-                messages.append("Use a Google Sheet link or a local workbook for Technical Data.")
-            elif self.technical_data_is_google_sheet():
-                if not extract_google_sheet_id(technical_data):
-                    messages.append("The selected Google Sheet URL is missing a spreadsheet ID.")
-                elif not self.google_sheets_auth_configured():
-                    messages.append("Sign in to Google Sheets before generating the datasheet.")
-            elif not Path(technical_data).exists():
-                messages.append(f"Fix the missing Technical Data workbook: {display_workspace_path(technical_data)}")
-
-        if needs_template:
-            template_path = self.selected_datasheet_template_path()
-            if not template_path.exists():
-                messages.append(f"Select an available datasheet export style: {display_workspace_path(template_path)}")
-
-        if needs_frequency and not self._frequency_window_is_valid():
-            messages.append("Set a valid shared frequency window or clear it.")
-
-        if "plot" in requested:
-            workbook = self.deduced_beam_output()
-            if not workbook.exists() and "beam" not in requested:
-                messages.append("Generate the workbook before running Plots.")
-
-        if "datasheet" in requested:
-            extract_output = self.deduced_extract_output()
-            if not extract_output.exists() and "extract" not in requested:
-                messages.append("Generate the extract workbook before generating the datasheet.")
-            elif "extract" not in requested and self._stage_is_stale("extract"):
-                messages.append("Rerun Extract before generating the datasheet.")
-            if not self._stage_output_exists("plot") and "plot" not in requested:
-                messages.append("Generate plots before generating the datasheet.")
-            elif "plot" not in requested and self._stage_is_stale("plot"):
-                messages.append("Rerun Plots before generating the datasheet.")
-
-        return messages
+        template_path = self.selected_datasheet_template_path()
+        issues = collect_preflight_issues(
+            stage_keys=stage_keys,
+            has_active_project=bool(self.active_project_slug),
+            enabled_ffs=enabled_ffs,
+            missing_ffs_display=[display_workspace_path(path) for path in missing_ffs],
+            touchstone_selected=bool(s2p),
+            touchstone_ready=touchstone_ready,
+            touchstone_display=display_workspace_path(s2p) if s2p else "",
+            technical_data=str(technical_data or ""),
+            technical_data_is_url=is_url(technical_data),
+            technical_data_is_google_sheet=technical_data_is_google_sheet,
+            google_sheet_has_id=bool(extract_google_sheet_id(technical_data)) if technical_data_is_google_sheet else False,
+            google_sheets_auth_configured=self.google_sheets_auth_configured(),
+            technical_data_exists=technical_data_exists,
+            technical_data_display=display_workspace_path(technical_data) if technical_data else "",
+            template_exists=template_path.exists(),
+            template_display=display_workspace_path(template_path),
+            frequency_window_valid=self._frequency_window_is_valid(),
+            beam_output_exists=self.deduced_beam_output().exists(),
+            extract_output_exists=self.deduced_extract_output().exists(),
+            extract_stage_stale=self._stage_is_stale("extract"),
+            plot_output_exists=self._stage_output_exists("plot"),
+            plot_stage_stale=self._stage_is_stale("plot"),
+        )
+        return [issue.message for issue in issues]
 
     def _run_preflight_passes(self, stage_keys: list[str], title: str) -> bool:
         messages = self._run_preflight_messages(stage_keys)
