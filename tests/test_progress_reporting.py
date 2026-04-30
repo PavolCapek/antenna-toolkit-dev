@@ -148,6 +148,9 @@ class ProgressReportingTests(unittest.TestCase):
             def insert_text(self, *_args, **_kwargs) -> int:
                 return 1
 
+            def get_fonts(self, full=False) -> list:
+                return []
+
         class FakeDoc:
             def __init__(self) -> None:
                 self.metadata = {}
@@ -161,6 +164,9 @@ class ProgressReportingTests(unittest.TestCase):
 
             def __getitem__(self, _index: int) -> FakePage:
                 return self.page
+
+            def __iter__(self):
+                yield self.page
 
             def set_metadata(self, _metadata) -> None:
                 return None
