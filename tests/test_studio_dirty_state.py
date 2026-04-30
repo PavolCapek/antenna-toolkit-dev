@@ -239,6 +239,33 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertFalse(self.window.proc.queue)
         self.assertIsNone(self.window.proc.running_cmd)
 
+    def test_needed_rerun_prefers_latest_failed_stage(self) -> None:
+        self.window.project_run_state = {
+            "stages": {
+                "beam": {
+                    "status": "failed",
+                    "last_finished_at": "2026-04-30T10:00:00Z",
+                },
+                "plot": {
+                    "status": "failed",
+                    "last_finished_at": "2026-04-30T11:00:00Z",
+                },
+            }
+        }
+
+        self.assertEqual(self.window._latest_failed_stage_key(), "plot")
+
+    def test_run_needed_outputs_queues_only_needed_stages(self) -> None:
+        with (
+            mock.patch.object(self.window, "_needed_rerun_stage_keys", return_value=["beam", "plot"]),
+            mock.patch.object(self.window, "_run_preflight_passes", return_value=True),
+            mock.patch.object(self.window, "_save_project_if_dirty"),
+            mock.patch.object(self.window, "_enqueue_stage") as enqueue,
+        ):
+            self.window.run_needed_outputs()
+
+        self.assertEqual([call.args[0] for call in enqueue.call_args_list], ["beam", "plot"])
+
     def test_ffs_frequency_header_reader_uses_frequency_field_not_power_values(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "cst.ffs"
         ffs_path.write_text(

@@ -1241,6 +1241,9 @@ class ModernMainWindow(QMainWindow):
         self.btn_full = QPushButton("Run Full Pipeline")
         self.btn_full.setObjectName("primaryButton")
         self.btn_full.clicked.connect(self.run_full)
+        self.btn_run_needed = QPushButton("Run Needed Only")
+        self.btn_run_needed.setObjectName("ghostButton")
+        self.btn_run_needed.clicked.connect(self.run_needed_outputs)
         self.btn_clear_outputs = QPushButton("Clear Generated Files")
         self.btn_clear_outputs.setObjectName("ghostButton")
         self.btn_clear_outputs.clicked.connect(self.delete_all_outputs)
@@ -1248,11 +1251,13 @@ class ModernMainWindow(QMainWindow):
         self.btn_cancel.setObjectName("ghostButton")
         self.btn_cancel.clicked.connect(self.cancel_run)
         self.btn_full.setToolTip("Run workbook generation, extract generation, plot generation, datasheet generation, and VSWR generation in sequence.")
+        self.btn_run_needed.setToolTip("Run only the currently failed stage, or the outputs marked stale.")
         self.btn_clear_outputs.setToolTip("Delete generated output files for the active project while keeping the project file and settings.")
         self.btn_cancel.setToolTip("Stop the current run and clear any queued stages.")
         self.hero_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=150)
         self.hero_actions.set_buttons([
             self.btn_full,
+            self.btn_run_needed,
             self.btn_clear_outputs,
         ])
         quick_actions.body.addWidget(self.hero_actions)
@@ -1399,6 +1404,8 @@ class ModernMainWindow(QMainWindow):
         self.project_run_datasheet_action = self.project_run_menu.addAction("Generate datasheet PDF", self.run_datasheet)
         self.project_run_plot_action = self.project_run_menu.addAction("Plots only", self.run_plot)
         self.project_run_vswr_action = self.project_run_menu.addAction("VSWR only", self.run_vswr)
+        self.project_more_menu.addSeparator()
+        self.project_run_needed_action = self.project_more_menu.addAction("Run failed/stale only", self.run_needed_outputs)
         self.project_more_menu.addSeparator()
         self.project_import_action = self.project_more_menu.addAction("Import bundle", self.import_project_bundle)
         self.project_export_action = self.project_more_menu.addAction("Export bundle", self.export_project_bundle)
@@ -3253,21 +3260,25 @@ class ModernMainWindow(QMainWindow):
         return "\n".join(lines) if lines else "No stage history yet."
 
     def _latest_failed_stage_key(self) -> str:
-        return next(
-            (
-                stage_key
-                for stage_key, _label in STAGE_DEFINITIONS
-                if (
-                    str(self._stage_state(stage_key).get("status", "")).strip().lower() == "failed"
-                    and (
-                        not str(self._stage_state(stage_key).get("last_success_at", "")).strip()
-                        or str(self._stage_state(stage_key).get("last_finished_at", "")).strip()
-                        >= str(self._stage_state(stage_key).get("last_success_at", "")).strip()
-                    )
-                )
-            ),
-            "",
-        )
+        failed: list[tuple[str, str]] = []
+        for stage_key, _label in STAGE_DEFINITIONS:
+            stage_state = self._stage_state(stage_key)
+            if str(stage_state.get("status", "")).strip().lower() != "failed":
+                continue
+            last_finished = str(stage_state.get("last_finished_at", "")).strip()
+            last_success = str(stage_state.get("last_success_at", "")).strip()
+            if last_success and last_finished < last_success:
+                continue
+            failed.append((last_finished, stage_key))
+        if not failed:
+            return ""
+        return max(failed)[1]
+
+    def _needed_rerun_stage_keys(self) -> list[str]:
+        failed = self._latest_failed_stage_key()
+        if failed and self._stage_is_applicable(failed):
+            return [failed]
+        return self._stale_stage_keys()
 
     def _chip_rgba(self, color: QColor, alpha: int) -> str:
         return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
@@ -3532,7 +3543,7 @@ class ModernMainWindow(QMainWindow):
 
         if latest_failed:
             self.readiness_summary.setText(f"Last run failed in {STAGE_LABELS.get(latest_failed, latest_failed.title())}. Retry after reviewing the console output.")
-            self._set_readiness_action("Run Full Pipeline", self.run_full, tooltip="Retry the full pipeline.")
+            self._set_readiness_action("Run Failed Stage", self.run_needed_outputs, tooltip="Retry only the failed stage.")
             return
 
         if stale_stages:
@@ -3545,7 +3556,7 @@ class ModernMainWindow(QMainWindow):
                 self.readiness_summary.setText(f"{stale_details[0]} Stale outputs: {labels}.")
             else:
                 self.readiness_summary.setText(f"Saved inputs, settings, or generation rules changed since the last successful run. Rebuild the stale outputs: {labels}.")
-            self._set_readiness_action("Run Full Pipeline", self.run_full, tooltip="Rebuild all outputs for the current project.")
+            self._set_readiness_action("Run Stale Outputs", self.run_needed_outputs, tooltip="Rebuild only the stale outputs.")
             return
 
         if not ready_stages:
@@ -3877,6 +3888,8 @@ class ModernMainWindow(QMainWindow):
         self.project_run_datasheet_action.setEnabled(has_project)
         self.project_run_plot_action.setEnabled(has_project)
         self.project_run_vswr_action.setEnabled(has_project)
+        needed_stage_keys = self._needed_rerun_stage_keys() if has_project else []
+        self.project_run_needed_action.setEnabled(has_project and not is_running and bool(needed_stage_keys))
         self.project_import_action.setEnabled(True)
         self.project_export_action.setEnabled(has_project)
         has_generated_outputs = any(self._cached_path_exists(path) for path in self._all_generated_output_files()) if has_project else False
@@ -3884,6 +3897,7 @@ class ModernMainWindow(QMainWindow):
         self.project_open_folder_action.setEnabled(has_project)
         for widget in (
             self.btn_full,
+            self.btn_run_needed,
             self.btn_clear_outputs,
             self.ffs_list,
             self.ffs_port_label_field,
@@ -3910,6 +3924,8 @@ class ModernMainWindow(QMainWindow):
         ):
             widget.setEnabled(has_project)
         self.btn_clear_outputs.setEnabled(has_project and not is_running and has_generated_outputs)
+        self.btn_run_needed.setEnabled(has_project and not is_running and bool(needed_stage_keys))
+        self.btn_run_needed.setVisible(has_project and bool(needed_stage_keys))
         self.btn_cancel.setEnabled(has_project and is_running)
         self.btn_cancel.setVisible(has_project and is_running)
         self._update_preset_action_state()
@@ -5063,6 +5079,84 @@ class ModernMainWindow(QMainWindow):
             self.status("That stage cannot be rerun")
             return
         callback()
+
+    def _enqueue_stage_run_sequence(self, stage_keys: list[str]) -> bool:
+        technical_data_workbook = ""
+        if "datasheet" in stage_keys:
+            try:
+                technical_data_workbook = self.prepare_technical_data_workbook()
+            except GoogleSheetDownloadError as exc:
+                self.status(str(exc))
+                return False
+        settings = self.current_preset_settings()
+        self._save_project_if_dirty()
+        for stage_key in stage_keys:
+            if stage_key == "beam":
+                args = [which_python(), "-u", SCRIPT_BEAM, str(self.deduced_beam_output())] + self.selected_ffs() + [
+                    "--smooth", str(self.beam_smooth.value()),
+                    "--theta-window", str(self.theta_window.value()),
+                ]
+            elif stage_key == "extract":
+                args = self.build_extract_args()
+                if not args:
+                    self.status("Extract is not ready to run")
+                    return False
+            elif stage_key == "plot":
+                args = build_plot_command(
+                    python_executable=which_python(),
+                    script_path=SCRIPT_PLOT,
+                    input_workbook=self.deduced_beam_output(),
+                    out_dir=self.project_results_dir(),
+                    settings=settings,
+                    polar_port_labels_json=self.polar_port_labels_json(),
+                )
+            elif stage_key == "vswr":
+                args = build_vswr_command(
+                    python_executable=which_python(),
+                    script_path=SCRIPT_VSWR,
+                    touchstone_path=self.selected_s2p(),
+                    output_path=self.deduced_vswr_output(),
+                    settings=settings,
+                )
+            elif stage_key == "datasheet":
+                args = [
+                    which_python(),
+                    "-u",
+                    SCRIPT_DATASHEET,
+                    str(self.deduced_datasheet_output()),
+                    "--template",
+                    str(self.selected_datasheet_template_path()),
+                    "--extract-workbook",
+                    str(self.deduced_extract_output()),
+                    "--technical-data-workbook",
+                    technical_data_workbook,
+                    "--metadata-author",
+                    self.selected_pdf_metadata_author(),
+                ]
+                radiation_frequencies = self.radiation_frequencies_arg()
+                if radiation_frequencies is not None:
+                    args.extend(["--radiation-frequencies-ghz", radiation_frequencies])
+            else:
+                continue
+            self._enqueue_stage(stage_key, args)
+        return True
+
+    def run_needed_outputs(self) -> None:
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            return
+        if self.proc.running_cmd or self.proc.queue or self._current_stage_key or self._pending_stage_keys:
+            self.status("Wait for the current run to finish")
+            return
+        stage_keys = self._needed_rerun_stage_keys()
+        if not stage_keys:
+            self.status("No failed or stale outputs need rerun")
+            return
+        if not self._run_preflight_passes(stage_keys, "Run Needed Preflight"):
+            return
+        if self._enqueue_stage_run_sequence(stage_keys):
+            labels = ", ".join(STAGE_LABELS.get(key, key.title()) for key in stage_keys)
+            self.status(f"Queued needed outputs: {labels}")
 
     def delete_stage_output(self, stage_key: str) -> None:
         files = [path for path in self._stage_output_files(stage_key) if path.exists()]
