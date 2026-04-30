@@ -1606,16 +1606,16 @@ class ModernMainWindow(QMainWindow):
 
         radiation_card = Card("Radiation pattern frequencies", "Datasheet")
         self.radiation_frequency_card = radiation_card
-        radiation_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        radiation_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         radiation_help = QLabel("Choose which available far-field frequencies are included in datasheet radiation pattern sections.")
         radiation_help.setWordWrap(True)
         radiation_help.setObjectName("helper")
         radiation_card.body.addWidget(radiation_help)
         self.radiation_frequency_list = QListWidget()
-        self.radiation_frequency_list.setMinimumHeight(130)
+        self.radiation_frequency_list.setMinimumHeight(320)
         self.radiation_frequency_list.setToolTip("Checked frequencies are placed into the datasheet radiation pattern section for this project.")
         self.radiation_frequency_list.itemChanged.connect(self.on_radiation_frequency_item_changed)
-        radiation_card.body.addWidget(self.radiation_frequency_list)
+        radiation_card.body.addWidget(self.radiation_frequency_list, 1)
         self.radiation_frequency_state_label = QLabel("Add far-field files to populate available frequencies.")
         self.radiation_frequency_state_label.setObjectName("helper")
         self.radiation_frequency_state_label.setWordWrap(True)
@@ -1671,18 +1671,18 @@ class ModernMainWindow(QMainWindow):
             self.open_technical_data_button,
         ])
         technical_data_card.body.addWidget(technical_data_actions)
-        inputs_side = QWidget()
-        inputs_side.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        inputs_side_layout = QVBoxLayout(inputs_side)
-        inputs_side_layout.setContentsMargins(0, 0, 0, 0)
-        inputs_side_layout.setSpacing(12)
-        inputs_side_layout.addWidget(s2p_card)
-        inputs_side_layout.addWidget(technical_data_card)
-        inputs_side_layout.addWidget(radiation_card)
+        inputs_left = QWidget()
+        inputs_left.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        inputs_left_layout = QVBoxLayout(inputs_left)
+        inputs_left_layout.setContentsMargins(0, 0, 0, 0)
+        inputs_left_layout.setSpacing(12)
+        inputs_left_layout.addWidget(s2p_card)
+        inputs_left_layout.addWidget(technical_data_card)
+        inputs_left_layout.addWidget(ffs_card)
         inputs_panel = ResponsiveInputsPanel(main_min_width=520, side_width=400)
         self.inputs_panel = inputs_panel
         inputs_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        inputs_panel.set_cards(ffs_card, inputs_side)
+        inputs_panel.set_cards(inputs_left, radiation_card)
         inputs_lay.addWidget(inputs_panel)
         inputs_lay.addStretch(1)
 
@@ -2347,8 +2347,8 @@ class ModernMainWindow(QMainWindow):
                 "card_body_spacing": 7,
                 "panel_gap": 10,
                 "button_gap": 6,
-                "command_panel_min_card_width": 430,
-                "command_left_max_width": 16777215,
+                "command_panel_min_card_width": 320,
+                "command_left_max_width": 340,
                 "readiness_panel_min_card_width": 150,
                 "inputs_main_min_width": 460,
                 "inputs_side_width": 360,
@@ -2401,8 +2401,8 @@ class ModernMainWindow(QMainWindow):
             "card_body_spacing": 10,
             "panel_gap": 14,
             "button_gap": 10,
-            "command_panel_min_card_width": 360,
-            "command_left_max_width": 390,
+            "command_panel_min_card_width": 320,
+            "command_left_max_width": 340,
             "readiness_panel_min_card_width": 170,
             "inputs_main_min_width": 520,
             "inputs_side_width": 400,
