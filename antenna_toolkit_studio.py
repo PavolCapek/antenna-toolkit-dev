@@ -1190,6 +1190,9 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.btn_run_needed = QPushButton("Run Needed Only")
         self.btn_run_needed.setObjectName("ghostButton")
         self.btn_run_needed.clicked.connect(self.run_needed_outputs)
+        self.btn_validate = QPushButton("Validate Project")
+        self.btn_validate.setObjectName("ghostButton")
+        self.btn_validate.clicked.connect(self.validate_project)
         self.btn_clear_outputs = QPushButton("Clear Generated Files")
         self.btn_clear_outputs.setObjectName("ghostButton")
         self.btn_clear_outputs.clicked.connect(self.delete_all_outputs)
@@ -1198,12 +1201,14 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.btn_cancel.clicked.connect(self.cancel_run)
         self.btn_full.setToolTip("Run workbook generation, extract generation, plot generation, datasheet generation, and VSWR generation in sequence.")
         self.btn_run_needed.setToolTip("Run only the currently failed stage, or the outputs marked stale.")
+        self.btn_validate.setToolTip("Dry run stage validation and show a readiness report without running scripts.")
         self.btn_clear_outputs.setToolTip("Delete generated output files for the active project while keeping the project file and settings.")
         self.btn_cancel.setToolTip("Stop the current run and clear any queued stages.")
         self.hero_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=150)
         self.hero_actions.set_buttons([
             self.btn_full,
             self.btn_run_needed,
+            self.btn_validate,
             self.btn_clear_outputs,
         ])
         quick_actions.body.addWidget(self.hero_actions)
@@ -1352,6 +1357,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.project_run_vswr_action = self.project_run_menu.addAction("VSWR only", self.run_vswr)
         self.project_more_menu.addSeparator()
         self.project_run_needed_action = self.project_more_menu.addAction("Run failed/stale only", self.run_needed_outputs)
+        self.project_validate_action = self.project_more_menu.addAction("Validate project", self.validate_project)
         self.project_more_menu.addSeparator()
         self.project_import_action = self.project_more_menu.addAction("Import bundle", self.import_project_bundle)
         self.project_export_action = self.project_more_menu.addAction("Export bundle", self.export_project_bundle)
@@ -2357,8 +2363,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "card_body_spacing": 10,
             "panel_gap": 14,
             "button_gap": 10,
-            "command_panel_min_card_width": 320,
-            "command_left_max_width": 340,
+            "command_panel_min_card_width": 360,
+            "command_left_max_width": 390,
             "readiness_panel_min_card_width": 170,
             "inputs_main_min_width": 520,
             "inputs_side_width": 400,

@@ -31,6 +31,55 @@ from studio_support import (
 
 
 class StudioRunMixin:
+    def _stage_validation_status(self, stage_key: str) -> tuple[str, list[str]]:
+        blockers = self._run_preflight_messages([stage_key])
+        if blockers:
+            return "Blocked", blockers
+        if not self._stage_is_applicable(stage_key):
+            return "Not applicable", []
+        if self._stage_output_exists(stage_key):
+            if self._stage_is_stale(stage_key):
+                detail = self._stage_stale_detail(stage_key)
+                return "Stale", [detail] if detail else []
+            return "Ready", []
+        return "Ready to run", []
+
+    def _build_validation_report(self) -> str:
+        lines: list[str] = []
+        project_name = self.active_project_name or self.active_project_slug or "None"
+        lines.append(f"Project: {project_name}")
+        lines.append(f"Path: {display_workspace_path(self.project_results_dir())}")
+        lines.append("")
+        lines.append("Overall preflight")
+        overall = self._run_preflight_messages([stage_key for stage_key, _ in STAGE_DEFINITIONS])
+        if overall:
+            for message in overall:
+                lines.append(f"- {message}")
+        else:
+            lines.append("- All required inputs are valid for a full run.")
+        lines.append("")
+        lines.append("Stage readiness")
+        for stage_key, stage_label in STAGE_DEFINITIONS:
+            status, notes = self._stage_validation_status(stage_key)
+            lines.append(f"- {stage_label}: {status}")
+            for note in notes:
+                lines.append(f"  - {note}")
+        needed = self._needed_rerun_stage_keys()
+        if needed:
+            labels = ", ".join(STAGE_LABELS.get(key, key.title()) for key in needed)
+            lines.append("")
+            lines.append(f"Suggested rerun: {labels}")
+        return "\n".join(lines)
+
+    def validate_project(self) -> None:
+        if not self.active_project_slug:
+            self.status("Create or select a project first")
+            QMessageBox.information(self, "Validate Project", "Create or select a project first.")
+            return
+        report = self._build_validation_report()
+        QMessageBox.information(self, "Validate Project", report)
+        self.status("Validation report generated")
+
     def _build_run_context(self, settings=None, touchstone_path: str | None = None) -> RunContext:
         active_settings = settings or self.current_preset_settings()
         return RunContext(

@@ -231,6 +231,17 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertTrue(any("frequency window" in message for message in messages))
         self.assertGreaterEqual(len(messages), 4)
 
+    def test_validate_project_shows_dry_run_report(self) -> None:
+        with mock.patch("antenna_toolkit_studio.QMessageBox.information") as info:
+            self.window.validate_project()
+
+        info.assert_called_once()
+        _parent, title, report = info.call_args.args
+        self.assertEqual(title, "Validate Project")
+        self.assertIn("Overall preflight", report)
+        self.assertIn("Stage readiness", report)
+        self.assertIn("Workbook", report)
+
     def test_run_button_shows_preflight_warning_without_starting(self) -> None:
         with mock.patch("antenna_toolkit_studio.QMessageBox.warning") as warning:
             self.window.run_beam()
