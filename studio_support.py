@@ -11,9 +11,14 @@ import sys
 import webbrowser
 from pathlib import Path
 from typing import List
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 from PySide6.QtCore import QProcess, QProcessEnvironment
+from path_utils import (
+    display_workspace_path as _display_workspace_path,
+    is_url as _is_url,
+    resolve_workspace_path as _resolve_workspace_path,
+)
 
 THIS_DIR = Path(__file__).resolve().parent
 SCRIPT_BEAM = str(THIS_DIR / "beamwidth_xlsx.py")
@@ -247,24 +252,11 @@ def open_in_file_manager(path: str | Path):
 
 
 def resolve_workspace_path(path: str | Path | None) -> Path:
-    if not path:
-        return THIS_DIR
-    if is_url(path):
-        return Path(str(path))
-    p = Path(path)
-    return p.resolve() if p.is_absolute() else (THIS_DIR / p).resolve()
+    return _resolve_workspace_path(THIS_DIR, path)
 
 
 def display_workspace_path(path: str | Path | None) -> str:
-    if not path:
-        return ""
-    if is_url(path):
-        return str(path)
-    p = resolve_workspace_path(path)
-    try:
-        return str(p.relative_to(THIS_DIR))
-    except ValueError:
-        return str(p)
+    return _display_workspace_path(THIS_DIR, path)
 
 
 def display_command_part(part: str) -> str:
@@ -276,10 +268,7 @@ def display_command_part(part: str) -> str:
 
 
 def is_url(value: str | Path | None) -> bool:
-    if value is None:
-        return False
-    parsed = urlparse(str(value).strip())
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+    return _is_url(value)
 
 
 class Persist:
