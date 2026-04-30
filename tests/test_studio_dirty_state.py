@@ -266,6 +266,30 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.assertEqual([call.args[0] for call in enqueue.call_args_list], ["beam", "plot"])
 
+    def test_clear_generated_files_refreshes_ready_stage_pills(self) -> None:
+        ffs_path = Path(self.temp_dir.name) / "sample.ffs"
+        ffs_path.write_text("ffs", encoding="utf-8")
+        self.window._add_ffs_files([str(ffs_path)])
+        self.window.save_project_changes()
+        beam_output = self.window.deduced_beam_output()
+        beam_output.parent.mkdir(parents=True, exist_ok=True)
+        beam_output.write_text("workbook", encoding="utf-8")
+        stage_state = self.window._stage_state("beam")
+        stage_state["status"] = "success"
+        stage_state["last_success_at"] = "2026-04-30T12:00:00Z"
+        stage_state["snapshot"] = self.window._current_stage_snapshot("beam")
+
+        self.window.refresh_derived_paths()
+        self.app.processEvents()
+        self.assertEqual(self.window.stage_chip_labels["beam"].text(), "Ready")
+
+        with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Yes):
+            self.window.delete_all_outputs()
+        self.app.processEvents()
+
+        self.assertFalse(beam_output.exists())
+        self.assertEqual(self.window.stage_chip_labels["beam"].text(), "Waiting")
+
     def test_needed_rerun_combines_failed_and_stale_with_skip_summary(self) -> None:
         self.window.project_run_state = {
             "stages": {

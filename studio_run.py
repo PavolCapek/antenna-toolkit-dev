@@ -355,6 +355,7 @@ class StudioRunMixin:
         except OSError as exc:
             QMessageBox.warning(self, "Delete Failed", f"Could not delete generated folder contents.\n\n{exc}")
             return
+        self.clear_derived_path_cache()
         stage_state = self._stage_state(stage_key)
         stage_state["status"] = "waiting"
         stage_state["last_finished_at"] = utc_now_iso()
@@ -390,10 +391,11 @@ class StudioRunMixin:
         except OSError as exc:
             QMessageBox.warning(self, "Delete Failed", f"Could not delete generated folder contents.\n\n{exc}")
             return
+        self.clear_derived_path_cache()
         deleted_stages: list[str] = []
         for stage_key, _label in STAGE_DEFINITIONS:
             stage_files = self._stage_output_files(stage_key)
-            if any(path in files for path in stage_files):
+            if any(path in files for path in stage_files) or any(path in stage_dirs for path in self._stage_generated_directories(stage_key)):
                 stage_state = self._stage_state(stage_key)
                 stage_state["status"] = "waiting"
                 stage_state["last_finished_at"] = utc_now_iso()

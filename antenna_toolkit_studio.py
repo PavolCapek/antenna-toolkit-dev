@@ -29,7 +29,7 @@ from studio_support import (
 )
 from project_store import (
     CURRENT_PROJECT_SCHEMA_VERSION, ProjectRecord, ProjectStore, resolve_project_path,
-    normalize_radiation_frequencies, sanitize_project_slug, serialize_workspace_path,
+    normalize_radiation_frequencies, sanitize_project_slug, serialize_workspace_path, utc_now_iso,
 )
 from legend_utils import detect_polarization
 from pipeline.settings import (
@@ -3851,6 +3851,9 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             if not was_enabled:
                 self._refresh_cache = {}
                 self._refresh_cache_enabled = False
+
+    def clear_derived_path_cache(self) -> None:
+        self._refresh_cache = {}
 
     def _update_project_action_state(self) -> None:
         has_project = bool(self.active_project_slug)
