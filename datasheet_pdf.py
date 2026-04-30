@@ -71,6 +71,9 @@ MYRIAD_FONT_FILES = {
 MISSING_VALUE_COLOR = (0.9, 0.0, 0.0)
 NETQUI_TABLE_FONT_SIZE = 9.0
 NETQUI_CHART_HEADING_GAP = 4.0
+NETQUI_SECTION_GAP = 16.0
+NETQUI_HEADING_FONT = "OpenSans-Medium"
+NETQUI_HEADING_FONT_FILE = Path(r"C:\Windows\Fonts\OpenSans-Semibold.ttf")
 NETQUI_CHART_SECTION_TITLES = {
     "ANTENNA GAIN",
     "VSWR",
@@ -1480,6 +1483,34 @@ def _normalized_span_text(text: str) -> str:
     return re.sub(r"\s+", " ", stripped).strip().upper()
 
 
+def _shift_text_span_y(span: TextSpan, y0: float) -> TextSpan:
+    dy = y0 - span.bbox.y0
+    return TextSpan(
+        text=_normalized_span_text(span.text),
+        bbox=fitz.Rect(span.bbox.x0, span.bbox.y0 + dy, span.bbox.x1, span.bbox.y1 + dy),
+        origin=(span.origin[0], span.origin[1] + dy),
+        font=span.font,
+        size=span.size,
+        color=span.color,
+    )
+
+
+def _font_buffer_for_display_font(doc: fitz.Document, display_font: str) -> bytes | None:
+    for page in doc:
+        for font in page.get_fonts(full=True):
+            xref = int(font[0])
+            base_font = str(font[3] or "")
+            if base_font != display_font and not base_font.endswith(f"+{display_font}"):
+                continue
+            try:
+                _name, _ext, _font_type, font_buffer = doc.extract_font(xref)
+            except Exception:
+                continue
+            if font_buffer:
+                return bytes(font_buffer)
+    return None
+
+
 def _font_path_for_display_font(display_font: str) -> Path | None:
     path = MYRIAD_FONT_FILES.get(display_font)
     if path and path.exists():
@@ -2642,6 +2673,8 @@ def _netqui_chart_heading_labels(kind: str) -> tuple[str, ...]:
         return ("VSWR",)
     if kind.startswith("beamwidth_"):
         return ("ANTENNA BEAMWIDTH",)
+    if kind.startswith("radiation_"):
+        return ("RADIATION PATTERNS",)
     return ()
 
 
@@ -2660,7 +2693,86 @@ def _compact_netqui_chart_slot_top(slot_rect: fitz.Rect, spans: list[TextSpan], 
     compact_y0 = heading_bottom + NETQUI_CHART_HEADING_GAP
     if compact_y0 >= slot_rect.y0 or compact_y0 >= slot_rect.y1 - 24.0:
         return slot_rect
+    if kind.startswith("radiation_"):
+        return fitz.Rect(slot_rect.x0, compact_y0, slot_rect.x1, compact_y0 + slot_rect.height)
     return fitz.Rect(slot_rect.x0, compact_y0, slot_rect.x1, slot_rect.y1)
+
+
+def _netqui_heading_span(spans: list[TextSpan], label: str) -> TextSpan | None:
+    normalized = _normalized_span_text(label)
+    return next((span for span in spans if _normalized_span_text(span.text) == normalized), None)
+
+
+def _netqui_cartesian_layout_rects(kind: str, slot_rect: fitz.Rect) -> tuple[fitz.Rect, fitz.Rect]:
+    if kind in {"gain", "vswr"}:
+        return netqui_top_chart_rects(slot_rect)
+    return netqui_beamwidth_rects(slot_rect)
+
+
+def _netqui_placed_plot_bottom(
+    kind: str,
+    slot_rect: fitz.Rect,
+    asset: Path,
+    spans: list[TextSpan],
+) -> float:
+    compact_slot = _compact_netqui_chart_slot_top(fitz.Rect(slot_rect), spans, kind)
+    plot_rect, _legend_rect = _netqui_cartesian_layout_rects(kind, compact_slot)
+    return _top_aligned_svg_rect(plot_rect, asset).y1
+
+
+def _netqui_shifted_heading_spans(
+    page: fitz.Page,
+    ordered_slots: list[ChartSlot],
+    spans: list[TextSpan],
+    chart_manifest: TemplateChartManifest,
+    output: Path,
+    extract_workbook: Path,
+    artifact_manifest: dict[str, object] | None,
+) -> dict[str, TextSpan]:
+    if chart_manifest.slot_order == "rows":
+        ordered_slots = [slot for row in _chart_slot_rows(ordered_slots) for slot in row]
+        if any(slot.kind == "radiation_low" for slot in chart_manifest.slots):
+            ordered_slots = _align_netqui_1pol_cartesian_slots(ordered_slots)
+
+    shifted: dict[str, TextSpan] = {}
+    span_by_title = {title: _netqui_heading_span(spans, title) for title in NETQUI_CHART_SECTION_TITLES}
+    slot_by_kind = {slot.kind: slot for slot in chart_manifest.slots if slot.slot_index < len(ordered_slots)}
+
+    def asset_for(kind: str) -> Path | None:
+        slot_spec = slot_by_kind.get(kind)
+        if slot_spec is None:
+            return None
+        return _manifest_slot_asset(slot_spec, output, extract_workbook, spans, page, artifact_manifest)
+
+    gain_asset = asset_for("gain")
+    vswr_asset = asset_for("vswr")
+    top_bottoms: list[float] = []
+    for kind, asset in (("gain", gain_asset), ("vswr", vswr_asset)):
+        slot_spec = slot_by_kind.get(kind)
+        if slot_spec is not None and asset is not None:
+            top_bottoms.append(_netqui_placed_plot_bottom(kind, ordered_slots[slot_spec.slot_index].rect, asset, spans))
+
+    beamwidth_heading = span_by_title.get("ANTENNA BEAMWIDTH")
+    if top_bottoms and beamwidth_heading is not None:
+        y0 = min(beamwidth_heading.bbox.y0, max(top_bottoms) + NETQUI_SECTION_GAP)
+        shifted["ANTENNA BEAMWIDTH"] = _shift_text_span_y(beamwidth_heading, y0)
+
+    spans_for_beamwidth = [
+        shifted.get(_normalized_span_text(span.text), span)
+        for span in spans
+    ]
+    beam_bottoms: list[float] = []
+    for kind in ("beamwidth_e_plane", "beamwidth_h_plane"):
+        slot_spec = slot_by_kind.get(kind)
+        asset = asset_for(kind)
+        if slot_spec is not None and asset is not None:
+            beam_bottoms.append(_netqui_placed_plot_bottom(kind, ordered_slots[slot_spec.slot_index].rect, asset, spans_for_beamwidth))
+
+    radiation_heading = span_by_title.get("RADIATION PATTERNS")
+    if beam_bottoms and radiation_heading is not None:
+        y0 = min(radiation_heading.bbox.y0, max(beam_bottoms) + NETQUI_SECTION_GAP)
+        shifted["RADIATION PATTERNS"] = _shift_text_span_y(radiation_heading, y0)
+    return shifted
 
 
 def _build_netqui_chart_replacements(
@@ -2796,8 +2908,9 @@ def _build_manifest_chart_replacements(
             if slot_spec.required:
                 raise ValueError(f"Missing required chart asset for template slot '{slot_spec.kind}'.")
             continue
-        slot_rect = fitz.Rect(ordered_slots[slot_spec.slot_index].rect)
-        if slot_spec.legend_mode in {"netqui_side", "netqui_top_side"}:
+        original_slot_rect = fitz.Rect(ordered_slots[slot_spec.slot_index].rect)
+        slot_rect = fitz.Rect(original_slot_rect)
+        if slot_spec.legend_mode in {"netqui_side", "netqui_top_side", "netqui_bottom"}:
             slot_rect = _compact_netqui_chart_slot_top(slot_rect, spans, slot_spec.kind)
         if slot_spec.legend_mode == "netqui_side":
             legend_asset = _legend_asset_path(asset, artifact_manifest)
@@ -2809,7 +2922,7 @@ def _build_manifest_chart_replacements(
                     asset,
                     legend_rect=legend_rect if legend_asset.exists() else None,
                     legend_asset_path=legend_asset if legend_asset.exists() else None,
-                    erase_rect=slot_rect,
+                    erase_rect=original_slot_rect,
                     legend_scale_cap=NETQUI_SIDE_LEGEND_SCALE_CAP,
                 )
             )
@@ -2823,7 +2936,7 @@ def _build_manifest_chart_replacements(
                     asset,
                     legend_rect=legend_rect if legend_asset.exists() else None,
                     legend_asset_path=legend_asset if legend_asset.exists() else None,
-                    erase_rect=slot_rect,
+                    erase_rect=original_slot_rect,
                     legend_scale_cap=NETQUI_SIDE_LEGEND_SCALE_CAP,
                 )
             )
@@ -2837,7 +2950,7 @@ def _build_manifest_chart_replacements(
                     asset,
                     legend_rect=legend_rect if legend_asset.exists() else None,
                     legend_asset_path=legend_asset if legend_asset.exists() else None,
-                    erase_rect=slot_rect,
+                    erase_rect=original_slot_rect,
                     legend_scale_cap=NETQUI_POLAR_LEGEND_SCALE_CAP,
                 )
             )
@@ -2911,13 +3024,14 @@ def _build_chart_replacements(
     *,
     artifact_manifest: dict[str, object] | None = None,
     adapter: DatasheetTemplateAdapter | None = None,
+    spans_override: list[TextSpan] | None = None,
 ) -> list[ChartReplacement]:
     slots = _collect_chart_slots(page)
     if len(slots) < 2:
         raise ValueError("Datasheet template page 2 does not contain the expected chart image slots.")
 
     ordered_slots = sorted(slots, key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
-    spans = _extract_page_spans(page)
+    spans = spans_override if spans_override is not None else _extract_page_spans(page)
     chart_manifest = adapter.manifest.chart_layout if adapter is not None and adapter.manifest is not None else None
     if chart_manifest is not None:
         return _build_manifest_chart_replacements(
@@ -3075,7 +3189,11 @@ def _shared_side_legend_scale(replacements: list[ChartReplacement]) -> float | N
     return min(scales) if scales else None
 
 
-def _legend_target_rect(replacement: ChartReplacement, shared_side_scale: float | None) -> fitz.Rect:
+def _legend_target_rect(
+    replacement: ChartReplacement,
+    shared_side_scale: float | None,
+    align_y_rect: fitz.Rect | None = None,
+) -> fitz.Rect:
     if replacement.legend_rect is None or replacement.legend_asset_path is None:
         raise ValueError("Legend placement requires both a legend rect and a legend asset path.")
     container_rect = fitz.Rect(replacement.legend_rect)
@@ -3090,7 +3208,8 @@ def _legend_target_rect(replacement: ChartReplacement, shared_side_scale: float 
         scale = min(scale, float(replacement.legend_scale_cap))
     if replacement.legend_scale_cap is not None and not _is_polar_radiation_replacement(replacement.kind):
         height = native_height * scale
-        center_y = (container_rect.y0 + container_rect.y1) / 2.0
+        center_source = align_y_rect if align_y_rect is not None else container_rect
+        center_y = (center_source.y0 + center_source.y1) / 2.0
         return fitz.Rect(container_rect.x0, center_y - height / 2.0, container_rect.x0 + native_width * scale, center_y + height / 2.0)
     return _center_rect_with_size(container_rect, native_width * scale, native_height * scale)
 
@@ -3125,60 +3244,100 @@ def _apply_chart_replacements_to_page(page: fitz.Page, replacements: list[ChartR
     page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
     shared_side_scale = _shared_side_legend_scale(replacements)
     for replacement in replacements:
+        top_align = _is_netqui_cartesian_replacement(replacement.kind)
+        plot_placement_rect = _top_aligned_svg_rect(replacement.rect, replacement.asset_path) if top_align else replacement.rect
         _place_svg_as_vector(
             page,
             replacement.rect,
             replacement.asset_path,
-            top_align=_is_netqui_cartesian_replacement(replacement.kind),
+            top_align=top_align,
         )
         if replacement.legend_rect is not None and replacement.legend_asset_path is not None:
             legend_scale = None if _is_polar_radiation_replacement(replacement.kind) else shared_side_scale
-            _place_svg_as_vector(page, _legend_target_rect(replacement, legend_scale), replacement.legend_asset_path)
+            _place_svg_as_vector(page, _legend_target_rect(replacement, legend_scale, plot_placement_rect), replacement.legend_asset_path)
 
 
-def _netqui_title_font_name() -> str:
-    return "MyriadPro-Semibold" if MYRIAD_FONT_FILES["MyriadPro-Semibold"].exists() else "helv"
-
-
-def _bold_netqui_chart_section_titles(
+def _redraw_netqui_chart_section_titles(
     page: fitz.Page,
+    draw_spans: dict[str, TextSpan],
     *,
     registered_fonts: set[str],
+    font_buffer: bytes | None,
 ) -> None:
-    spans = [span for span in _extract_page_spans(page) if _normalized_span_text(span.text) in NETQUI_CHART_SECTION_TITLES]
-    if not spans:
+    if not draw_spans:
         return
+
+    spans: list[TextSpan] = []
+    for span in _extract_page_spans(page):
+        normalized = _normalized_span_text(span.text)
+        if normalized in NETQUI_CHART_SECTION_TITLES:
+            spans.append(span)
+            continue
+        if span.bbox.x0 <= 70.0 and any(title.startswith(normalized) for title in NETQUI_CHART_SECTION_TITLES):
+            spans.append(span)
 
     for span in spans:
         page.add_redact_annot(_expand_rect(fitz.Rect(span.bbox), padding=1.0), fill=(1.0, 1.0, 1.0))
-    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+    if spans:
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
-    for span in spans:
-        text = _normalized_span_text(span.text)
-        font_name = _netqui_title_font_name()
-        pdf_font_name, fontfile, _font_path = _register_pdf_font(page, font_name, registered_fonts, required_text=text)
+    for text, draw_span in draw_spans.items():
+        if NETQUI_HEADING_FONT_FILE.exists():
+            page.insert_font(fontname=NETQUI_HEADING_FONT, fontfile=str(NETQUI_HEADING_FONT_FILE))
+            registered_fonts.add(NETQUI_HEADING_FONT)
+            pdf_font_name = NETQUI_HEADING_FONT
+            fontfile = str(NETQUI_HEADING_FONT_FILE)
+        elif font_buffer:
+            page.insert_font(fontname=NETQUI_HEADING_FONT, fontbuffer=font_buffer)
+            registered_fonts.add(NETQUI_HEADING_FONT)
+            pdf_font_name = NETQUI_HEADING_FONT
+            fontfile = None
+        else:
+            pdf_font_name, fontfile, _font_path = _register_pdf_font(page, "MyriadPro-Semibold", registered_fonts, required_text=text)
         page.insert_text(
-            span.origin,
+            draw_span.origin,
             text,
-            fontsize=span.size,
+            fontsize=draw_span.size,
             fontname=pdf_font_name,
             fontfile=fontfile,
-            color=_int_color_to_rgb(span.color),
+            color=_int_color_to_rgb(draw_span.color),
         )
 
 
-def _bold_netqui_chart_titles(
-    doc: fitz.Document,
+def _compact_netqui_chart_sections(
+    page: fitz.Page,
     adapter: DatasheetTemplateAdapter | None,
-    *,
-    registered_fonts: set[str],
-) -> None:
-    if adapter is None or not adapter.key.startswith("netqui"):
-        return
-    for page in doc:
-        page_text = page.get_text("text").upper()
-        if "ANTENNA GAIN" in page_text and "ANTENNA BEAMWIDTH" in page_text:
-            _bold_netqui_chart_section_titles(page, registered_fonts=registered_fonts)
+    ordered_slots: list[ChartSlot],
+    output: Path,
+    extract_workbook: Path,
+    artifact_manifest: dict[str, object] | None,
+) -> dict[str, TextSpan]:
+    if adapter is None or not adapter.key.startswith("netqui") or adapter.manifest is None or adapter.manifest.chart_layout is None:
+        return {}
+    page_text = page.get_text("text").upper()
+    if "ANTENNA GAIN" not in page_text or "ANTENNA BEAMWIDTH" not in page_text:
+        return {}
+    spans = _extract_page_spans(page)
+    shifted = _netqui_shifted_heading_spans(
+        page,
+        ordered_slots,
+        spans,
+        adapter.manifest.chart_layout,
+        output,
+        extract_workbook,
+        artifact_manifest,
+    )
+    return {
+        title: shifted.get(title, span)
+        for title in NETQUI_CHART_SECTION_TITLES
+        if (span := _netqui_heading_span(spans, title)) is not None
+    }
+
+
+def _netqui_spans_with_compacted_headings(spans: list[TextSpan], draw_spans: dict[str, TextSpan]) -> list[TextSpan]:
+    if not draw_spans:
+        return spans
+    return [draw_spans.get(_normalized_span_text(span.text), span) for span in spans]
 
 
 def _netqui_six_radiation_slots(page: fitz.Page, base_slots: list[ChartSlot]) -> list[fitz.Rect]:
@@ -3554,6 +3713,8 @@ def _replace_netqui_1pol_placeholder_chart_images(
     *,
     artifact_manifest: dict[str, object] | None = None,
     selected_radiation_frequencies: list[float] | None = None,
+    registered_fonts: set[str] | None = None,
+    netqui_heading_font_buffer: bytes | None = None,
 ) -> bool:
     if doc.page_count < 2:
         return False
@@ -3609,6 +3770,8 @@ def _replace_chart_images(
     artifact_manifest: dict[str, object] | None = None,
     adapter: DatasheetTemplateAdapter | None = None,
     selected_radiation_frequencies: list[float] | None = None,
+    registered_fonts: set[str] | None = None,
+    netqui_heading_font_buffer: bytes | None = None,
 ) -> None:
     if doc.page_count < 2:
         return
@@ -3619,6 +3782,8 @@ def _replace_chart_images(
             extract_workbook,
             artifact_manifest=artifact_manifest,
             selected_radiation_frequencies=selected_radiation_frequencies,
+            registered_fonts=registered_fonts,
+            netqui_heading_font_buffer=netqui_heading_font_buffer,
         ):
             raise ValueError("Netqui 1Pol placeholder template does not contain the expected chart image slots.")
         return
@@ -3692,14 +3857,32 @@ def _replace_chart_images(
                 _append_rfe_radiation_pages(doc, int(page_index or 1), base_slots, remaining_pairs, artifact_manifest)
             return
 
+    ordered_slots_for_compaction = sorted(_collect_chart_slots(page), key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
+    draw_spans = _compact_netqui_chart_sections(
+        page,
+        adapter,
+        ordered_slots_for_compaction,
+        output,
+        extract_workbook,
+        artifact_manifest,
+    )
+    spans_override = _netqui_spans_with_compacted_headings(_extract_page_spans(page), draw_spans)
     replacements = _build_chart_replacements(
         page,
         output,
         extract_workbook,
         artifact_manifest=artifact_manifest,
         adapter=adapter,
+        spans_override=spans_override,
     )
     _apply_chart_replacements_to_page(page, replacements)
+    if draw_spans:
+        _redraw_netqui_chart_section_titles(
+            page,
+            draw_spans,
+            registered_fonts=registered_fonts if registered_fonts is not None else set(),
+            font_buffer=netqui_heading_font_buffer,
+        )
 
 
 def build_datasheet_pdf(
@@ -3813,8 +3996,9 @@ def build_datasheet_pdf(
             artifact_manifest=model.artifact_manifest,
             adapter=adapter,
             selected_radiation_frequencies=_normalize_selected_radiation_frequencies(radiation_frequencies_ghz),
+            registered_fonts=registered_fonts,
+            netqui_heading_font_buffer=_font_buffer_for_display_font(doc, NETQUI_HEADING_FONT),
         )
-        _bold_netqui_chart_titles(doc, adapter, registered_fonts=registered_fonts)
         _update_footer_dates(doc, now, registered_fonts=registered_fonts)
         doc.set_metadata(output_metadata)
         if hasattr(doc, "set_xml_metadata"):
