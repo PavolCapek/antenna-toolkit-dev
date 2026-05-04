@@ -49,6 +49,7 @@ class PipelineCommandTests(unittest.TestCase):
             polar_elevation_line_2_style="dashed",
             cartesian_figure_width=9.25,
             cartesian_figure_height=3.75,
+            polar_figure_size=7.5,
             shared_fmin=0.3,
             shared_fmax=3.0,
             shared_xlog=True,
@@ -66,6 +67,7 @@ class PipelineCommandTests(unittest.TestCase):
 
         self.assertEqual(command[command.index("--cartesian-figure-width") + 1], "9.25")
         self.assertEqual(command[command.index("--cartesian-figure-height") + 1], "3.75")
+        self.assertEqual(command[command.index("--polar-figure-size") + 1], "7.5")
         self.assertEqual(command[command.index("--polar-line-colors") + 1], "#666666,#777777,#888888,#999999")
         self.assertEqual(command[command.index("--polar-line-styles") + 1], "dashed,solid,solid,dashed")
         self.assertEqual(command[command.index("--beamwidth-db-colors") + 1], "#333333,#444444,#555555")

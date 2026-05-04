@@ -62,8 +62,8 @@ APP_TITLE = "Antenna Toolkit Studio"
 STATE_FILE = resolve_state_file(".nova_qt_studio_state.json", THIS_DIR / ".nova_qt_studio_state.json")
 COMPACT_SCREEN_HEIGHT = 1200
 COMPACT_WINDOW_WIDTH = 1360
-PLOT_ASSET_STYLE_VERSION = 3
-DATASHEET_RENDER_VERSION = 3
+PLOT_ASSET_STYLE_VERSION = 4
+DATASHEET_RENDER_VERSION = 4
 DATASHEET_TEMPLATE_DIR = THIS_DIR / "Templates"
 LEGACY_DATASHEET_TEMPLATE_ALIASES = {
     "Datasheet.pdf": "Datasheet - RFE.pdf",
@@ -1772,6 +1772,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.cartesian_line_width = TrimmedDoubleSpinBox(); self.cartesian_line_width.setRange(0.1, 20.0); self.cartesian_line_width.setDecimals(2); self.cartesian_line_width.setSingleStep(0.1); self.cartesian_line_width.setValue(float(self.store.get("cartesian_line_width", self.store.get("plot_line_width", 2.0)))); self.cartesian_line_width.valueChanged.connect(lambda v: self.store.set("cartesian_line_width", float(v)))
         self.cartesian_figure_width = TrimmedDoubleSpinBox(); self.cartesian_figure_width.setRange(2.0, 24.0); self.cartesian_figure_width.setDecimals(2); self.cartesian_figure_width.setSingleStep(0.25); self.cartesian_figure_width.setValue(float(self.store.get("cartesian_figure_width", 12.0))); self.cartesian_figure_width.valueChanged.connect(lambda v: self.store.set("cartesian_figure_width", float(v)))
         self.cartesian_figure_height = TrimmedDoubleSpinBox(); self.cartesian_figure_height.setRange(1.0, 18.0); self.cartesian_figure_height.setDecimals(2); self.cartesian_figure_height.setSingleStep(0.25); self.cartesian_figure_height.setValue(float(self.store.get("cartesian_figure_height", 5.04))); self.cartesian_figure_height.valueChanged.connect(lambda v: self.store.set("cartesian_figure_height", float(v)))
+        self.polar_figure_size = TrimmedDoubleSpinBox(); self.polar_figure_size.setRange(2.0, 24.0); self.polar_figure_size.setDecimals(2); self.polar_figure_size.setSingleStep(0.25); self.polar_figure_size.setValue(float(self.store.get("polar_figure_size", 9.0))); self.polar_figure_size.valueChanged.connect(lambda v: self.store.set("polar_figure_size", float(v)))
         self.polar_line_width = TrimmedDoubleSpinBox(); self.polar_line_width.setRange(0.1, 20.0); self.polar_line_width.setDecimals(2); self.polar_line_width.setSingleStep(0.1); self.polar_line_width.setValue(float(self.store.get("polar_line_width", self.store.get("plot_line_width", 2.0)))); self.polar_line_width.valueChanged.connect(lambda v: self.store.set("polar_line_width", float(v)))
         self.cartesian_font_size = TrimmedDoubleSpinBox(); self.cartesian_font_size.setRange(1.0, 72.0); self.cartesian_font_size.setDecimals(1); self.cartesian_font_size.setSingleStep(0.5); self.cartesian_font_size.setValue(float(self.store.get("cartesian_font_size", self.store.get("plot_font_size", 10.5)))); self.cartesian_font_size.valueChanged.connect(lambda v: self.store.set("cartesian_font_size", float(v)))
         self.polar_font_size = TrimmedDoubleSpinBox(); self.polar_font_size.setRange(1.0, 72.0); self.polar_font_size.setDecimals(1); self.polar_font_size.setSingleStep(0.5); self.polar_font_size.setValue(float(self.store.get("polar_font_size", self.store.get("plot_font_size", 10.5)))); self.polar_font_size.valueChanged.connect(lambda v: self.store.set("polar_font_size", float(v)))
@@ -1841,6 +1842,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         polar_metrics_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         add_form_row(polar_metrics_form, "Grid width", StepperField(self.polar_grid_line_width), "Line width used by polar grid lines and tick marks.")
         add_form_row(polar_metrics_form, "Line width", StepperField(self.polar_line_width), "Trace thickness used by the polar plots.")
+        add_form_row(polar_metrics_form, "Figure size", StepperField(self.polar_figure_size), "Size used when rendering square polar SVG plots.")
         add_form_row(polar_metrics_form, "Font size", StepperField(self.polar_font_size), "Base font size used by polar plot labels and tick labels.")
         add_form_row(polar_metrics_form, "Legend font", StepperField(self.polar_legend_font_size), "Font size used by exported polar legends.")
         add_form_row(polar_metrics_form, "Polar rings", self.rings, "Comma-separated dB ring values used on the polar plots.")
@@ -2101,6 +2103,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.cartesian_line_width.setValue(2.0)
         self.cartesian_figure_width.setValue(12.0)
         self.cartesian_figure_height.setValue(5.04)
+        self.polar_figure_size.setValue(9.0)
         self.polar_line_width.setValue(2.0)
         self.cartesian_font_size.setValue(10.5)
         self.polar_font_size.setValue(10.5)
@@ -2700,6 +2703,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self.cartesian_line_width.valueChanged,
             self.cartesian_figure_width.valueChanged,
             self.cartesian_figure_height.valueChanged,
+            self.polar_figure_size.valueChanged,
             self.polar_line_width.valueChanged,
             self.cartesian_font_size.valueChanged,
             self.polar_font_size.valueChanged,
@@ -4355,6 +4359,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "cartesian_line_width": float(self.cartesian_line_width.value()),
             "cartesian_figure_width": float(self.cartesian_figure_width.value()),
             "cartesian_figure_height": float(self.cartesian_figure_height.value()),
+            "polar_figure_size": float(self.polar_figure_size.value()),
             "polar_line_width": float(self.polar_line_width.value()),
             "cartesian_font_size": float(self.cartesian_font_size.value()),
             "polar_font_size": float(self.polar_font_size.value()),
@@ -4434,6 +4439,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if cartesian_line_width is not None: self.cartesian_line_width.setValue(float(cartesian_line_width))
         if "cartesian_figure_width" in values: self.cartesian_figure_width.setValue(float(values["cartesian_figure_width"]))
         if "cartesian_figure_height" in values: self.cartesian_figure_height.setValue(float(values["cartesian_figure_height"]))
+        if "polar_figure_size" in values: self.polar_figure_size.setValue(float(values["polar_figure_size"]))
         polar_line_width = value_or_legacy("polar_line_width", "plot_line_width")
         if polar_line_width is not None: self.polar_line_width.setValue(float(polar_line_width))
         cartesian_font_size = value_or_legacy("cartesian_font_size", "plot_font_size")

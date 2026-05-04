@@ -82,6 +82,8 @@ def build_plot_command(
         str(settings.cartesian_figure_width),
         "--cartesian-figure-height",
         str(settings.cartesian_figure_height),
+        "--polar-figure-size",
+        str(settings.polar_figure_size),
         "--polar-line-width",
         str(settings.polar_line_width),
         "--cartesian-font-size",

@@ -10,7 +10,7 @@ import numpy as np
 
 matplotlib.use("Agg")
 
-from plot import plot_xy as plot_workbook_xy
+from plot import plot_xy as plot_workbook_xy, save_polar
 from plot_vswr import plot_xy as plot_vswr_xy
 
 
@@ -79,6 +79,26 @@ class CartesianPlotDimensionTests(unittest.TestCase):
             )
 
             self.assertGreater(self._export_ratio(out_path), 0.80)
+
+    def test_polar_plot_uses_custom_square_figure_size(self) -> None:
+        datasets = [
+            {
+                "angles": np.array([0, 90, 180, 270]),
+                "series": np.array([0.0, -3.0, -6.0, -3.0]),
+                "label": "Azimuth",
+                "linestyle": "-",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            small_path = Path(tmp) / "polar-small.svg"
+            large_path = Path(tmp) / "polar-large.svg"
+            save_polar(small_path, datasets, "Polar", smooth_window=1, figure_size=4.0, export_legend=False)
+            save_polar(large_path, datasets, "Polar", smooth_window=1, figure_size=8.0, export_legend=False)
+
+            with fitz.open(small_path) as small_doc, fitz.open(large_path) as large_doc:
+                self.assertGreater(large_doc[0].rect.width, small_doc[0].rect.width)
+                self.assertGreater(large_doc[0].rect.height, small_doc[0].rect.height)
+                self.assertAlmostEqual(large_doc[0].rect.width / large_doc[0].rect.height, 1.0, delta=0.08)
 
 
 if __name__ == "__main__":

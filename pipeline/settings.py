@@ -77,6 +77,7 @@ class PresetSettings:
     cartesian_line_width: float = 2.0
     cartesian_figure_width: float = 12.0
     cartesian_figure_height: float = 5.04
+    polar_figure_size: float = 9.0
     polar_line_width: float = 2.0
     cartesian_font_size: float = 10.5
     polar_font_size: float = 10.5
@@ -137,6 +138,7 @@ class PresetSettings:
             cartesian_line_width=_legacy_float(source, "cartesian_line_width", "plot_line_width", default_map["cartesian_line_width"]),
             cartesian_figure_width=_float_value(source, "cartesian_figure_width", defaults.cartesian_figure_width),
             cartesian_figure_height=_float_value(source, "cartesian_figure_height", defaults.cartesian_figure_height),
+            polar_figure_size=_float_value(source, "polar_figure_size", defaults.polar_figure_size),
             polar_line_width=_legacy_float(source, "polar_line_width", "plot_line_width", default_map["polar_line_width"]),
             cartesian_font_size=_legacy_float(source, "cartesian_font_size", "plot_font_size", default_map["cartesian_font_size"]),
             polar_font_size=_legacy_float(source, "polar_font_size", "plot_font_size", default_map["polar_font_size"]),

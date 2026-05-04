@@ -31,6 +31,7 @@ from datasheet_pdf import (
     _layout_split_chart_rects,
     _find_beamwidth_plane_asset,
     _normalize_plot_widths,
+    _polar_svg_rect,
     _redraw_template_table_separators,
     _separate_plot_and_legend_rects,
     _shared_side_legend_scale,
@@ -1724,6 +1725,30 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertAlmostEqual(square_rect.height, target.height, delta=0.1)
         self.assertGreater(square_rect.x0, target.x0)
         self.assertLess(square_rect.x1, target.x1)
+
+    def test_polar_svg_rect_reflects_custom_figure_size(self) -> None:
+        default_svg = self.root / "default-polar.svg"
+        smaller_svg = self.root / "smaller-polar.svg"
+        default_svg.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="648pt" height="648pt" viewBox="0 0 648 648">'
+            '<rect x="0" y="0" width="648" height="648" fill="#2266aa"/></svg>',
+            encoding="utf-8",
+        )
+        smaller_svg.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="432pt" height="432pt" viewBox="0 0 432 432">'
+            '<rect x="0" y="0" width="432" height="432" fill="#2266aa"/></svg>',
+            encoding="utf-8",
+        )
+        target = fitz.Rect(24.0, 460.0, 164.0, 600.0)
+
+        default_rect = _polar_svg_rect(target, default_svg)
+        smaller_rect = _polar_svg_rect(target, smaller_svg)
+
+        self.assertAlmostEqual(default_rect.width, target.width, delta=0.1)
+        self.assertLess(smaller_rect.width, default_rect.width)
+        self.assertAlmostEqual(smaller_rect.width, smaller_rect.height, delta=0.1)
+        self.assertGreater(smaller_rect.x0, target.x0)
+        self.assertGreater(smaller_rect.y0, target.y0)
 
     def test_gain_and_beamwidth_side_legends_share_the_same_scale(self) -> None:
         with fitz.open(self.template_pdf) as doc:

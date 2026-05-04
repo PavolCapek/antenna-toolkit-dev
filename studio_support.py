@@ -109,6 +109,7 @@ PRESET_KEYS = [
     "cartesian_line_width",
     "cartesian_figure_width",
     "cartesian_figure_height",
+    "polar_figure_size",
     "polar_line_width",
     "cartesian_font_size",
     "polar_font_size",

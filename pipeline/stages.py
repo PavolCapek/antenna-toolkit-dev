@@ -31,6 +31,7 @@ STAGE_SETTING_KEYS: dict[str, tuple[str, ...]] = {
         "polar_line_width",
         "cartesian_figure_width",
         "cartesian_figure_height",
+        "polar_figure_size",
         "cartesian_font_size",
         "polar_font_size",
         "cartesian_legend_font_size",

@@ -73,6 +73,7 @@ from plotting.config import (
     LEGEND_EXPORT_PAD_TOP_PX,
     LEGEND_EXPORT_PAD_X_PX,
     LEGEND_FILE_SUFFIX,
+    POLAR_FIGURE_SIZE_IN,
     STACKED_LEGEND_COLUMN_SEP,
     STACKED_LEGEND_ENTRY_SEP,
     STACKED_LEGEND_ROW_SEP,
@@ -592,12 +593,13 @@ def save_polar(out_path, datasets, title,
                legend_font_size: float = DEFAULT_LEGEND_FONT_SIZE,
                grid_line_width: float = DEFAULT_GRID_LINE_WIDTH,
                line_width: float = DEFAULT_PLOT_LINE_WIDTH,
+               figure_size: float = POLAR_FIGURE_SIZE_IN,
                legend_out_path: str | Path | None = None,
                export_legend: bool = True):
     """Draw one polar axes, possibly with multiple datasets.
     datasets: list of dicts {angles, series, label, linestyle}
     """
-    fig = plt.figure(figsize=(9, 10), dpi=120)
+    fig = plt.figure(figsize=(figure_size, figure_size), dpi=120)
     ax = plt.subplot(111, polar=True)
 
     ax.set_facecolor("white")
@@ -713,6 +715,7 @@ def main():
     parser.add_argument("--cartesian-line-width", type=float, default=None, help="Line width used for cartesian plot traces and legends.")
     parser.add_argument("--cartesian-figure-width", type=float, default=None, help="Figure width in inches for cartesian plots.")
     parser.add_argument("--cartesian-figure-height", type=float, default=None, help="Figure height in inches for cartesian plots.")
+    parser.add_argument("--polar-figure-size", type=float, default=None, help="Figure size in inches for square polar plots.")
     parser.add_argument("--polar-line-width", type=float, default=None, help="Line width used for polar plot traces and legends.")
     parser.add_argument("--font-size", type=float, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--cartesian-font-size", type=float, default=None, help="Base font size used for cartesian plot labels and tick labels.")
@@ -781,6 +784,7 @@ def main():
     cartesian_line_width = float(args.cartesian_line_width if args.cartesian_line_width is not None else (args.line_width if args.line_width is not None else DEFAULT_PLOT_LINE_WIDTH))
     cartesian_figure_width = float(args.cartesian_figure_width if args.cartesian_figure_width is not None else CARTESIAN_FIGURE_WIDTH_IN)
     cartesian_figure_height = float(args.cartesian_figure_height if args.cartesian_figure_height is not None else CARTESIAN_FIGURE_HEIGHT_IN)
+    polar_figure_size = float(args.polar_figure_size if args.polar_figure_size is not None else POLAR_FIGURE_SIZE_IN)
     polar_line_width = float(args.polar_line_width if args.polar_line_width is not None else (args.line_width if args.line_width is not None else DEFAULT_PLOT_LINE_WIDTH))
     cartesian_font_size = float(args.cartesian_font_size if args.cartesian_font_size is not None else (args.font_size if args.font_size is not None else DEFAULT_PLOT_FONT_SIZE))
     polar_font_size = float(args.polar_font_size if args.polar_font_size is not None else (args.font_size if args.font_size is not None else DEFAULT_PLOT_FONT_SIZE))
@@ -1327,6 +1331,7 @@ def main():
                 legend_font_size=polar_legend_font_size,
                 grid_line_width=polar_grid_line_width,
                 line_width=polar_line_width,
+                figure_size=polar_figure_size,
             )
             print(out_path_c)
             if out_path_c_legend:
@@ -1361,6 +1366,7 @@ def main():
                 legend_font_size=polar_legend_font_size,
                 grid_line_width=polar_grid_line_width,
                 line_width=polar_line_width,
+                figure_size=polar_figure_size,
             )
             print(out_path_eh)
             if out_path_eh_legend:
@@ -1395,6 +1401,7 @@ def main():
                 legend_font_size=polar_legend_font_size,
                 grid_line_width=polar_grid_line_width,
                 line_width=polar_line_width,
+                figure_size=polar_figure_size,
             )
             print(out_path_az)
             if out_path_az_legend:
@@ -1429,6 +1436,7 @@ def main():
                 legend_font_size=polar_legend_font_size,
                 grid_line_width=polar_grid_line_width,
                 line_width=polar_line_width,
+                figure_size=polar_figure_size,
             )
             print(out_path_el)
             if out_path_el_legend:
@@ -1464,6 +1472,7 @@ def main():
                 legend_font_size=polar_legend_font_size,
                 grid_line_width=polar_grid_line_width,
                 line_width=polar_line_width,
+                figure_size=polar_figure_size,
             )
             print(out_path_plane)
             if out_path_plane_legend:

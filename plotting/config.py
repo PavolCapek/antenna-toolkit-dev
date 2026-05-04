@@ -20,6 +20,7 @@ class PlotVisualStyle:
     legend_export_pad_bottom_px: float = 12.0
     cartesian_figure_width_in: float = 12.0
     cartesian_figure_height_in: float = 5.04
+    polar_figure_size_in: float = 9.0
 
 
 DEFAULT_VISUAL_STYLE = PlotVisualStyle()
@@ -38,3 +39,4 @@ LEGEND_EXPORT_PAD_TOP_PX = DEFAULT_VISUAL_STYLE.legend_export_pad_top_px
 LEGEND_EXPORT_PAD_BOTTOM_PX = DEFAULT_VISUAL_STYLE.legend_export_pad_bottom_px
 CARTESIAN_FIGURE_WIDTH_IN = DEFAULT_VISUAL_STYLE.cartesian_figure_width_in
 CARTESIAN_FIGURE_HEIGHT_IN = DEFAULT_VISUAL_STYLE.cartesian_figure_height_in
+POLAR_FIGURE_SIZE_IN = DEFAULT_VISUAL_STYLE.polar_figure_size_in
