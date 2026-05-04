@@ -973,7 +973,7 @@ class StudioDirtyStateTests(unittest.TestCase):
     def test_pipeline_buttons_include_recovery_action(self) -> None:
         labels = [button.text() for button in self.window.hero_actions._buttons]
 
-        self.assertEqual(labels, ["Run Full Pipeline", "Run Needed Only", "Clear Generated Files"])
+        self.assertEqual(labels, ["Run Full Pipeline", "Run Needed Only", "Validate Project", "Clear Generated Files"])
         self.assertFalse(self.window.btn_run_needed.isVisible())
 
     def test_pipeline_stage_list_gates_actions_by_output_state(self) -> None:
