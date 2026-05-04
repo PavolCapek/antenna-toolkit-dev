@@ -49,6 +49,7 @@ from datasheet.layouts.netqui_1pol import (
     top_chart_rects as netqui_top_chart_rects,
 )
 from datasheet.layouts.rfe import order_chart_slots_first_two_then_x
+from plotting.config import CARTESIAN_FIGURE_HEIGHT_IN, CARTESIAN_FIGURE_WIDTH_IN
 
 fitz.TOOLS.mupdf_display_errors(False)
 fitz.TOOLS.mupdf_display_warnings(False)
@@ -3152,6 +3153,16 @@ def _svg_drawing_size(svg_path_str: str) -> tuple[float, float]:
     return float(drawing.width), float(drawing.height)
 
 
+@lru_cache(maxsize=None)
+def _svg_size_uses_points(svg_path_str: str) -> bool:
+    try:
+        text = Path(svg_path_str).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    match = re.search(r"<svg\b[^>]*\bwidth=[\"'][^\"']*pt[\"'][^>]*\bheight=[\"'][^\"']*pt[\"']", text, re.IGNORECASE)
+    return match is not None
+
+
 def _center_rect_with_size(container_rect: fitz.Rect, width: float, height: float) -> fitz.Rect:
     center_x = (container_rect.x0 + container_rect.x1) / 2.0
     center_y = (container_rect.y0 + container_rect.y1) / 2.0
@@ -3214,7 +3225,7 @@ def _legend_target_rect(
     return _center_rect_with_size(container_rect, native_width * scale, native_height * scale)
 
 
-def _top_aligned_svg_rect(target_rect: fitz.Rect, svg_path: Path) -> fitz.Rect:
+def _fitted_svg_rect(target_rect: fitz.Rect, svg_path: Path, *, top_align: bool = False) -> fitz.Rect:
     native_width, native_height = _svg_drawing_size(str(svg_path.resolve()))
     if native_width <= 0.0 or native_height <= 0.0:
         return target_rect
@@ -3222,18 +3233,52 @@ def _top_aligned_svg_rect(target_rect: fitz.Rect, svg_path: Path) -> fitz.Rect:
     width = native_width * scale
     height = native_height * scale
     x0 = target_rect.x0 + max(0.0, (target_rect.width - width) / 2.0)
-    return fitz.Rect(x0, target_rect.y0, x0 + width, target_rect.y0 + height)
+    y0 = target_rect.y0 if top_align else target_rect.y0 + max(0.0, (target_rect.height - height) / 2.0)
+    return fitz.Rect(x0, y0, x0 + width, y0 + height)
+
+
+def _top_aligned_svg_rect(target_rect: fitz.Rect, svg_path: Path) -> fitz.Rect:
+    return _fitted_svg_rect(target_rect, svg_path, top_align=True)
+
+
+def _cartesian_svg_rect(target_rect: fitz.Rect, svg_path: Path, *, top_align: bool = False) -> fitz.Rect:
+    resolved_path = str(svg_path.resolve())
+    if not _svg_size_uses_points(resolved_path):
+        return _fitted_svg_rect(target_rect, svg_path, top_align=top_align)
+
+    native_width, native_height = _svg_drawing_size(resolved_path)
+    if native_width <= 0.0 or native_height <= 0.0:
+        return target_rect
+
+    default_width = CARTESIAN_FIGURE_WIDTH_IN * 72.0
+    default_height = CARTESIAN_FIGURE_HEIGHT_IN * 72.0
+    if default_width <= 0.0 or default_height <= 0.0:
+        return _fitted_svg_rect(target_rect, svg_path, top_align=top_align)
+
+    default_scale = min(target_rect.width / default_width, target_rect.height / default_height)
+    desired_width = native_width * default_scale
+    desired_height = native_height * default_scale
+    limit_scale = min(1.0, target_rect.width / desired_width, target_rect.height / desired_height)
+    width = desired_width * limit_scale
+    height = desired_height * limit_scale
+    x0 = target_rect.x0 + max(0.0, (target_rect.width - width) / 2.0)
+    y0 = target_rect.y0 if top_align else target_rect.y0 + max(0.0, (target_rect.height - height) / 2.0)
+    return fitz.Rect(x0, y0, x0 + width, y0 + height)
 
 
 def _place_svg_as_vector(page: fitz.Page, target_rect: fitz.Rect, svg_path: Path, *, top_align: bool = False) -> None:
     pdf_bytes = _svg_to_pdf_bytes(svg_path)
-    placement_rect = _top_aligned_svg_rect(target_rect, svg_path) if top_align else target_rect
+    placement_rect = _fitted_svg_rect(target_rect, svg_path, top_align=top_align)
     with fitz.open("pdf", pdf_bytes) as pdf_doc:
         page.show_pdf_page(placement_rect, pdf_doc, 0, keep_proportion=True, overlay=True)
 
 
 def _is_netqui_cartesian_replacement(kind: str) -> bool:
     return kind in {"gain", "vswr", "beamwidth_e_plane", "beamwidth_h_plane"}
+
+
+def _is_cartesian_replacement(kind: str) -> bool:
+    return kind in {"gain", "vswr", "beamwidth", "beam_efficiency", "beamwidth_e_plane", "beamwidth_h_plane"}
 
 
 def _apply_chart_replacements_to_page(page: fitz.Page, replacements: list[ChartReplacement]) -> None:
@@ -3245,13 +3290,11 @@ def _apply_chart_replacements_to_page(page: fitz.Page, replacements: list[ChartR
     shared_side_scale = _shared_side_legend_scale(replacements)
     for replacement in replacements:
         top_align = _is_netqui_cartesian_replacement(replacement.kind)
-        plot_placement_rect = _top_aligned_svg_rect(replacement.rect, replacement.asset_path) if top_align else replacement.rect
-        _place_svg_as_vector(
-            page,
-            replacement.rect,
-            replacement.asset_path,
-            top_align=top_align,
-        )
+        if _is_cartesian_replacement(replacement.kind):
+            plot_placement_rect = _cartesian_svg_rect(replacement.rect, replacement.asset_path, top_align=top_align)
+        else:
+            plot_placement_rect = _fitted_svg_rect(replacement.rect, replacement.asset_path, top_align=top_align)
+        _place_svg_as_vector(page, plot_placement_rect, replacement.asset_path)
         if replacement.legend_rect is not None and replacement.legend_asset_path is not None:
             legend_scale = None if _is_polar_radiation_replacement(replacement.kind) else shared_side_scale
             _place_svg_as_vector(page, _legend_target_rect(replacement, legend_scale, plot_placement_rect), replacement.legend_asset_path)

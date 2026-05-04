@@ -22,6 +22,7 @@ from datasheet_pdf import (
     _build_netqui_1pol_placeholder_chart_replacements,
     _build_netqui_1pol_selected_chart_replacements,
     _build_rfe_selected_chart_replacements,
+    _cartesian_svg_rect,
     _collect_chart_slots,
     _find_combined_polar_series_assets,
     _find_combined_polar_triplet_assets,
@@ -1700,6 +1701,29 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(by_kind["beamwidth"].rect.x0, 12.0)
         self.assertLessEqual(by_kind["gain"].rect.x1, replacements[0].legend_rect.x0)
         self.assertLessEqual(by_kind["beamwidth"].rect.x1, replacements[1].legend_rect.x0)
+
+    def test_cartesian_svg_rect_reflects_custom_figure_size(self) -> None:
+        default_svg = self.root / "default-cartesian.svg"
+        square_svg = self.root / "square-cartesian.svg"
+        default_svg.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="864pt" height="362.88pt" viewBox="0 0 864 362.88">'
+            '<rect x="0" y="0" width="864" height="362.88" fill="#2266aa"/></svg>',
+            encoding="utf-8",
+        )
+        square_svg.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="432pt" height="432pt" viewBox="0 0 432 432">'
+            '<rect x="0" y="0" width="432" height="432" fill="#2266aa"/></svg>',
+            encoding="utf-8",
+        )
+        target = fitz.Rect(24.0, 120.0, 324.0, 240.0)
+
+        default_rect = _cartesian_svg_rect(target, default_svg)
+        square_rect = _cartesian_svg_rect(target, square_svg)
+
+        self.assertLess(square_rect.width, default_rect.width)
+        self.assertAlmostEqual(square_rect.height, target.height, delta=0.1)
+        self.assertGreater(square_rect.x0, target.x0)
+        self.assertLess(square_rect.x1, target.x1)
 
     def test_gain_and_beamwidth_side_legends_share_the_same_scale(self) -> None:
         with fitz.open(self.template_pdf) as doc:
