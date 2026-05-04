@@ -3241,7 +3241,48 @@ def _top_aligned_svg_rect(target_rect: fitz.Rect, svg_path: Path) -> fitz.Rect:
     return _fitted_svg_rect(target_rect, svg_path, top_align=True)
 
 
-def _cartesian_svg_rect(target_rect: fitz.Rect, svg_path: Path, *, top_align: bool = False) -> fitz.Rect:
+def _figure_size_rect(
+    target_rect: fitz.Rect,
+    figure_width: float,
+    figure_height: float,
+    default_width: float,
+    default_height: float,
+    *,
+    top_align: bool = False,
+) -> fitz.Rect:
+    if figure_width <= 0.0 or figure_height <= 0.0 or default_width <= 0.0 or default_height <= 0.0:
+        return target_rect
+    default_scale = min(target_rect.width / default_width, target_rect.height / default_height)
+    desired_width = figure_width * default_scale
+    desired_height = figure_height * default_scale
+    limit_scale = min(1.0, target_rect.width / desired_width, target_rect.height / desired_height)
+    width = desired_width * limit_scale
+    height = desired_height * limit_scale
+    x0 = target_rect.x0 + max(0.0, (target_rect.width - width) / 2.0)
+    y0 = target_rect.y0 if top_align else target_rect.y0 + max(0.0, (target_rect.height - height) / 2.0)
+    return fitz.Rect(x0, y0, x0 + width, y0 + height)
+
+
+def _cartesian_svg_rect(
+    target_rect: fitz.Rect,
+    svg_path: Path,
+    *,
+    top_align: bool = False,
+    figure_width: float | None = None,
+    figure_height: float | None = None,
+) -> fitz.Rect:
+    default_width = CARTESIAN_FIGURE_WIDTH_IN * 72.0
+    default_height = CARTESIAN_FIGURE_HEIGHT_IN * 72.0
+    if figure_width is not None and figure_height is not None:
+        return _figure_size_rect(
+            target_rect,
+            float(figure_width) * 72.0,
+            float(figure_height) * 72.0,
+            default_width,
+            default_height,
+            top_align=top_align,
+        )
+
     resolved_path = str(svg_path.resolve())
     if not _svg_size_uses_points(resolved_path):
         return _fitted_svg_rect(target_rect, svg_path, top_align=top_align)
@@ -3250,8 +3291,6 @@ def _cartesian_svg_rect(target_rect: fitz.Rect, svg_path: Path, *, top_align: bo
     if native_width <= 0.0 or native_height <= 0.0:
         return target_rect
 
-    default_width = CARTESIAN_FIGURE_WIDTH_IN * 72.0
-    default_height = CARTESIAN_FIGURE_HEIGHT_IN * 72.0
     if default_width <= 0.0 or default_height <= 0.0:
         return _fitted_svg_rect(target_rect, svg_path, top_align=top_align)
 
@@ -3266,7 +3305,18 @@ def _cartesian_svg_rect(target_rect: fitz.Rect, svg_path: Path, *, top_align: bo
     return fitz.Rect(x0, y0, x0 + width, y0 + height)
 
 
-def _polar_svg_rect(target_rect: fitz.Rect, svg_path: Path, *, top_align: bool = False) -> fitz.Rect:
+def _polar_svg_rect(
+    target_rect: fitz.Rect,
+    svg_path: Path,
+    *,
+    top_align: bool = False,
+    figure_size: float | None = None,
+) -> fitz.Rect:
+    default_size = POLAR_FIGURE_SIZE_IN * 72.0
+    if figure_size is not None:
+        requested_size = float(figure_size) * 72.0
+        return _figure_size_rect(target_rect, requested_size, requested_size, default_size, default_size, top_align=top_align)
+
     resolved_path = str(svg_path.resolve())
     if not _svg_size_uses_points(resolved_path):
         return _fitted_svg_rect(target_rect, svg_path, top_align=top_align)
@@ -3275,7 +3325,6 @@ def _polar_svg_rect(target_rect: fitz.Rect, svg_path: Path, *, top_align: bool =
     if native_width <= 0.0 or native_height <= 0.0:
         return target_rect
 
-    default_size = POLAR_FIGURE_SIZE_IN * 72.0
     if default_size <= 0.0:
         return _fitted_svg_rect(target_rect, svg_path, top_align=top_align)
 
@@ -3290,11 +3339,18 @@ def _polar_svg_rect(target_rect: fitz.Rect, svg_path: Path, *, top_align: bool =
     return fitz.Rect(x0, y0, x0 + width, y0 + height)
 
 
-def _place_svg_as_vector(page: fitz.Page, target_rect: fitz.Rect, svg_path: Path, *, top_align: bool = False) -> None:
+def _place_svg_as_vector(
+    page: fitz.Page,
+    target_rect: fitz.Rect,
+    svg_path: Path,
+    *,
+    top_align: bool = False,
+    keep_proportion: bool = True,
+) -> None:
     pdf_bytes = _svg_to_pdf_bytes(svg_path)
-    placement_rect = _fitted_svg_rect(target_rect, svg_path, top_align=top_align)
+    placement_rect = _fitted_svg_rect(target_rect, svg_path, top_align=top_align) if keep_proportion else target_rect
     with fitz.open("pdf", pdf_bytes) as pdf_doc:
-        page.show_pdf_page(placement_rect, pdf_doc, 0, keep_proportion=True, overlay=True)
+        page.show_pdf_page(placement_rect, pdf_doc, 0, keep_proportion=keep_proportion, overlay=True)
 
 
 def _is_netqui_cartesian_replacement(kind: str) -> bool:
@@ -3314,7 +3370,14 @@ def _is_polar_replacement(kind: str) -> bool:
     )
 
 
-def _apply_chart_replacements_to_page(page: fitz.Page, replacements: list[ChartReplacement]) -> None:
+def _apply_chart_replacements_to_page(
+    page: fitz.Page,
+    replacements: list[ChartReplacement],
+    *,
+    cartesian_figure_width: float | None = None,
+    cartesian_figure_height: float | None = None,
+    polar_figure_size: float | None = None,
+) -> None:
     for replacement in replacements:
         page.add_redact_annot(replacement.erase_rect or replacement.rect, fill=(1.0, 1.0, 1.0))
         if replacement.legend_rect is not None:
@@ -3323,13 +3386,27 @@ def _apply_chart_replacements_to_page(page: fitz.Page, replacements: list[ChartR
     shared_side_scale = _shared_side_legend_scale(replacements)
     for replacement in replacements:
         top_align = _is_netqui_cartesian_replacement(replacement.kind)
+        enforce_plot_box = False
         if _is_cartesian_replacement(replacement.kind):
-            plot_placement_rect = _cartesian_svg_rect(replacement.rect, replacement.asset_path, top_align=top_align)
+            enforce_plot_box = cartesian_figure_width is not None and cartesian_figure_height is not None
+            plot_placement_rect = _cartesian_svg_rect(
+                replacement.rect,
+                replacement.asset_path,
+                top_align=top_align,
+                figure_width=cartesian_figure_width,
+                figure_height=cartesian_figure_height,
+            )
         elif _is_polar_replacement(replacement.kind):
-            plot_placement_rect = _polar_svg_rect(replacement.rect, replacement.asset_path, top_align=top_align)
+            enforce_plot_box = polar_figure_size is not None
+            plot_placement_rect = _polar_svg_rect(
+                replacement.rect,
+                replacement.asset_path,
+                top_align=top_align,
+                figure_size=polar_figure_size,
+            )
         else:
             plot_placement_rect = _fitted_svg_rect(replacement.rect, replacement.asset_path, top_align=top_align)
-        _place_svg_as_vector(page, plot_placement_rect, replacement.asset_path)
+        _place_svg_as_vector(page, plot_placement_rect, replacement.asset_path, keep_proportion=not enforce_plot_box)
         if replacement.legend_rect is not None and replacement.legend_asset_path is not None:
             legend_scale = None if _is_polar_radiation_replacement(replacement.kind) else shared_side_scale
             _place_svg_as_vector(page, _legend_target_rect(replacement, legend_scale, plot_placement_rect), replacement.legend_asset_path)
@@ -3528,6 +3605,8 @@ def _append_netqui_1pol_placeholder_radiation_page(
     base_slots: list[ChartSlot],
     radiation_assets: list[Path],
     artifact_manifest: dict[str, object] | None,
+    *,
+    polar_figure_size: float | None = None,
 ) -> None:
     if not radiation_assets:
         return
@@ -3563,7 +3642,7 @@ def _append_netqui_1pol_placeholder_radiation_page(
                 legend_scale_cap=NETQUI_POLAR_LEGEND_SCALE_CAP,
             )
         )
-    _apply_chart_replacements_to_page(page, replacements)
+    _apply_chart_replacements_to_page(page, replacements, polar_figure_size=polar_figure_size)
 
 
 def _append_netqui_radiation_pages(
@@ -3572,12 +3651,21 @@ def _append_netqui_radiation_pages(
     base_slots: list[ChartSlot],
     radiation_assets: list[Path],
     artifact_manifest: dict[str, object] | None,
+    *,
+    polar_figure_size: float | None = None,
 ) -> None:
     remaining = list(radiation_assets)
     insert_after = after_page_index
     while remaining:
         chunk, remaining = remaining[:3], remaining[3:]
-        _append_netqui_1pol_placeholder_radiation_page(doc, insert_after, base_slots, chunk, artifact_manifest)
+        _append_netqui_1pol_placeholder_radiation_page(
+            doc,
+            insert_after,
+            base_slots,
+            chunk,
+            artifact_manifest,
+            polar_figure_size=polar_figure_size,
+        )
         insert_after += 1
 
 
@@ -3740,6 +3828,8 @@ def _append_rfe_radiation_pages(
     base_slots: list[ChartSlot],
     remaining_pairs: list[tuple[Path, Path]],
     artifact_manifest: dict[str, object] | None,
+    *,
+    polar_figure_size: float | None = None,
 ) -> None:
     if len(base_slots) < 2:
         return
@@ -3779,7 +3869,7 @@ def _append_rfe_radiation_pages(
                         legend_scale_cap=NETQUI_POLAR_LEGEND_SCALE_CAP,
                     )
                 )
-        _apply_chart_replacements_to_page(page, replacements)
+        _apply_chart_replacements_to_page(page, replacements, polar_figure_size=polar_figure_size)
         remaining = remaining[len(slot_pairs):]
         insert_after += 1
 
@@ -3793,6 +3883,9 @@ def _replace_netqui_1pol_placeholder_chart_images(
     selected_radiation_frequencies: list[float] | None = None,
     registered_fonts: set[str] | None = None,
     netqui_heading_font_buffer: bytes | None = None,
+    cartesian_figure_width: float | None = None,
+    cartesian_figure_height: float | None = None,
+    polar_figure_size: float | None = None,
 ) -> bool:
     if doc.page_count < 2:
         return False
@@ -3809,7 +3902,13 @@ def _replace_netqui_1pol_placeholder_chart_images(
         artifact_manifest=artifact_manifest,
         selected_radiation_frequencies=selected_radiation_frequencies,
     )
-    _apply_chart_replacements_to_page(page, replacements)
+    _apply_chart_replacements_to_page(
+        page,
+        replacements,
+        cartesian_figure_width=cartesian_figure_width,
+        cartesian_figure_height=cartesian_figure_height,
+        polar_figure_size=polar_figure_size,
+    )
     radiation_count = sum(1 for replacement in replacements if replacement.kind.startswith("radiation_"))
     target_count = 6 if selected_radiation_frequencies is None else len(selected_radiation_frequencies)
     if radiation_count < target_count:
@@ -3836,6 +3935,7 @@ def _replace_netqui_1pol_placeholder_chart_images(
             aligned_slots[4:7],
             radiation_assets[radiation_count:],
             artifact_manifest,
+            polar_figure_size=polar_figure_size,
         )
     return True
 
@@ -3850,6 +3950,9 @@ def _replace_chart_images(
     selected_radiation_frequencies: list[float] | None = None,
     registered_fonts: set[str] | None = None,
     netqui_heading_font_buffer: bytes | None = None,
+    cartesian_figure_width: float | None = None,
+    cartesian_figure_height: float | None = None,
+    polar_figure_size: float | None = None,
 ) -> None:
     if doc.page_count < 2:
         return
@@ -3862,6 +3965,9 @@ def _replace_chart_images(
             selected_radiation_frequencies=selected_radiation_frequencies,
             registered_fonts=registered_fonts,
             netqui_heading_font_buffer=netqui_heading_font_buffer,
+            cartesian_figure_width=cartesian_figure_width,
+            cartesian_figure_height=cartesian_figure_height,
+            polar_figure_size=polar_figure_size,
         ):
             raise ValueError("Netqui 1Pol placeholder template does not contain the expected chart image slots.")
         return
@@ -3900,7 +4006,13 @@ def _replace_chart_images(
                 artifact_manifest,
                 selected_radiation_frequencies,
             )
-            _apply_chart_replacements_to_page(page, replacements)
+            _apply_chart_replacements_to_page(
+                page,
+                replacements,
+                cartesian_figure_width=cartesian_figure_width,
+                cartesian_figure_height=cartesian_figure_height,
+                polar_figure_size=polar_figure_size,
+            )
             radiation_count = sum(1 for replacement in replacements if replacement.kind.startswith("radiation_"))
             radiation_assets = _find_selected_combined_polar_assets(
                 output,
@@ -3917,6 +4029,7 @@ def _replace_chart_images(
                     aligned_slots[4:7],
                     radiation_assets[radiation_count:],
                     artifact_manifest,
+                    polar_figure_size=polar_figure_size,
                 )
             return
         if adapter.key in {"rfe", "generic"}:
@@ -3930,9 +4043,22 @@ def _replace_chart_images(
                 adapter,
                 selected_radiation_frequencies,
             )
-            _apply_chart_replacements_to_page(page, replacements)
+            _apply_chart_replacements_to_page(
+                page,
+                replacements,
+                cartesian_figure_width=cartesian_figure_width,
+                cartesian_figure_height=cartesian_figure_height,
+                polar_figure_size=polar_figure_size,
+            )
             if remaining_pairs:
-                _append_rfe_radiation_pages(doc, int(page_index or 1), base_slots, remaining_pairs, artifact_manifest)
+                _append_rfe_radiation_pages(
+                    doc,
+                    int(page_index or 1),
+                    base_slots,
+                    remaining_pairs,
+                    artifact_manifest,
+                    polar_figure_size=polar_figure_size,
+                )
             return
 
     ordered_slots_for_compaction = sorted(_collect_chart_slots(page), key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
@@ -3953,7 +4079,13 @@ def _replace_chart_images(
         adapter=adapter,
         spans_override=spans_override,
     )
-    _apply_chart_replacements_to_page(page, replacements)
+    _apply_chart_replacements_to_page(
+        page,
+        replacements,
+        cartesian_figure_width=cartesian_figure_width,
+        cartesian_figure_height=cartesian_figure_height,
+        polar_figure_size=polar_figure_size,
+    )
     if draw_spans:
         _redraw_netqui_chart_section_titles(
             page,
@@ -3970,6 +4102,9 @@ def build_datasheet_pdf(
     technical_data_workbook: Path | None = None,
     metadata_author: str | None = None,
     radiation_frequencies_ghz: list[float] | tuple[float, ...] | None = None,
+    cartesian_figure_width: float | None = None,
+    cartesian_figure_height: float | None = None,
+    polar_figure_size: float | None = None,
 ) -> dict[str, str]:
     total_steps = 4 if technical_data_workbook else 3
     emit_progress("datasheet", 1, total_steps, f"Loading {extract_workbook.name}")
@@ -4076,6 +4211,9 @@ def build_datasheet_pdf(
             selected_radiation_frequencies=_normalize_selected_radiation_frequencies(radiation_frequencies_ghz),
             registered_fonts=registered_fonts,
             netqui_heading_font_buffer=_font_buffer_for_display_font(doc, NETQUI_HEADING_FONT),
+            cartesian_figure_width=cartesian_figure_width,
+            cartesian_figure_height=cartesian_figure_height,
+            polar_figure_size=polar_figure_size,
         )
         _update_footer_dates(doc, now, registered_fonts=registered_fonts)
         doc.set_metadata(output_metadata)
@@ -4095,6 +4233,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--technical-data-workbook", type=Path, help="Technical Data Excel workbook path.")
     parser.add_argument("--metadata-author", help="Author value to write into the PDF metadata.")
     parser.add_argument("--radiation-frequencies-ghz", help="Comma-separated radiation pattern frequencies to include in GHz.")
+    parser.add_argument("--cartesian-figure-width", type=float, help="Current cartesian figure width in inches.")
+    parser.add_argument("--cartesian-figure-height", type=float, help="Current cartesian figure height in inches.")
+    parser.add_argument("--polar-figure-size", type=float, help="Current square polar figure size in inches.")
     return parser.parse_args()
 
 
@@ -4120,6 +4261,9 @@ def main() -> int:
             technical_data_workbook=args.technical_data_workbook,
             metadata_author=args.metadata_author,
             radiation_frequencies_ghz=_parse_radiation_frequencies_arg(args.radiation_frequencies_ghz),
+            cartesian_figure_width=args.cartesian_figure_width,
+            cartesian_figure_height=args.cartesian_figure_height,
+            polar_figure_size=args.polar_figure_size,
         )
     except Exception as exc:
         print(f"ERROR: {exc}")

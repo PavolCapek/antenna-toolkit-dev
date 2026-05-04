@@ -62,8 +62,8 @@ APP_TITLE = "Antenna Toolkit Studio"
 STATE_FILE = resolve_state_file(".nova_qt_studio_state.json", THIS_DIR / ".nova_qt_studio_state.json")
 COMPACT_SCREEN_HEIGHT = 1200
 COMPACT_WINDOW_WIDTH = 1360
-PLOT_ASSET_STYLE_VERSION = 4
-DATASHEET_RENDER_VERSION = 4
+PLOT_ASSET_STYLE_VERSION = 5
+DATASHEET_RENDER_VERSION = 5
 DATASHEET_TEMPLATE_DIR = THIS_DIR / "Templates"
 LEGACY_DATASHEET_TEMPLATE_ALIASES = {
     "Datasheet.pdf": "Datasheet - RFE.pdf",

@@ -1720,8 +1720,11 @@ class DatasheetPdfTests(unittest.TestCase):
 
         default_rect = _cartesian_svg_rect(target, default_svg)
         square_rect = _cartesian_svg_rect(target, square_svg)
+        explicit_rect = _cartesian_svg_rect(target, default_svg, figure_width=6.0, figure_height=5.04)
 
         self.assertLess(square_rect.width, default_rect.width)
+        self.assertLess(explicit_rect.width, default_rect.width)
+        self.assertAlmostEqual(explicit_rect.height, default_rect.height, delta=0.1)
         self.assertAlmostEqual(square_rect.height, target.height, delta=0.1)
         self.assertGreater(square_rect.x0, target.x0)
         self.assertLess(square_rect.x1, target.x1)
@@ -1743,9 +1746,12 @@ class DatasheetPdfTests(unittest.TestCase):
 
         default_rect = _polar_svg_rect(target, default_svg)
         smaller_rect = _polar_svg_rect(target, smaller_svg)
+        explicit_rect = _polar_svg_rect(target, default_svg, figure_size=6.0)
 
         self.assertAlmostEqual(default_rect.width, target.width, delta=0.1)
         self.assertLess(smaller_rect.width, default_rect.width)
+        self.assertLess(explicit_rect.width, default_rect.width)
+        self.assertAlmostEqual(explicit_rect.width, explicit_rect.height, delta=0.1)
         self.assertAlmostEqual(smaller_rect.width, smaller_rect.height, delta=0.1)
         self.assertGreater(smaller_rect.x0, target.x0)
         self.assertGreater(smaller_rect.y0, target.y0)

@@ -1089,6 +1089,9 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(Path(queued_args["datasheet"][queued_args["datasheet"].index("--template") + 1]).name, "Datasheet - RFE.pdf")
         self.assertIn("--metadata-author", queued_args["datasheet"])
         self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--metadata-author") + 1], "Pipeline Author")
+        self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--cartesian-figure-width") + 1], "9.75")
+        self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--cartesian-figure-height") + 1], "4.5")
+        self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--polar-figure-size") + 1], "7.75")
         self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--radiation-frequencies-ghz") + 1], "4.9,6")
 
     def test_run_plot_passes_beamwidth_db_colors(self) -> None:

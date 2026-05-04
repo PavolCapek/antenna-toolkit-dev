@@ -329,6 +329,12 @@ class StudioRunMixin:
                     technical_data_workbook,
                     "--metadata-author",
                     self.selected_pdf_metadata_author(),
+                    "--cartesian-figure-width",
+                    str(context.settings.cartesian_figure_width),
+                    "--cartesian-figure-height",
+                    str(context.settings.cartesian_figure_height),
+                    "--polar-figure-size",
+                    str(context.settings.polar_figure_size),
                 ]
                 radiation_frequencies = self.radiation_frequencies_arg()
                 if radiation_frequencies is not None:
@@ -571,6 +577,7 @@ class StudioRunMixin:
         except GoogleSheetDownloadError as exc:
             self.status(str(exc))
             return
+        settings = self.current_preset_settings()
         args = [
             which_python(),
             "-u",
@@ -584,6 +591,12 @@ class StudioRunMixin:
             technical_data_workbook,
             "--metadata-author",
             self.selected_pdf_metadata_author(),
+            "--cartesian-figure-width",
+            str(settings.cartesian_figure_width),
+            "--cartesian-figure-height",
+            str(settings.cartesian_figure_height),
+            "--polar-figure-size",
+            str(settings.polar_figure_size),
         ]
         radiation_frequencies = self.radiation_frequencies_arg()
         if radiation_frequencies is not None:
@@ -668,6 +681,12 @@ class StudioRunMixin:
                 technical_data_workbook,
                 "--metadata-author",
                 self.selected_pdf_metadata_author(),
+                "--cartesian-figure-width",
+                str(context.settings.cartesian_figure_width),
+                "--cartesian-figure-height",
+                str(context.settings.cartesian_figure_height),
+                "--polar-figure-size",
+                str(context.settings.polar_figure_size),
             ]
             radiation_frequencies = self.radiation_frequencies_arg()
             if radiation_frequencies is not None:

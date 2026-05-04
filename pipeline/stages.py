@@ -8,7 +8,17 @@ from datasheet.artifacts import artifact_manifest_path
 STAGE_SETTING_KEYS: dict[str, tuple[str, ...]] = {
     "beam": ("smooth", "theta"),
     "extract": ("smooth", "theta", "shared_fmin", "shared_fmax"),
-    "datasheet": ("smooth", "theta", "shared_fmin", "shared_fmax", "datasheet_template", "pdf_metadata_author"),
+    "datasheet": (
+        "smooth",
+        "theta",
+        "shared_fmin",
+        "shared_fmax",
+        "cartesian_figure_width",
+        "cartesian_figure_height",
+        "polar_figure_size",
+        "datasheet_template",
+        "pdf_metadata_author",
+    ),
     "plot": (
         "smooth2",
         "shared_xstep",
