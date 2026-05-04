@@ -26,7 +26,6 @@ SCRIPT_EXTRACT = str(THIS_DIR / "extract_data_xlsx.py")
 SCRIPT_DATASHEET = str(THIS_DIR / "datasheet_pdf.py")
 SCRIPT_PLOT = str(THIS_DIR / "plot.py")
 SCRIPT_VSWR = str(THIS_DIR / "plot_vswr.py")
-import logging
 logger = logging.getLogger(__name__)
 
 DEFAULT_GRID_COLOR = "#6f7a81"
@@ -158,16 +157,16 @@ def resolve_state_file(filename: str, legacy_path: Path | None = None) -> Path:
     state_path = app_state_dir() / filename
     try:
         state_path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        logger.warning("Ignored exception: %s", e)
+    except Exception:
+        logger.warning("Could not create state directory: %s", state_path.parent, exc_info=True)
     if legacy_path and legacy_path.exists() and not state_path.exists():
         try:
             shutil.copy2(legacy_path, state_path)
         except Exception:
             try:
                 state_path.write_text(legacy_path.read_text(encoding="utf-8"), encoding="utf-8")
-            except Exception as e:
-                logger.warning("Ignored exception: %s", e)
+            except Exception:
+                logger.warning("Could not migrate legacy state file from %s to %s", legacy_path, state_path, exc_info=True)
     return state_path
 
 
@@ -233,8 +232,8 @@ def open_in_file_manager(path: str | Path):
     if is_url(path):
         try:
             webbrowser.open(str(path))
-        except Exception as e:
-            logger.warning("Ignored exception: %s", e)
+        except Exception:
+            logger.warning("Could not open URL: %s", path, exc_info=True)
         return
     p = Path(path)
     try:
@@ -247,8 +246,8 @@ def open_in_file_manager(path: str | Path):
                 os.system(f"open {shlex.quote(str(p))}")
         else:
             os.system(f"xdg-open {shlex.quote(str(p if p.is_dir() else p.parent))} >/dev/null 2>&1 &")
-    except Exception as e:
-        logger.warning("Ignored exception: %s", e)
+    except Exception:
+        logger.warning("Could not open path in file manager: %s", p, exc_info=True)
 
 
 def resolve_workspace_path(path: str | Path | None) -> Path:
@@ -277,20 +276,21 @@ class Persist:
         self.data = {}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            logger.warning("Ignored exception: %s", e)
+        except Exception:
+            logger.warning("Could not create settings directory: %s", self.path.parent, exc_info=True)
         try:
             if path.exists():
                 self.data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
+            logger.warning("Could not read settings file: %s", path, exc_info=True)
             self.data = {}
 
     def save(self) -> None:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
-        except Exception as e:
-            logger.warning("Ignored exception: %s", e)
+        except Exception:
+            logger.warning("Could not save settings file: %s", self.path, exc_info=True)
 
     def get(self, key: str, default=None):
         return self.data.get(key, default)
@@ -311,8 +311,8 @@ class PresetFileStore:
         self.legacy_directories = list(legacy_directories or [])
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            logger.warning("Ignored exception: %s", e)
+        except Exception:
+            logger.warning("Could not create preset directory: %s", self.directory, exc_info=True)
 
     def _path_for_name(self, name: str) -> Path:
         encoded = quote(name.strip(), safe="")
@@ -322,14 +322,14 @@ class PresetFileStore:
         presets: dict[str, dict[str, object]] = {}
         try:
             candidates = sorted(self.directory.glob("*.json"))
-        except Exception as e:
-            logger.warning("Error, returning early: %s", e)
+        except Exception:
+            logger.warning("Could not list presets in %s", self.directory, exc_info=True)
             return presets
         for path in candidates:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-            except Exception as e:
-                logger.warning("Ignored exception: %s", e)
+            except Exception:
+                logger.warning("Could not read preset file: %s", path, exc_info=True)
                 continue
             if isinstance(payload, dict) and isinstance(payload.get("name"), str):
                 name = payload["name"].strip()
@@ -349,16 +349,16 @@ class PresetFileStore:
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        except Exception as e:
-            logger.warning("Ignored exception: %s", e)
+        except Exception:
+            logger.warning("Could not save preset file: %s", path, exc_info=True)
 
     def delete_preset(self, name: str) -> None:
         path = self._path_for_name(name)
         try:
             if path.exists():
                 path.unlink()
-        except Exception as e:
-            logger.warning("Ignored exception: %s", e)
+        except Exception:
+            logger.warning("Could not delete preset file: %s", path, exc_info=True)
 
     def rename_preset(self, old_name: str, new_name: str, values: dict[str, object]) -> None:
         if old_name != new_name:
@@ -374,8 +374,8 @@ class PresetFileStore:
             for path in self.directory.glob("*.json"):
                 if path.resolve() not in desired_paths:
                     path.unlink()
-        except Exception as e:
-            logger.warning("Ignored exception: %s", e)
+        except Exception:
+            logger.warning("Could not prune preset directory: %s", self.directory, exc_info=True)
 
     def migrate_from_state(self, store: Persist, key: str = PRESET_STORE_KEY) -> dict[str, dict[str, object]]:
         merged = self.load_presets()
@@ -465,8 +465,8 @@ class Proc:
         if hasattr(self.win, "on_proc_step_started"):
             try:
                 self.win.on_proc_step_started(list(self.running_cmd), cmd_str)
-            except Exception as e:
-                logger.warning("Ignored exception: %s", e)
+            except Exception:
+                logger.warning("Run step-start callback failed", exc_info=True)
         self.win.log(f"\n$ {cmd_str}\n", color="#8aa2b8", channel="meta")
         self.proc.start(program, args)
 
@@ -511,13 +511,13 @@ class Proc:
             try:
                 self.win.on_proc_progress(dict(payload))
                 return
-            except Exception as e:
-                logger.warning("Ignored exception: %s", e)
+            except Exception:
+                logger.warning("Structured progress callback failed", exc_info=True)
         try:
             current = int(payload.get("current", 0))
             total = int(payload.get("total", 0))
-        except Exception as e:
-            logger.warning("Error, returning early: %s", e)
+        except Exception:
+            logger.debug("Ignoring structured progress payload with invalid numeric fields: %r", payload, exc_info=True)
             return
         if total > 0:
             self.win.set_progress(int(round(max(0.0, min(1.0, current / total)) * 100)))
@@ -527,8 +527,8 @@ class Proc:
             try:
                 self.win.on_proc_progress_percent(int(pct))
                 return
-            except Exception as e:
-                logger.warning("Ignored exception: %s", e)
+            except Exception:
+                logger.warning("Percent progress callback failed", exc_info=True)
         self.win.set_progress(int(pct))
 
     def _maybe_progress_from_text(self, text: str):
@@ -540,8 +540,8 @@ class Proc:
                 payload_text = line[len("AT_PROGRESS "):].strip()
                 try:
                     payload = json.loads(payload_text)
-                except Exception as e:
-                    logger.warning("Ignored exception: %s", e)
+                except Exception:
+                    logger.debug("Ignoring malformed progress JSON: %s", payload_text, exc_info=True)
                     continue
                 if not isinstance(payload, dict):
                     continue
@@ -553,8 +553,8 @@ class Proc:
                     current = int(payload["current"])
                     total = int(payload["total"])
                     label = str(payload["label"]).strip()
-                except Exception as e:
-                    logger.warning("Ignored exception: %s", e)
+                except Exception:
+                    logger.debug("Ignoring progress payload with invalid fields: %r", payload, exc_info=True)
                     continue
                 if not stage or total <= 0:
                     continue
@@ -580,7 +580,7 @@ class Proc:
         if hasattr(self.win, "on_proc_step_finished"):
             try:
                 self.win.on_proc_step_finished(list(self.running_cmd or []), int(exit_code), exit_status)
-            except Exception as e:
-                logger.warning("Ignored exception: %s", e)
+            except Exception:
+                logger.warning("Run step-finished callback failed", exc_info=True)
         self.win.on_proc_finished()
         self._dequeue_and_start()

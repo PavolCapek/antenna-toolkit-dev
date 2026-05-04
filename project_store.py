@@ -226,8 +226,8 @@ class ProjectStore:
                 continue
             try:
                 payload = json.loads(project_file.read_text(encoding="utf-8"))
-            except Exception as e:
-                logger.warning("Ignored exception: %s", e)
+            except Exception:
+                logger.warning("Could not read project file: %s", project_file, exc_info=True)
                 continue
             projects.append(ProjectRecord.from_dict(payload))
         return sorted(projects, key=lambda item: (item.name.lower(), item.slug.lower()))
