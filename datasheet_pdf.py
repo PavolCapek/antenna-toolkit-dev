@@ -3015,7 +3015,7 @@ def _build_manifest_chart_replacements(
                 replacement.asset_path,
             )
         )
-    return _normalize_plot_widths(resolved, set(chart_manifest.normalize_width_kinds))
+    return resolved
 
 
 def _build_chart_replacements(
@@ -3119,7 +3119,7 @@ def _build_chart_replacements(
                 replacement.asset_path,
             )
         )
-    return _normalize_plot_widths(resolved, {"gain", "beamwidth"})
+    return resolved
 
 
 def _svg_to_pdf_bytes(svg_path: Path) -> bytes:
@@ -3249,13 +3249,14 @@ def _figure_size_rect(
     default_height: float,
     *,
     top_align: bool = False,
+    allow_expand: bool = False,
 ) -> fitz.Rect:
     if figure_width <= 0.0 or figure_height <= 0.0 or default_width <= 0.0 or default_height <= 0.0:
         return target_rect
     default_scale = min(target_rect.width / default_width, target_rect.height / default_height)
     desired_width = figure_width * default_scale
     desired_height = figure_height * default_scale
-    limit_scale = min(1.0, target_rect.width / desired_width, target_rect.height / desired_height)
+    limit_scale = 1.0 if allow_expand else min(1.0, target_rect.width / desired_width, target_rect.height / desired_height)
     width = desired_width * limit_scale
     height = desired_height * limit_scale
     x0 = target_rect.x0 + max(0.0, (target_rect.width - width) / 2.0)
@@ -3270,6 +3271,7 @@ def _cartesian_svg_rect(
     top_align: bool = False,
     figure_width: float | None = None,
     figure_height: float | None = None,
+    allow_expand: bool = False,
 ) -> fitz.Rect:
     default_width = CARTESIAN_FIGURE_WIDTH_IN * 72.0
     default_height = CARTESIAN_FIGURE_HEIGHT_IN * 72.0
@@ -3281,6 +3283,7 @@ def _cartesian_svg_rect(
             default_width,
             default_height,
             top_align=top_align,
+            allow_expand=allow_expand,
         )
 
     resolved_path = str(svg_path.resolve())
@@ -3297,7 +3300,7 @@ def _cartesian_svg_rect(
     default_scale = min(target_rect.width / default_width, target_rect.height / default_height)
     desired_width = native_width * default_scale
     desired_height = native_height * default_scale
-    limit_scale = min(1.0, target_rect.width / desired_width, target_rect.height / desired_height)
+    limit_scale = 1.0 if allow_expand else min(1.0, target_rect.width / desired_width, target_rect.height / desired_height)
     width = desired_width * limit_scale
     height = desired_height * limit_scale
     x0 = target_rect.x0 + max(0.0, (target_rect.width - width) / 2.0)
@@ -3311,11 +3314,12 @@ def _polar_svg_rect(
     *,
     top_align: bool = False,
     figure_size: float | None = None,
+    allow_expand: bool = False,
 ) -> fitz.Rect:
     default_size = POLAR_FIGURE_SIZE_IN * 72.0
     if figure_size is not None:
         requested_size = float(figure_size) * 72.0
-        return _figure_size_rect(target_rect, requested_size, requested_size, default_size, default_size, top_align=top_align)
+        return _figure_size_rect(target_rect, requested_size, requested_size, default_size, default_size, top_align=top_align, allow_expand=allow_expand)
 
     resolved_path = str(svg_path.resolve())
     if not _svg_size_uses_points(resolved_path):
@@ -3331,7 +3335,7 @@ def _polar_svg_rect(
     default_scale = min(target_rect.width / default_size, target_rect.height / default_size)
     desired_width = native_width * default_scale
     desired_height = native_height * default_scale
-    limit_scale = min(1.0, target_rect.width / desired_width, target_rect.height / desired_height)
+    limit_scale = 1.0 if allow_expand else min(1.0, target_rect.width / desired_width, target_rect.height / desired_height)
     width = desired_width * limit_scale
     height = desired_height * limit_scale
     x0 = target_rect.x0 + max(0.0, (target_rect.width - width) / 2.0)
@@ -3370,24 +3374,262 @@ def _is_polar_replacement(kind: str) -> bool:
     )
 
 
-def _apply_chart_replacements_to_page(
+def _replacement_union_rect(replacement: ChartReplacement) -> fitz.Rect:
+    rect = fitz.Rect(replacement.rect)
+    if replacement.legend_rect is not None:
+        rect.include_rect(replacement.legend_rect)
+    return rect
+
+
+def _chart_page_content_rect(page: fitz.Page, replacements: list[ChartReplacement]) -> fitz.Rect:
+    if replacements:
+        left = min(_replacement_union_rect(replacement).x0 for replacement in replacements)
+        top = min(_replacement_union_rect(replacement).y0 for replacement in replacements)
+        return fitz.Rect(
+            max(24.0, left),
+            max(36.0, top),
+            page.rect.width - 24.0,
+            page.rect.height - 54.0,
+        )
+    return fitz.Rect(36.0, 72.0, page.rect.width - 36.0, page.rect.height - 54.0)
+
+
+def _chart_rows(replacements: list[ChartReplacement], tolerance: float = 42.0) -> list[list[ChartReplacement]]:
+    rows: list[list[ChartReplacement]] = []
+    ordered = sorted(replacements, key=lambda item: (_replacement_union_rect(item).y0, _replacement_union_rect(item).x0))
+    for replacement in ordered:
+        center_y = (_replacement_union_rect(replacement).y0 + _replacement_union_rect(replacement).y1) / 2.0
+        if not rows:
+            rows.append([replacement])
+            continue
+        row_center = sum((_replacement_union_rect(item).y0 + _replacement_union_rect(item).y1) / 2.0 for item in rows[-1]) / len(rows[-1])
+        if abs(center_y - row_center) <= tolerance:
+            rows[-1].append(replacement)
+        else:
+            rows.append([replacement])
+    return [sorted(row, key=lambda item: _replacement_union_rect(item).x0) for row in rows]
+
+
+def _requested_plot_size(
+    replacement: ChartReplacement,
+    *,
+    cartesian_figure_width: float | None,
+    cartesian_figure_height: float | None,
+    polar_figure_size: float | None,
+) -> tuple[float, float]:
+    top_align = _is_netqui_cartesian_replacement(replacement.kind)
+    if _is_cartesian_replacement(replacement.kind) and cartesian_figure_width is not None and cartesian_figure_height is not None:
+        rect = _cartesian_svg_rect(
+            replacement.rect,
+            replacement.asset_path,
+            top_align=top_align,
+            figure_width=cartesian_figure_width,
+            figure_height=cartesian_figure_height,
+            allow_expand=True,
+        )
+        return rect.width, rect.height
+    if _is_polar_replacement(replacement.kind) and polar_figure_size is not None:
+        rect = _polar_svg_rect(
+            replacement.rect,
+            replacement.asset_path,
+            top_align=top_align,
+            figure_size=polar_figure_size,
+            allow_expand=True,
+        )
+        size = min(rect.width, rect.height)
+        return size, size
+    return replacement.rect.width, replacement.rect.height
+
+
+def _legend_orientation(replacement: ChartReplacement) -> str:
+    if replacement.legend_rect is None:
+        return ""
+    plot = fitz.Rect(replacement.rect)
+    legend = fitz.Rect(replacement.legend_rect)
+    if legend.y0 >= plot.y1 - 1.0:
+        return "bottom"
+    if legend.x0 >= plot.x1 - 1.0:
+        return "right"
+    if legend.x1 <= plot.x0 + 1.0:
+        return "left"
+    if legend.y1 <= plot.y0 + 1.0:
+        return "top"
+    return "bottom" if _is_polar_replacement(replacement.kind) else "right"
+
+
+def _legend_rect_for_plot(replacement: ChartReplacement, plot_rect: fitz.Rect) -> fitz.Rect | None:
+    if replacement.legend_rect is None:
+        return None
+    original_plot = fitz.Rect(replacement.rect)
+    original_legend = fitz.Rect(replacement.legend_rect)
+    width = original_legend.width
+    height = original_legend.height
+    gap = 6.0
+    orientation = _legend_orientation(replacement)
+    if orientation == "right":
+        center_y = (plot_rect.y0 + plot_rect.y1) / 2.0
+        return fitz.Rect(plot_rect.x1 + gap, center_y - height / 2.0, plot_rect.x1 + gap + width, center_y + height / 2.0)
+    if orientation == "left":
+        center_y = (plot_rect.y0 + plot_rect.y1) / 2.0
+        return fitz.Rect(plot_rect.x0 - gap - width, center_y - height / 2.0, plot_rect.x0 - gap, center_y + height / 2.0)
+    if orientation == "top":
+        center_x = (plot_rect.x0 + plot_rect.x1) / 2.0
+        return fitz.Rect(center_x - width / 2.0, plot_rect.y0 - gap - height, center_x + width / 2.0, plot_rect.y0 - gap)
+    center_x = (plot_rect.x0 + plot_rect.x1) / 2.0
+    legend_width = max(width, min(plot_rect.width, max(width, original_plot.width)))
+    return fitz.Rect(center_x - legend_width / 2.0, plot_rect.y1 + gap, center_x + legend_width / 2.0, plot_rect.y1 + gap + height)
+
+
+def _shift_chart_replacement(replacement: ChartReplacement, dx: float, dy: float) -> ChartReplacement:
+    legend_rect = None if replacement.legend_rect is None else fitz.Rect(
+        replacement.legend_rect.x0 + dx,
+        replacement.legend_rect.y0 + dy,
+        replacement.legend_rect.x1 + dx,
+        replacement.legend_rect.y1 + dy,
+    )
+    return ChartReplacement(
+        replacement.kind,
+        fitz.Rect(replacement.rect.x0 + dx, replacement.rect.y0 + dy, replacement.rect.x1 + dx, replacement.rect.y1 + dy),
+        replacement.asset_path,
+        legend_rect=legend_rect,
+        legend_asset_path=replacement.legend_asset_path,
+        erase_rect=replacement.erase_rect,
+        legend_scale_cap=replacement.legend_scale_cap,
+    )
+
+
+def _with_chart_rects(replacement: ChartReplacement, plot_rect: fitz.Rect, legend_rect: fitz.Rect | None) -> ChartReplacement:
+    return ChartReplacement(
+        replacement.kind,
+        fitz.Rect(plot_rect),
+        replacement.asset_path,
+        legend_rect=fitz.Rect(legend_rect) if legend_rect is not None else None,
+        legend_asset_path=replacement.legend_asset_path,
+        erase_rect=replacement.erase_rect,
+        legend_scale_cap=replacement.legend_scale_cap,
+    )
+
+
+def _clamp_rect_to_content(rect: fitz.Rect, content_rect: fitz.Rect) -> fitz.Rect:
+    width = min(rect.width, content_rect.width)
+    height = min(rect.height, content_rect.height)
+    x0 = min(max(rect.x0, content_rect.x0), content_rect.x1 - width)
+    y0 = min(max(rect.y0, content_rect.y0), content_rect.y1 - height)
+    return fitz.Rect(x0, y0, x0 + width, y0 + height)
+
+
+def _prepare_reflow_item(
+    replacement: ChartReplacement,
+    content_rect: fitz.Rect,
+    *,
+    cartesian_figure_width: float | None,
+    cartesian_figure_height: float | None,
+    polar_figure_size: float | None,
+) -> ChartReplacement:
+    width, height = _requested_plot_size(
+        replacement,
+        cartesian_figure_width=cartesian_figure_width,
+        cartesian_figure_height=cartesian_figure_height,
+        polar_figure_size=polar_figure_size,
+    )
+    legend = replacement.legend_rect
+    side_legend_width = 0.0
+    side_gap = 0.0
+    if legend is not None and _legend_orientation(replacement) in {"left", "right"}:
+        side_legend_width = legend.width
+        side_gap = 6.0
+    max_width = max(24.0, content_rect.width - side_legend_width - side_gap)
+    max_height = max(24.0, content_rect.height - (legend.height + 6.0 if legend is not None and _legend_orientation(replacement) in {"top", "bottom"} else 0.0))
+    scale = min(1.0, max_width / width if width else 1.0, max_height / height if height else 1.0)
+    width *= scale
+    height *= scale
+    original = fitz.Rect(replacement.rect)
+    center_x = (original.x0 + original.x1) / 2.0
+    plot = fitz.Rect(center_x - width / 2.0, original.y0, center_x + width / 2.0, original.y0 + height)
+    plot = _clamp_rect_to_content(plot, content_rect)
+    return _with_chart_rects(replacement, plot, _legend_rect_for_plot(replacement, plot))
+
+
+def _reflow_chart_replacements(
+    page: fitz.Page,
+    replacements: list[ChartReplacement],
+    *,
+    cartesian_figure_width: float | None,
+    cartesian_figure_height: float | None,
+    polar_figure_size: float | None,
+) -> list[list[ChartReplacement]]:
+    if not replacements:
+        return []
+    if cartesian_figure_width is None and cartesian_figure_height is None and polar_figure_size is None:
+        return [replacements]
+    content_rect = _chart_page_content_rect(page, replacements)
+    row_gap = 16.0
+    item_gap = 12.0
+    pages: list[list[ChartReplacement]] = [[]]
+    current_y = content_rect.y0
+    for row in _chart_rows(replacements):
+        prepared = [
+            _prepare_reflow_item(
+                replacement,
+                content_rect,
+                cartesian_figure_width=cartesian_figure_width,
+                cartesian_figure_height=cartesian_figure_height,
+                polar_figure_size=polar_figure_size,
+            )
+            for replacement in row
+        ]
+        x_cursor = content_rect.x0
+        row_items: list[ChartReplacement] = []
+        line_bottom = current_y
+        for item in prepared:
+            union = _replacement_union_rect(item)
+            dx = max(0.0, x_cursor - union.x0)
+            shifted = _shift_chart_replacement(item, dx, current_y - union.y0)
+            union = _replacement_union_rect(shifted)
+            if row_items and union.x1 > content_rect.x1 + 0.1:
+                current_y = line_bottom + item_gap
+                row_items = []
+                shifted = _shift_chart_replacement(item, content_rect.x0 - _replacement_union_rect(item).x0, current_y - _replacement_union_rect(item).y0)
+                union = _replacement_union_rect(shifted)
+            if union.y1 > content_rect.y1 + 0.1:
+                if pages[-1]:
+                    pages.append([])
+                current_y = content_rect.y0
+                row_items = []
+                shifted = _shift_chart_replacement(item, content_rect.x0 - _replacement_union_rect(item).x0, current_y - _replacement_union_rect(item).y0)
+                union = _replacement_union_rect(shifted)
+            pages[-1].append(shifted)
+            row_items.append(shifted)
+            x_cursor = union.x1 + item_gap
+            line_bottom = max(line_bottom, union.y1)
+        current_y = line_bottom + row_gap
+    return [page_replacements for page_replacements in pages if page_replacements]
+
+
+def _erase_chart_replacements_from_page(page: fitz.Page, replacements: list[ChartReplacement]) -> None:
+    for replacement in replacements:
+        page.add_redact_annot(replacement.erase_rect or replacement.rect, fill=(1.0, 1.0, 1.0))
+        if replacement.legend_rect is not None:
+            page.add_redact_annot(replacement.legend_rect, fill=(1.0, 1.0, 1.0))
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
+
+
+def _place_chart_replacements_on_page(
     page: fitz.Page,
     replacements: list[ChartReplacement],
     *,
     cartesian_figure_width: float | None = None,
     cartesian_figure_height: float | None = None,
     polar_figure_size: float | None = None,
+    replacement_rects_are_final: bool = False,
 ) -> None:
-    for replacement in replacements:
-        page.add_redact_annot(replacement.erase_rect or replacement.rect, fill=(1.0, 1.0, 1.0))
-        if replacement.legend_rect is not None:
-            page.add_redact_annot(replacement.legend_rect, fill=(1.0, 1.0, 1.0))
-    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
     shared_side_scale = _shared_side_legend_scale(replacements)
     for replacement in replacements:
         top_align = _is_netqui_cartesian_replacement(replacement.kind)
-        enforce_plot_box = False
-        if _is_cartesian_replacement(replacement.kind):
+        enforce_plot_box = replacement_rects_are_final
+        if replacement_rects_are_final:
+            plot_placement_rect = fitz.Rect(replacement.rect)
+        elif _is_cartesian_replacement(replacement.kind):
             enforce_plot_box = cartesian_figure_width is not None and cartesian_figure_height is not None
             plot_placement_rect = _cartesian_svg_rect(
                 replacement.rect,
@@ -3410,6 +3652,66 @@ def _apply_chart_replacements_to_page(
         if replacement.legend_rect is not None and replacement.legend_asset_path is not None:
             legend_scale = None if _is_polar_radiation_replacement(replacement.kind) else shared_side_scale
             _place_svg_as_vector(page, _legend_target_rect(replacement, legend_scale, plot_placement_rect), replacement.legend_asset_path)
+
+
+def _apply_chart_replacements_to_page(
+    page: fitz.Page,
+    replacements: list[ChartReplacement],
+    *,
+    cartesian_figure_width: float | None = None,
+    cartesian_figure_height: float | None = None,
+    polar_figure_size: float | None = None,
+) -> None:
+    _erase_chart_replacements_from_page(page, replacements)
+    _place_chart_replacements_on_page(
+        page,
+        replacements,
+        cartesian_figure_width=cartesian_figure_width,
+        cartesian_figure_height=cartesian_figure_height,
+        polar_figure_size=polar_figure_size,
+    )
+
+
+def _append_chart_continuation_page(doc: fitz.Document, after_page_index: int, source_page: fitz.Page) -> fitz.Page:
+    page = doc.new_page(pno=after_page_index + 1, width=source_page.rect.width, height=source_page.rect.height)
+    page.insert_text((36.0, 58.0), "CHARTS CONTINUED", fontsize=10.0, fontname="helv", color=(0.237, 0.237, 0.237))
+    return page
+
+
+def _apply_chart_replacements_to_document(
+    doc: fitz.Document,
+    page_index: int,
+    replacements: list[ChartReplacement],
+    *,
+    cartesian_figure_width: float | None = None,
+    cartesian_figure_height: float | None = None,
+    polar_figure_size: float | None = None,
+) -> int:
+    page = doc[page_index]
+    should_reflow = cartesian_figure_width is not None or cartesian_figure_height is not None or polar_figure_size is not None
+    if not should_reflow:
+        _apply_chart_replacements_to_page(page, replacements)
+        return page_index
+    pages = _reflow_chart_replacements(
+        page,
+        replacements,
+        cartesian_figure_width=cartesian_figure_width,
+        cartesian_figure_height=cartesian_figure_height,
+        polar_figure_size=polar_figure_size,
+    )
+    if len(pages) <= 1:
+        _erase_chart_replacements_from_page(page, replacements)
+        _place_chart_replacements_on_page(page, pages[0] if pages else replacements, replacement_rects_are_final=True)
+        return page_index
+
+    _erase_chart_replacements_from_page(page, replacements)
+    _place_chart_replacements_on_page(page, pages[0], replacement_rects_are_final=True)
+    insert_after = page_index
+    for page_replacements in pages[1:]:
+        continuation = _append_chart_continuation_page(doc, insert_after, doc[page_index])
+        _place_chart_replacements_on_page(continuation, page_replacements, replacement_rects_are_final=True)
+        insert_after += 1
+    return insert_after
 
 
 def _redraw_netqui_chart_section_titles(
@@ -3902,8 +4204,9 @@ def _replace_netqui_1pol_placeholder_chart_images(
         artifact_manifest=artifact_manifest,
         selected_radiation_frequencies=selected_radiation_frequencies,
     )
-    _apply_chart_replacements_to_page(
-        page,
+    last_chart_page_index = _apply_chart_replacements_to_document(
+        doc,
+        1,
         replacements,
         cartesian_figure_width=cartesian_figure_width,
         cartesian_figure_height=cartesian_figure_height,
@@ -3931,7 +4234,7 @@ def _replace_netqui_1pol_placeholder_chart_images(
         aligned_slots = _align_netqui_1pol_cartesian_slots(ordered_slots)
         _append_netqui_radiation_pages(
             doc,
-            1,
+            last_chart_page_index,
             aligned_slots[4:7],
             radiation_assets[radiation_count:],
             artifact_manifest,
@@ -4006,8 +4309,9 @@ def _replace_chart_images(
                 artifact_manifest,
                 selected_radiation_frequencies,
             )
-            _apply_chart_replacements_to_page(
-                page,
+            last_chart_page_index = _apply_chart_replacements_to_document(
+                doc,
+                int(page_index or 1),
                 replacements,
                 cartesian_figure_width=cartesian_figure_width,
                 cartesian_figure_height=cartesian_figure_height,
@@ -4025,7 +4329,7 @@ def _replace_chart_images(
                 aligned_slots = _align_netqui_1pol_cartesian_slots(ordered_slots)
                 _append_netqui_radiation_pages(
                     doc,
-                    int(page_index or 1),
+                    last_chart_page_index,
                     aligned_slots[4:7],
                     radiation_assets[radiation_count:],
                     artifact_manifest,
@@ -4043,8 +4347,9 @@ def _replace_chart_images(
                 adapter,
                 selected_radiation_frequencies,
             )
-            _apply_chart_replacements_to_page(
-                page,
+            last_chart_page_index = _apply_chart_replacements_to_document(
+                doc,
+                int(page_index or 1),
                 replacements,
                 cartesian_figure_width=cartesian_figure_width,
                 cartesian_figure_height=cartesian_figure_height,
@@ -4053,7 +4358,7 @@ def _replace_chart_images(
             if remaining_pairs:
                 _append_rfe_radiation_pages(
                     doc,
-                    int(page_index or 1),
+                    last_chart_page_index,
                     base_slots,
                     remaining_pairs,
                     artifact_manifest,
@@ -4079,8 +4384,9 @@ def _replace_chart_images(
         adapter=adapter,
         spans_override=spans_override,
     )
-    _apply_chart_replacements_to_page(
-        page,
+    _apply_chart_replacements_to_document(
+        doc,
+        int(page_index or 1),
         replacements,
         cartesian_figure_width=cartesian_figure_width,
         cartesian_figure_height=cartesian_figure_height,

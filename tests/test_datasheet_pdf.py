@@ -40,6 +40,7 @@ from datasheet_pdf import (
     _replace_exact_span_text,
     _replace_header_placeholders,
     _replace_chart_images,
+    _reflow_chart_replacements,
     _update_footer_dates,
     build_datasheet_pdf,
     build_replacements_from_workbook,
@@ -1135,6 +1136,20 @@ class DatasheetPdfTests(unittest.TestCase):
         for rgb in (gain_handle_rgb, beamwidth_handle_rgb, polar_handle_rgb):
             self.assertGreater(min(rgb), 220)
 
+    def test_build_datasheet_pdf_adds_chart_continuation_for_large_figures(self) -> None:
+        build_datasheet_pdf(
+            output=self.output_pdf,
+            template=self.template_pdf,
+            extract_workbook=self.extract_workbook,
+            cartesian_figure_width=48.0,
+            cartesian_figure_height=20.16,
+            polar_figure_size=36.0,
+        )
+
+        with fitz.open(self.output_pdf) as doc:
+            self.assertGreater(doc.page_count, 2)
+            self.assertIn("CHARTS CONTINUED", doc[2].get_text("text"))
+
     def test_separate_plot_and_legend_rects_shrinks_plot_when_legend_is_on_the_right(self) -> None:
         plot_rect = fitz.Rect(24.0, 120.0, 380.0, 240.0)
         legend_rect = fitz.Rect(300.0, 150.0, 420.0, 220.0)
@@ -1755,6 +1770,69 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertAlmostEqual(smaller_rect.width, smaller_rect.height, delta=0.1)
         self.assertGreater(smaller_rect.x0, target.x0)
         self.assertGreater(smaller_rect.y0, target.y0)
+
+    def test_reflow_chart_replacements_expands_cartesian_and_pushes_next_row(self) -> None:
+        with fitz.open() as doc:
+            page = doc.new_page(width=420.0, height=520.0)
+            replacements = [
+                ChartReplacement("gain", fitz.Rect(40.0, 70.0, 240.0, 150.0), self.gain_svg),
+                ChartReplacement("beamwidth", fitz.Rect(40.0, 166.0, 240.0, 246.0), self.beamwidth_svg),
+            ]
+
+            pages = _reflow_chart_replacements(
+                page,
+                replacements,
+                cartesian_figure_width=18.0,
+                cartesian_figure_height=7.56,
+                polar_figure_size=None,
+            )
+
+        self.assertEqual(len(pages), 1)
+        by_kind = {replacement.kind: replacement for replacement in pages[0]}
+        self.assertGreater(by_kind["gain"].rect.width, replacements[0].rect.width)
+        self.assertGreater(by_kind["gain"].rect.height, replacements[0].rect.height)
+        self.assertGreater(by_kind["beamwidth"].rect.y0, replacements[1].rect.y0)
+
+    def test_reflow_chart_replacements_wraps_large_polar_plots(self) -> None:
+        with fitz.open() as doc:
+            page = doc.new_page(width=360.0, height=650.0)
+            replacements = [
+                ChartReplacement("azimuth", fitz.Rect(40.0, 70.0, 140.0, 170.0), self.azimuth_svg),
+                ChartReplacement("elevation", fitz.Rect(170.0, 70.0, 270.0, 170.0), self.elevation_svg),
+            ]
+
+            pages = _reflow_chart_replacements(
+                page,
+                replacements,
+                cartesian_figure_width=None,
+                cartesian_figure_height=None,
+                polar_figure_size=18.0,
+            )
+
+        self.assertEqual(len(pages), 1)
+        self.assertGreater(pages[0][0].rect.width, replacements[0].rect.width)
+        self.assertGreater(pages[0][1].rect.width, replacements[1].rect.width)
+        self.assertGreater(pages[0][1].rect.y0, pages[0][0].rect.y0)
+
+    def test_reflow_chart_replacements_adds_continuation_page_for_overflow(self) -> None:
+        with fitz.open() as doc:
+            page = doc.new_page(width=360.0, height=360.0)
+            replacements = [
+                ChartReplacement("gain", fitz.Rect(40.0, 70.0, 240.0, 150.0), self.gain_svg),
+                ChartReplacement("beamwidth", fitz.Rect(40.0, 166.0, 240.0, 246.0), self.beamwidth_svg),
+                ChartReplacement("azimuth", fitz.Rect(40.0, 262.0, 140.0, 342.0), self.azimuth_svg),
+            ]
+
+            pages = _reflow_chart_replacements(
+                page,
+                replacements,
+                cartesian_figure_width=18.0,
+                cartesian_figure_height=7.56,
+                polar_figure_size=18.0,
+            )
+
+        self.assertGreater(len(pages), 1)
+        self.assertEqual([replacement.kind for page_replacements in pages for replacement in page_replacements], ["gain", "beamwidth", "azimuth"])
 
     def test_gain_and_beamwidth_side_legends_share_the_same_scale(self) -> None:
         with fitz.open(self.template_pdf) as doc:
