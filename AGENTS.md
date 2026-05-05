@@ -13,8 +13,10 @@
 
 ## Testing
 
-- Run the test suite with `python -m pytest`.
-- For focused changes, run the matching tests under `tests/`.
+- Prefer the targeted export acceptance suite for datasheet/PDF/plot-size work:
+  `python -m pytest -m export_acceptance -q`.
+- If that passes and the change is broader, run the matching test files under `tests/`.
+- Avoid using one full `python -m pytest` run as the default signal; it is slow enough to time out locally. For release-level checks, split the suite by file or subsystem and use `--durations=20` on slow groups.
 - Keep test updates targeted and only describe them briefly unless asked for detail.
 
 ## Working Notes

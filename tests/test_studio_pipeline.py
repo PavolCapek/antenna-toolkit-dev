@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 from pipeline.stages import (
     stage_generated_directories,
     stage_is_applicable,
@@ -15,6 +17,7 @@ from pipeline.stages import (
 
 
 class StudioPipelineTests(unittest.TestCase):
+    @pytest.mark.export_acceptance
     def test_stage_settings_snapshot_filters_by_stage(self) -> None:
         values = {
             "smooth": 5,

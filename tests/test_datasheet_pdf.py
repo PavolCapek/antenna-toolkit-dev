@@ -7,6 +7,7 @@ from pathlib import Path
 
 import fitz
 import pandas as pd
+import pytest
 
 from datasheet.artifacts import build_asset_record, load_artifact_manifest, update_artifact_manifest
 from datasheet.models import DatasheetTableRow
@@ -1137,6 +1138,7 @@ class DatasheetPdfTests(unittest.TestCase):
         for rgb in (gain_handle_rgb, beamwidth_handle_rgb, polar_handle_rgb):
             self.assertGreater(min(rgb), 220)
 
+    @pytest.mark.export_acceptance
     def test_build_datasheet_pdf_adds_chart_continuation_for_large_figures(self) -> None:
         build_datasheet_pdf(
             output=self.output_pdf,
@@ -1719,6 +1721,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertLessEqual(by_kind["gain"].rect.x1, replacements[0].legend_rect.x0)
         self.assertLessEqual(by_kind["beamwidth"].rect.x1, replacements[1].legend_rect.x0)
 
+    @pytest.mark.export_acceptance
     def test_cartesian_svg_rect_reflects_custom_figure_size(self) -> None:
         default_svg = self.root / "default-cartesian.svg"
         square_svg = self.root / "square-cartesian.svg"
@@ -1745,6 +1748,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertGreater(square_rect.x0, target.x0)
         self.assertLess(square_rect.x1, target.x1)
 
+    @pytest.mark.export_acceptance
     def test_polar_svg_rect_reflects_custom_figure_size(self) -> None:
         default_svg = self.root / "default-polar.svg"
         smaller_svg = self.root / "smaller-polar.svg"
@@ -1772,6 +1776,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertGreater(smaller_rect.x0, target.x0)
         self.assertGreater(smaller_rect.y0, target.y0)
 
+    @pytest.mark.export_acceptance
     def test_reflow_chart_replacements_expands_cartesian_and_pushes_next_row(self) -> None:
         with fitz.open() as doc:
             page = doc.new_page(width=420.0, height=520.0)
@@ -1794,6 +1799,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertGreater(by_kind["gain"].rect.height, replacements[0].rect.height)
         self.assertGreater(by_kind["beamwidth"].rect.y0, replacements[1].rect.y0)
 
+    @pytest.mark.export_acceptance
     def test_reflow_chart_replacements_wraps_large_polar_plots(self) -> None:
         with fitz.open() as doc:
             page = doc.new_page(width=360.0, height=650.0)
@@ -1815,6 +1821,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertGreater(pages[0][1].rect.width, replacements[1].rect.width)
         self.assertGreater(pages[0][1].rect.y0, pages[0][0].rect.y0)
 
+    @pytest.mark.export_acceptance
     def test_reflow_chart_replacements_adds_continuation_page_for_overflow(self) -> None:
         with fitz.open() as doc:
             page = doc.new_page(width=360.0, height=360.0)

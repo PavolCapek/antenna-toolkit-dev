@@ -7,6 +7,7 @@ from pathlib import Path
 import fitz
 import matplotlib
 import numpy as np
+import pytest
 
 matplotlib.use("Agg")
 
@@ -14,6 +15,7 @@ from plot import plot_xy as plot_workbook_xy, save_polar
 from plot_vswr import plot_xy as plot_vswr_xy
 
 
+@pytest.mark.export_acceptance
 class CartesianPlotDimensionTests(unittest.TestCase):
     def _export_ratio(self, svg_path: Path) -> float:
         with fitz.open(svg_path) as doc:

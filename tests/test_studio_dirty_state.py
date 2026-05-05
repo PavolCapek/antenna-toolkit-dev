@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
+import pytest
 
 import studio_support as qt_module
 import antenna_toolkit_studio as studio_module
@@ -1089,6 +1090,7 @@ class StudioDirtyStateTests(unittest.TestCase):
             self.assertEqual(self.window.stage_timestamp_labels["vswr"].text(), "Generated: not applicable")
             self.assertEqual(self.window.stage_chip_labels["vswr"].text(), "Off")
 
+    @pytest.mark.export_acceptance
     def test_run_full_queues_datasheet_stage(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "sample.ffs"
         s2p_path = Path(self.temp_dir.name) / "sample.s2p"
@@ -1153,6 +1155,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--polar-figure-size") + 1], "7.75")
         self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--radiation-frequencies-ghz") + 1], "4.9,6")
 
+    @pytest.mark.export_acceptance
     def test_run_plot_passes_beamwidth_db_colors(self) -> None:
         beam_output = self.window.deduced_beam_output()
         beam_output.parent.mkdir(parents=True, exist_ok=True)

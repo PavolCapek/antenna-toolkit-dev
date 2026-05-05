@@ -50,6 +50,22 @@ python -m pip install -r requirements.txt
 python -m pip install PySide6
 ```
 
+## Testing
+
+For datasheet PDF export, plot sizing, and Studio size-propagation changes, use the targeted acceptance suite:
+
+```powershell
+python -m pytest -m export_acceptance -q
+```
+
+For broader release checks, run test files by subsystem instead of one long full-suite command:
+
+```powershell
+python -m pytest tests/test_datasheet_pdf.py tests/test_datasheet_visual_regression.py -q
+python -m pytest tests/test_pipeline_commands.py tests/test_cartesian_plot_dimensions.py tests/test_studio_pipeline.py -q
+python -m pytest tests/test_studio_dirty_state.py -q --durations=20
+```
+
 ## Launching The App
 
 The easiest way is to double-click:

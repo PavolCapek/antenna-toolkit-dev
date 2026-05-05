@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+import pytest
+
 from pipeline.commands import build_plot_command, build_vswr_command
 from pipeline.run_context import RunContext
 from pipeline.settings import PresetSettings
@@ -32,6 +34,7 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertEqual(settings.polar_azimuth_line_1_color, "#abcdef")
         self.assertEqual(settings.polar_elevation_line_2_color, "#123456")
 
+    @pytest.mark.export_acceptance
     def test_plot_command_uses_typed_settings(self) -> None:
         settings = PresetSettings(
             plot_line_1="#111111",
@@ -76,6 +79,7 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertEqual(command[command.index("--fmin") + 1], "0.3")
         self.assertEqual(command[command.index("--gain-legend-labels") + 1], "Gain A")
 
+    @pytest.mark.export_acceptance
     def test_vswr_command_uses_typed_settings(self) -> None:
         settings = PresetSettings(
             plot_line_1="#111111",

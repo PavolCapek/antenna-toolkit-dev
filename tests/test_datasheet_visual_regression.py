@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import fitz
+import pytest
 
 from datasheet_pdf import (
     _build_chart_replacements,
@@ -83,6 +84,7 @@ def _has_left_table_line_below(page: fitz.Page, text: str) -> bool:
     return False
 
 
+@pytest.mark.export_acceptance
 class DatasheetVisualRegressionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
