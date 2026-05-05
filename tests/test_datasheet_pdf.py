@@ -41,6 +41,7 @@ from datasheet_pdf import (
     _replace_header_placeholders,
     _replace_chart_images,
     _reflow_chart_replacements,
+    _shift_chart_replacement,
     _update_footer_dates,
     build_datasheet_pdf,
     build_replacements_from_workbook,
@@ -1833,6 +1834,22 @@ class DatasheetPdfTests(unittest.TestCase):
 
         self.assertGreater(len(pages), 1)
         self.assertEqual([replacement.kind for page_replacements in pages for replacement in page_replacements], ["gain", "beamwidth", "azimuth"])
+
+    def test_shift_chart_replacement_moves_erase_rect_with_plot(self) -> None:
+        replacement = ChartReplacement(
+            "gain",
+            fitz.Rect(40.0, 70.0, 240.0, 150.0),
+            self.gain_svg,
+            legend_rect=fitz.Rect(250.0, 80.0, 310.0, 130.0),
+            legend_asset_path=self.gain_legend_svg,
+            erase_rect=fitz.Rect(35.0, 65.0, 315.0, 155.0),
+        )
+
+        shifted = _shift_chart_replacement(replacement, 12.0, 18.0)
+
+        self.assertEqual(tuple(shifted.rect), tuple(fitz.Rect(52.0, 88.0, 252.0, 168.0)))
+        self.assertEqual(tuple(shifted.legend_rect), tuple(fitz.Rect(262.0, 98.0, 322.0, 148.0)))
+        self.assertEqual(tuple(shifted.erase_rect), tuple(fitz.Rect(47.0, 83.0, 327.0, 173.0)))
 
     def test_gain_and_beamwidth_side_legends_share_the_same_scale(self) -> None:
         with fitz.open(self.template_pdf) as doc:

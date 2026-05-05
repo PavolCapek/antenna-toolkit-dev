@@ -3602,13 +3602,19 @@ def _shift_chart_replacement(replacement: ChartReplacement, dx: float, dy: float
         replacement.legend_rect.x1 + dx,
         replacement.legend_rect.y1 + dy,
     )
+    erase_rect = None if replacement.erase_rect is None else fitz.Rect(
+        replacement.erase_rect.x0 + dx,
+        replacement.erase_rect.y0 + dy,
+        replacement.erase_rect.x1 + dx,
+        replacement.erase_rect.y1 + dy,
+    )
     return ChartReplacement(
         replacement.kind,
         fitz.Rect(replacement.rect.x0 + dx, replacement.rect.y0 + dy, replacement.rect.x1 + dx, replacement.rect.y1 + dy),
         replacement.asset_path,
         legend_rect=legend_rect,
         legend_asset_path=replacement.legend_asset_path,
-        erase_rect=replacement.erase_rect,
+        erase_rect=erase_rect,
         legend_scale_cap=replacement.legend_scale_cap,
     )
 
@@ -3932,7 +3938,7 @@ def _redraw_chart_headings(page: fitz.Page, headings: list[TextSpan]) -> None:
     labels = {_normalized_span_text(heading.text) for heading in headings}
     for span in _extract_page_spans(page):
         if _normalized_span_text(span.text) in labels:
-            page.add_redact_annot(_expand_rect(fitz.Rect(span.bbox), padding=1.0), fill=(1.0, 1.0, 1.0))
+            page.add_redact_annot(_expand_rect(fitz.Rect(span.bbox), padding=1.0), fill=None)
     page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
     registered_fonts: set[str] = set()
@@ -4026,7 +4032,7 @@ def _redraw_netqui_chart_section_titles(
             spans.append(span)
 
     for span in spans:
-        page.add_redact_annot(_expand_rect(fitz.Rect(span.bbox), padding=1.0), fill=(1.0, 1.0, 1.0))
+        page.add_redact_annot(_expand_rect(fitz.Rect(span.bbox), padding=1.0), fill=None)
     if spans:
         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
@@ -4465,7 +4471,21 @@ def _append_rfe_radiation_pages(
                         legend_scale_cap=NETQUI_POLAR_LEGEND_SCALE_CAP,
                     )
                 )
-        _apply_chart_replacements_to_page(page, replacements, polar_figure_size=polar_figure_size)
+        pages, page_headings = _reflow_chart_replacements(
+            page,
+            replacements,
+            cartesian_figure_width=None,
+            cartesian_figure_height=None,
+            polar_figure_size=polar_figure_size,
+            return_headings=True,
+        )
+        _place_chart_replacements_on_page(page, pages[0] if pages else replacements, replacement_rects_are_final=True)
+        _redraw_chart_headings(page, page_headings[0] if page_headings else [])
+        for index, page_replacements in enumerate(pages[1:], start=1):
+            insert_after += 1
+            continuation = doc.new_page(pno=insert_after + 1, width=page.rect.width, height=page.rect.height)
+            _place_chart_replacements_on_page(continuation, page_replacements, replacement_rects_are_final=True)
+            _redraw_chart_headings(continuation, page_headings[index] if index < len(page_headings) else [])
         remaining = remaining[len(slot_pairs):]
         insert_after += 1
 
