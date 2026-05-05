@@ -2604,6 +2604,7 @@ def _normalize_plot_widths(replacements: list[ChartReplacement], kinds: set[str]
                 legend_rect=replacement.legend_rect,
                 legend_asset_path=replacement.legend_asset_path,
                 erase_rect=replacement.erase_rect,
+                legend_scale_cap=replacement.legend_scale_cap,
             )
         )
     return normalized
@@ -2697,6 +2698,28 @@ def _compact_netqui_chart_slot_top(slot_rect: fitz.Rect, spans: list[TextSpan], 
     if kind.startswith("radiation_"):
         return fitz.Rect(slot_rect.x0, compact_y0, slot_rect.x1, compact_y0 + slot_rect.height)
     return fitz.Rect(slot_rect.x0, compact_y0, slot_rect.x1, slot_rect.y1)
+
+
+def _rfe_chart_heading_labels(kind: str) -> tuple[str, ...]:
+    if kind == "gain":
+        return ("ANTENNA GAIN",)
+    if kind == "beamwidth":
+        return ("ANTENNA BEAMWIDTH",)
+    if kind.startswith("azimuth"):
+        return ("AZIMUTH PATTERN",)
+    if kind.startswith("elevation"):
+        return ("ELEVATION PATTERN",)
+    return ()
+
+
+def _reserve_rfe_chart_heading_space(slot_rect: fitz.Rect, spans: list[TextSpan], kind: str) -> fitz.Rect:
+    heading_bottom = _netqui_heading_bottom(spans, _rfe_chart_heading_labels(kind))
+    if heading_bottom is None:
+        return slot_rect
+    y0 = heading_bottom + 8.0
+    if y0 <= slot_rect.y0 or y0 >= slot_rect.y1 - 24.0:
+        return slot_rect
+    return fitz.Rect(slot_rect.x0, y0, slot_rect.x1, slot_rect.y1)
 
 
 def _netqui_heading_span(spans: list[TextSpan], label: str) -> TextSpan | None:
@@ -2913,6 +2936,8 @@ def _build_manifest_chart_replacements(
         slot_rect = fitz.Rect(original_slot_rect)
         if slot_spec.legend_mode in {"netqui_side", "netqui_top_side", "netqui_bottom"}:
             slot_rect = _compact_netqui_chart_slot_top(slot_rect, spans, slot_spec.kind)
+        elif chart_manifest.slot_order == "first_two_then_x":
+            slot_rect = _reserve_rfe_chart_heading_space(slot_rect, spans, slot_spec.kind)
         if slot_spec.legend_mode == "netqui_side":
             legend_asset = _legend_asset_path(asset, artifact_manifest)
             plot_rect, legend_rect = netqui_beamwidth_rects(slot_rect)
@@ -2959,8 +2984,9 @@ def _build_manifest_chart_replacements(
             replacements.append(ChartReplacement(slot_spec.kind, slot_rect, asset))
 
     auto_legend_kinds = {slot.kind for slot in chart_manifest.slots if slot.legend_mode == "auto"}
+    normalize_width_kinds = set(chart_manifest.normalize_width_kinds)
     if not auto_legend_kinds:
-        return replacements
+        return _normalize_plot_widths(replacements, normalize_width_kinds) if normalize_width_kinds else replacements
 
     index_by_kind = {replacement.kind: idx for idx, replacement in enumerate(replacements)}
     polar_x_centers = {
@@ -3015,7 +3041,7 @@ def _build_manifest_chart_replacements(
                 replacement.asset_path,
             )
         )
-    return resolved
+    return _normalize_plot_widths(resolved, normalize_width_kinds) if normalize_width_kinds else resolved
 
 
 def _build_chart_replacements(
@@ -3672,6 +3698,27 @@ def _apply_chart_replacements_to_page(
     )
 
 
+def _is_custom_figure_size(value: float | None, default: float) -> bool:
+    return value is not None and abs(float(value) - float(default)) > 0.001
+
+
+def _placement_figure_sizes(
+    cartesian_figure_width: float | None,
+    cartesian_figure_height: float | None,
+    polar_figure_size: float | None,
+) -> tuple[float | None, float | None, float | None]:
+    cartesian_is_custom = (
+        _is_custom_figure_size(cartesian_figure_width, CARTESIAN_FIGURE_WIDTH_IN)
+        or _is_custom_figure_size(cartesian_figure_height, CARTESIAN_FIGURE_HEIGHT_IN)
+    )
+    polar_is_custom = _is_custom_figure_size(polar_figure_size, POLAR_FIGURE_SIZE_IN)
+    return (
+        float(cartesian_figure_width) if cartesian_is_custom and cartesian_figure_width is not None else None,
+        float(cartesian_figure_height) if cartesian_is_custom and cartesian_figure_height is not None else None,
+        float(polar_figure_size) if polar_is_custom and polar_figure_size is not None else None,
+    )
+
+
 def _append_chart_continuation_page(doc: fitz.Document, after_page_index: int, source_page: fitz.Page) -> fitz.Page:
     page = doc.new_page(pno=after_page_index + 1, width=source_page.rect.width, height=source_page.rect.height)
     page.insert_text((36.0, 58.0), "CHARTS CONTINUED", fontsize=10.0, fontname="helv", color=(0.237, 0.237, 0.237))
@@ -3686,11 +3733,27 @@ def _apply_chart_replacements_to_document(
     cartesian_figure_width: float | None = None,
     cartesian_figure_height: float | None = None,
     polar_figure_size: float | None = None,
+    allow_reflow: bool = True,
 ) -> int:
     page = doc[page_index]
-    should_reflow = cartesian_figure_width is not None or cartesian_figure_height is not None or polar_figure_size is not None
+    should_reflow = allow_reflow and (
+        _is_custom_figure_size(cartesian_figure_width, CARTESIAN_FIGURE_WIDTH_IN)
+        or _is_custom_figure_size(cartesian_figure_height, CARTESIAN_FIGURE_HEIGHT_IN)
+        or _is_custom_figure_size(polar_figure_size, POLAR_FIGURE_SIZE_IN)
+    )
     if not should_reflow:
-        _apply_chart_replacements_to_page(page, replacements)
+        placement_width, placement_height, placement_polar_size = _placement_figure_sizes(
+            cartesian_figure_width,
+            cartesian_figure_height,
+            polar_figure_size,
+        )
+        _apply_chart_replacements_to_page(
+            page,
+            replacements,
+            cartesian_figure_width=placement_width,
+            cartesian_figure_height=placement_height,
+            polar_figure_size=placement_polar_size,
+        )
         return page_index
     pages = _reflow_chart_replacements(
         page,
@@ -4063,10 +4126,11 @@ def _rfe_radiation_slot_pairs(page: fitz.Page, azimuth_slot: ChartSlot, elevatio
         return []
     row_gap = 16.0
     bottom_limit = page.rect.height - 54.0
-    row_height = max(60.0, azimuth_slot.rect.height)
+    row_top = min(azimuth_slot.rect.y0, elevation_slot.rect.y0)
+    row_height = max(60.0, azimuth_slot.rect.height, elevation_slot.rect.height)
     pairs: list[tuple[fitz.Rect, fitz.Rect]] = []
     for index in range(count):
-        y0 = azimuth_slot.rect.y0 + index * (row_height + row_gap)
+        y0 = row_top + index * (row_height + row_gap)
         y1 = y0 + row_height
         if y1 > bottom_limit:
             break
@@ -4100,7 +4164,8 @@ def _build_rfe_selected_chart_replacements(
     replacements = [replacement for replacement in replacements if replacement.kind not in {"azimuth", "elevation"}]
     if len(ordered_slots) < 4:
         return replacements, [], []
-    azimuth_slot, elevation_slot = ordered_slots[2], ordered_slots[3]
+    azimuth_slot = ChartSlot(_reserve_rfe_chart_heading_space(ordered_slots[2].rect, spans, "azimuth"), ordered_slots[2].image_name)
+    elevation_slot = ChartSlot(_reserve_rfe_chart_heading_space(ordered_slots[3].rect, spans, "elevation"), ordered_slots[3].image_name)
     pairs = _find_selected_polar_single_asset_pairs(output, extract_workbook, selected_radiation_frequencies, artifact_manifest)
     slot_pairs = _rfe_radiation_slot_pairs(page, azimuth_slot, elevation_slot, len(pairs))
     for index, ((azimuth_asset, elevation_asset), (azimuth_rect, elevation_rect)) in enumerate(zip(pairs, slot_pairs), start=1):
@@ -4211,6 +4276,7 @@ def _replace_netqui_1pol_placeholder_chart_images(
         cartesian_figure_width=cartesian_figure_width,
         cartesian_figure_height=cartesian_figure_height,
         polar_figure_size=polar_figure_size,
+        allow_reflow=False,
     )
     radiation_count = sum(1 for replacement in replacements if replacement.kind.startswith("radiation_"))
     target_count = 6 if selected_radiation_frequencies is None else len(selected_radiation_frequencies)
@@ -4316,6 +4382,7 @@ def _replace_chart_images(
                 cartesian_figure_width=cartesian_figure_width,
                 cartesian_figure_height=cartesian_figure_height,
                 polar_figure_size=polar_figure_size,
+                allow_reflow=False,
             )
             radiation_count = sum(1 for replacement in replacements if replacement.kind.startswith("radiation_"))
             radiation_assets = _find_selected_combined_polar_assets(
@@ -4354,6 +4421,7 @@ def _replace_chart_images(
                 cartesian_figure_width=cartesian_figure_width,
                 cartesian_figure_height=cartesian_figure_height,
                 polar_figure_size=polar_figure_size,
+                allow_reflow=False,
             )
             if remaining_pairs:
                 _append_rfe_radiation_pages(
@@ -4391,6 +4459,7 @@ def _replace_chart_images(
         cartesian_figure_width=cartesian_figure_width,
         cartesian_figure_height=cartesian_figure_height,
         polar_figure_size=polar_figure_size,
+        allow_reflow=adapter is None or adapter.key == "generic",
     )
     if draw_spans:
         _redraw_netqui_chart_section_titles(

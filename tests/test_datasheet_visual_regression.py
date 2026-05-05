@@ -8,6 +8,9 @@ import fitz
 
 from datasheet_pdf import (
     _build_chart_replacements,
+    _build_netqui_1pol_selected_chart_replacements,
+    _build_rfe_selected_chart_replacements,
+    _collect_chart_slots,
     _extract_page_spans,
     _legend_target_rect,
     _shared_side_legend_scale,
@@ -125,6 +128,95 @@ class DatasheetVisualRegressionTests(unittest.TestCase):
             self.assertLess(azimuth_title.x0, elevation_title.x0)
             self.assertGreater(_non_white_ratio(page, by_kind["azimuth"].rect), 0.03)
             self.assertGreater(_non_white_ratio(page, by_kind["elevation"].rect), 0.03)
+
+    def test_rfe_selected_radiation_reserves_heading_space_and_equalizes_cartesian_widths(self) -> None:
+        template = REPO_ROOT / "Templates" / "Datasheet - RFE.pdf"
+        project_dir = REPO_ROOT / "Projects" / "AH60WB"
+        extract_workbook = project_dir / "AH60WB-extracted-data.xlsx"
+        _require_paths(
+            self,
+            [
+                template,
+                extract_workbook,
+                project_dir / "AH60WB-gain.svg",
+                project_dir / "AH60WB-beamwidth.svg",
+                project_dir / "polar_single" / "azimuth" / "AH60WB-polar-azimuth-5.500-GHz.svg",
+                project_dir / "polar_single" / "elevation" / "AH60WB-polar-elevation-5.500-GHz.svg",
+            ],
+        )
+
+        with fitz.open(template) as template_doc:
+            adapter = resolve_template_adapter(template, template_doc)
+            page = template_doc[1]
+            ordered_slots = sorted(_collect_chart_slots(page), key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
+            replacements, _remaining_pairs, _base_slots = _build_rfe_selected_chart_replacements(
+                page,
+                ordered_slots,
+                self.output_dir / "rfe.pdf",
+                extract_workbook,
+                None,
+                adapter,
+                [5.5],
+            )
+            by_kind = {replacement.kind: replacement for replacement in replacements}
+            beamwidth_title = _span_for_text(page, "ANTENNA BEAMWIDTH")
+            azimuth_title = _span_for_text(page, "AZIMUTH PATTERN")
+            elevation_title = _span_for_text(page, "ELEVATION PATTERN")
+
+            self.assertAlmostEqual(by_kind["gain"].rect.width, by_kind["beamwidth"].rect.width, delta=0.01)
+            self.assertGreater(by_kind["beamwidth"].rect.y0, beamwidth_title.y1)
+            self.assertGreater(by_kind["azimuth_1"].rect.y0, azimuth_title.y1)
+            self.assertGreater(by_kind["elevation_1"].rect.y0, elevation_title.y1)
+            self.assertAlmostEqual(by_kind["azimuth_1"].rect.height, by_kind["elevation_1"].rect.height, delta=0.01)
+
+    def test_netqui_1pol_selected_radiation_stays_on_template_page_with_custom_figure_sizes(self) -> None:
+        template = REPO_ROOT / "Templates" / "Datasheet - Netqui - 1Pol.pdf"
+        project_dir = REPO_ROOT / "Projects" / "LPDA_0_3_3"
+        extract_workbook = project_dir / "LPDA_0_3_3-extracted-data.xlsx"
+        _require_paths(
+            self,
+            [
+                template,
+                extract_workbook,
+                project_dir / "LPDA_0_3_3-gain.svg",
+                project_dir / "LPDA_0_3_3-vswr.svg",
+                project_dir / "LPDA_0_3_3-beamwidth-e-plane.svg",
+                project_dir / "LPDA_0_3_3-beamwidth-h-plane.svg",
+                project_dir / "polar_combined" / "e-h-plane" / "LPDA_0_3_3-polar-2.000-GHz-e-h-plane-combined.svg",
+            ],
+        )
+        output = self.output_dir / "lpda-netqui-1pol-six-radiation.pdf"
+        selected = [0.3, 0.5, 0.7, 1.0, 1.5, 2.0]
+
+        build_datasheet_pdf(
+            output,
+            template,
+            extract_workbook,
+            radiation_frequencies_ghz=selected,
+            cartesian_figure_width=18.0,
+            cartesian_figure_height=8.0,
+            polar_figure_size=12.0,
+        )
+
+        with fitz.open(output) as rendered_doc, fitz.open(template) as template_doc:
+            adapter = resolve_template_adapter(template, template_doc)
+            page = template_doc[1]
+            ordered_slots = sorted(_collect_chart_slots(page), key=lambda slot: (slot.rect.y0, slot.rect.x0, slot.rect.y1, slot.rect.x1))
+            replacements = _build_netqui_1pol_selected_chart_replacements(
+                page,
+                ordered_slots,
+                output,
+                extract_workbook,
+                None,
+                selected,
+            )
+            radiation = [replacement for replacement in replacements if replacement.kind.startswith("radiation_")]
+
+            self.assertNotIn("CHARTS CONTINUED", "\n".join(page.get_text("text") for page in rendered_doc))
+            self.assertEqual(rendered_doc.page_count, template_doc.page_count)
+            self.assertEqual(len(radiation), 6)
+            self.assertLess(radiation[2].rect.y0, radiation[3].rect.y0)
+            self.assertIn("RADIATION PATTERNS", rendered_doc[1].get_text("text"))
 
     def test_netqui_real_template_keeps_frequency_value_visible_with_technical_data(self) -> None:
         template = REPO_ROOT / "Templates" / "Datasheet - Netqui.pdf"
