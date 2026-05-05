@@ -13,6 +13,7 @@ from datasheet_pdf import (
     _collect_chart_slots,
     _extract_page_spans,
     _legend_target_rect,
+    _reflow_chart_replacements,
     _shared_side_legend_scale,
     build_datasheet_pdf,
 )
@@ -211,11 +212,30 @@ class DatasheetVisualRegressionTests(unittest.TestCase):
                 selected,
             )
             radiation = [replacement for replacement in replacements if replacement.kind.startswith("radiation_")]
+            small_pages, _small_headings = _reflow_chart_replacements(
+                page,
+                replacements,
+                cartesian_figure_width=18.0,
+                cartesian_figure_height=8.0,
+                polar_figure_size=7.0,
+                return_headings=True,
+            )
+            large_pages, _large_headings = _reflow_chart_replacements(
+                page,
+                replacements,
+                cartesian_figure_width=18.0,
+                cartesian_figure_height=8.0,
+                polar_figure_size=12.0,
+                return_headings=True,
+            )
+            small_radiation = [replacement for replacement in small_pages[0] if replacement.kind.startswith("radiation_")]
+            large_radiation = [replacement for replacement in large_pages[0] if replacement.kind.startswith("radiation_")]
 
             self.assertNotIn("CHARTS CONTINUED", "\n".join(page.get_text("text") for page in rendered_doc))
             self.assertEqual(rendered_doc.page_count, template_doc.page_count)
             self.assertEqual(len(radiation), 6)
             self.assertLess(radiation[2].rect.y0, radiation[3].rect.y0)
+            self.assertGreater(large_radiation[0].rect.height, small_radiation[0].rect.height)
             self.assertIn("RADIATION PATTERNS", rendered_doc[1].get_text("text"))
 
     def test_netqui_real_template_keeps_frequency_value_visible_with_technical_data(self) -> None:

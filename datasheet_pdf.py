@@ -3436,6 +3436,95 @@ def _chart_rows(replacements: list[ChartReplacement], tolerance: float = 42.0) -
     return [sorted(row, key=lambda item: _replacement_union_rect(item).x0) for row in rows]
 
 
+def _chart_heading_label_for_kind(kind: str) -> str | None:
+    if kind == "gain":
+        return "ANTENNA GAIN"
+    if kind == "vswr":
+        return "VSWR"
+    if kind == "beamwidth" or kind.startswith("beamwidth_"):
+        return "ANTENNA BEAMWIDTH"
+    if kind == "azimuth" or kind.startswith("azimuth_"):
+        return "AZIMUTH PATTERN"
+    if kind == "elevation" or kind.startswith("elevation_"):
+        return "ELEVATION PATTERN"
+    if kind.startswith("radiation_"):
+        return "RADIATION PATTERNS"
+    return None
+
+
+def _chart_heading_spans(page: fitz.Page) -> dict[str, TextSpan]:
+    labels = {
+        "ANTENNA GAIN",
+        "VSWR",
+        "ANTENNA BEAMWIDTH",
+        "AZIMUTH PATTERN",
+        "ELEVATION PATTERN",
+        "RADIATION PATTERNS",
+    }
+    return {
+        normalized: span
+        for span in _extract_page_spans(page)
+        if (normalized := _normalized_span_text(span.text)) in labels
+    }
+
+
+def _fallback_chart_heading_span(text: str, x: float, y0: float) -> TextSpan:
+    is_rfe_polar = text in {"AZIMUTH PATTERN", "ELEVATION PATTERN"}
+    size = 8.0 if is_rfe_polar else 10.0
+    color = 0xE50000 if is_rfe_polar else 0x000000
+    width = max(48.0, len(text) * size * 0.56)
+    return TextSpan(
+        text=text,
+        bbox=fitz.Rect(x, y0, x + width, y0 + size + 2.0),
+        origin=(x, y0 + size),
+        font=NETQUI_HEADING_FONT if not is_rfe_polar else "helv",
+        size=size,
+        color=color,
+    )
+
+
+def _position_chart_heading_span(text: str, source: TextSpan | None, x: float, y0: float) -> TextSpan:
+    if source is None:
+        return _fallback_chart_heading_span(text, x, y0)
+    dx = x - source.bbox.x0
+    dy = y0 - source.bbox.y0
+    return TextSpan(
+        text=text,
+        bbox=fitz.Rect(source.bbox.x0 + dx, source.bbox.y0 + dy, source.bbox.x1 + dx, source.bbox.y1 + dy),
+        origin=(source.origin[0] + dx, source.origin[1] + dy),
+        font=source.font,
+        size=source.size,
+        color=source.color,
+    )
+
+
+def _reflow_row_heading_inputs(
+    row: list[ChartReplacement],
+    source_spans: dict[str, TextSpan],
+    used_labels: set[str],
+) -> list[tuple[str, ChartReplacement, TextSpan | None]]:
+    inputs: list[tuple[str, ChartReplacement, TextSpan | None]] = []
+    seen_in_row: set[str] = set()
+    for replacement in row:
+        label = _chart_heading_label_for_kind(replacement.kind)
+        if label is None or label in seen_in_row:
+            continue
+        if label in used_labels and label in {"ANTENNA BEAMWIDTH", "RADIATION PATTERNS"}:
+            continue
+        source = source_spans.get(label)
+        if source is None and label not in {"ANTENNA GAIN", "VSWR"}:
+            continue
+        inputs.append((label, replacement, source))
+        seen_in_row.add(label)
+    return inputs
+
+
+def _heading_x_for_replacement(label: str, replacement: ChartReplacement, source: TextSpan | None, content_rect: fitz.Rect) -> float:
+    if source is not None and label in {"ANTENNA BEAMWIDTH", "RADIATION PATTERNS"}:
+        return max(content_rect.x0, source.bbox.x0)
+    return _replacement_union_rect(replacement).x0
+
+
 def _requested_plot_size(
     replacement: ChartReplacement,
     *,
@@ -3536,6 +3625,49 @@ def _with_chart_rects(replacement: ChartReplacement, plot_rect: fitz.Rect, legen
     )
 
 
+def _scale_reflow_item(replacement: ChartReplacement, scale: float) -> ChartReplacement:
+    if scale >= 0.999:
+        return replacement
+    plot = fitz.Rect(replacement.rect)
+    center_x = (plot.x0 + plot.x1) / 2.0
+    width = plot.width * scale
+    height = plot.height * scale
+    scaled_plot = fitz.Rect(center_x - width / 2.0, plot.y0, center_x + width / 2.0, plot.y0 + height)
+    scaled_legend = None
+    if replacement.legend_rect is not None:
+        legend = fitz.Rect(replacement.legend_rect)
+        orientation = _legend_orientation(replacement)
+        gap = 6.0
+        legend_width = legend.width * scale
+        legend_height = legend.height * scale
+        if orientation == "right":
+            center_y = (scaled_plot.y0 + scaled_plot.y1) / 2.0
+            scaled_legend = fitz.Rect(scaled_plot.x1 + gap, center_y - legend_height / 2.0, scaled_plot.x1 + gap + legend_width, center_y + legend_height / 2.0)
+        elif orientation == "left":
+            center_y = (scaled_plot.y0 + scaled_plot.y1) / 2.0
+            scaled_legend = fitz.Rect(scaled_plot.x0 - gap - legend_width, center_y - legend_height / 2.0, scaled_plot.x0 - gap, center_y + legend_height / 2.0)
+        elif orientation == "top":
+            scaled_legend = fitz.Rect(center_x - legend_width / 2.0, scaled_plot.y0 - gap - legend_height, center_x + legend_width / 2.0, scaled_plot.y0 - gap)
+        else:
+            scaled_legend = fitz.Rect(center_x - legend_width / 2.0, scaled_plot.y1 + gap, center_x + legend_width / 2.0, scaled_plot.y1 + gap + legend_height)
+    return _with_chart_rects(replacement, scaled_plot, scaled_legend)
+
+
+def _fit_reflow_row_width(
+    row: list[ChartReplacement],
+    content_rect: fitz.Rect,
+    item_gap: float,
+) -> list[ChartReplacement]:
+    has_side_legend = any(_legend_orientation(item) in {"left", "right"} for item in row)
+    if len(row) < 3 and not has_side_legend:
+        return row
+    total_width = sum(_replacement_union_rect(item).width for item in row) + item_gap * (len(row) - 1)
+    if total_width <= content_rect.width + 0.1:
+        return row
+    scale = max(0.2, min(1.0, max(24.0, content_rect.width - 12.0) / total_width))
+    return [_scale_reflow_item(item, scale) for item in row]
+
+
 def _clamp_rect_to_content(rect: fitz.Rect, content_rect: fitz.Rect) -> fitz.Rect:
     width = min(rect.width, content_rect.width)
     height = min(rect.height, content_rect.height)
@@ -3583,17 +3715,59 @@ def _reflow_chart_replacements(
     cartesian_figure_width: float | None,
     cartesian_figure_height: float | None,
     polar_figure_size: float | None,
-) -> list[list[ChartReplacement]]:
+    return_headings: bool = False,
+) -> list[list[ChartReplacement]] | tuple[list[list[ChartReplacement]], list[list[TextSpan]]]:
     if not replacements:
-        return []
+        return ([], []) if return_headings else []
     if cartesian_figure_width is None and cartesian_figure_height is None and polar_figure_size is None:
-        return [replacements]
+        return ([replacements], [[]]) if return_headings else [replacements]
     content_rect = _chart_page_content_rect(page, replacements)
+    heading_sources = _chart_heading_spans(page)
     row_gap = 16.0
     item_gap = 12.0
+    chart_rows = _chart_rows(replacements)
+    estimate_used_labels: set[str] = set()
+    estimated_heading_height = 0.0
+    estimated_plot_height = 0.0
+    estimated_row_count = 0
+    for row in chart_rows:
+        heading_inputs = _reflow_row_heading_inputs(row, heading_sources, estimate_used_labels)
+        heading_height = max((source.bbox.height if source is not None else 12.0) for _label, _replacement, source in heading_inputs) if heading_inputs else 0.0
+        estimated_heading_height += heading_height + (8.0 if heading_inputs else 0.0)
+        for label, _replacement, _source in heading_inputs:
+            estimate_used_labels.add(label)
+        prepared = _fit_reflow_row_width(
+            [
+                _prepare_reflow_item(
+                    replacement,
+                    content_rect,
+                    cartesian_figure_width=cartesian_figure_width,
+                    cartesian_figure_height=cartesian_figure_height,
+                    polar_figure_size=polar_figure_size,
+                )
+                for replacement in row
+            ],
+            content_rect,
+            item_gap,
+        )
+        estimated_plot_height += max((_replacement_union_rect(item).height for item in prepared), default=0.0)
+        estimated_row_count += 1
+    estimated_total_height = estimated_heading_height + estimated_plot_height + row_gap * max(0, estimated_row_count - 1)
+    global_scale = 1.0
+    if estimated_total_height > content_rect.height + 0.1:
+        scalable_height = max(1.0, estimated_plot_height)
+        available_plot_height = content_rect.height - estimated_heading_height - row_gap * max(0, estimated_row_count - 1) - 24.0
+        candidate_scale = min(1.0, available_plot_height / scalable_height)
+        if candidate_scale >= 0.75:
+            global_scale = candidate_scale
     pages: list[list[ChartReplacement]] = [[]]
+    page_headings: list[list[TextSpan]] = [[]]
+    used_heading_labels: set[str] = set()
     current_y = content_rect.y0
-    for row in _chart_rows(replacements):
+    for row in chart_rows:
+        heading_inputs = _reflow_row_heading_inputs(row, heading_sources, used_heading_labels)
+        heading_height = max((source.bbox.height if source is not None else 12.0) for _label, _replacement, source in heading_inputs) if heading_inputs else 0.0
+        row_y = current_y + heading_height + (8.0 if heading_inputs else 0.0)
         prepared = [
             _prepare_reflow_item(
                 replacement,
@@ -3604,32 +3778,59 @@ def _reflow_chart_replacements(
             )
             for replacement in row
         ]
+        prepared = _fit_reflow_row_width(prepared, content_rect, item_gap)
+        if global_scale < 0.999:
+            prepared = [_scale_reflow_item(item, global_scale) for item in prepared]
+        shifted_row: list[ChartReplacement] = []
         x_cursor = content_rect.x0
-        row_items: list[ChartReplacement] = []
-        line_bottom = current_y
+        line_bottom = row_y
         for item in prepared:
             union = _replacement_union_rect(item)
-            dx = max(0.0, x_cursor - union.x0)
-            shifted = _shift_chart_replacement(item, dx, current_y - union.y0)
-            union = _replacement_union_rect(shifted)
-            if row_items and union.x1 > content_rect.x1 + 0.1:
-                current_y = line_bottom + item_gap
-                row_items = []
-                shifted = _shift_chart_replacement(item, content_rect.x0 - _replacement_union_rect(item).x0, current_y - _replacement_union_rect(item).y0)
-                union = _replacement_union_rect(shifted)
-            if union.y1 > content_rect.y1 + 0.1:
-                if pages[-1]:
-                    pages.append([])
-                current_y = content_rect.y0
-                row_items = []
-                shifted = _shift_chart_replacement(item, content_rect.x0 - _replacement_union_rect(item).x0, current_y - _replacement_union_rect(item).y0)
-                union = _replacement_union_rect(shifted)
-            pages[-1].append(shifted)
-            row_items.append(shifted)
-            x_cursor = union.x1 + item_gap
-            line_bottom = max(line_bottom, union.y1)
+            shifted = _shift_chart_replacement(item, x_cursor - union.x0, row_y - union.y0)
+            shifted_union = _replacement_union_rect(shifted)
+            if shifted_row and shifted_union.x1 > content_rect.x1 + 0.1:
+                row_y = line_bottom + item_gap
+                shifted = _shift_chart_replacement(item, content_rect.x0 - union.x0, row_y - union.y0)
+            shifted_row.append(shifted)
+            shifted_union = _replacement_union_rect(shifted)
+            x_cursor = shifted_union.x1 + item_gap
+            line_bottom = max(line_bottom, shifted_union.y1)
+        if line_bottom > content_rect.y1 + 0.1 and pages[-1]:
+            pages.append([])
+            page_headings.append([])
+            used_heading_labels = set()
+            current_y = content_rect.y0
+            heading_inputs = _reflow_row_heading_inputs(row, heading_sources, used_heading_labels)
+            heading_height = max((source.bbox.height if source is not None else 12.0) for _label, _replacement, source in heading_inputs) if heading_inputs else 0.0
+            row_y = current_y + heading_height + (8.0 if heading_inputs else 0.0)
+            shifted_row = []
+            x_cursor = content_rect.x0
+            line_bottom = row_y
+            for item in prepared:
+                union = _replacement_union_rect(item)
+                shifted = _shift_chart_replacement(item, x_cursor - union.x0, row_y - union.y0)
+                shifted_union = _replacement_union_rect(shifted)
+                if shifted_row and shifted_union.x1 > content_rect.x1 + 0.1:
+                    row_y = line_bottom + item_gap
+                    shifted = _shift_chart_replacement(item, content_rect.x0 - union.x0, row_y - union.y0)
+                shifted_row.append(shifted)
+                shifted_union = _replacement_union_rect(shifted)
+                x_cursor = shifted_union.x1 + item_gap
+                line_bottom = max(line_bottom, shifted_union.y1)
+        if heading_inputs and shifted_row:
+            heading_y0 = max(24.0, min(_replacement_union_rect(item).y0 for item in shifted_row) - 8.0 - heading_height)
+            shifted_by_kind = {item.kind: item for item in shifted_row}
+            for label, source_item, source_span in heading_inputs:
+                shifted_source = shifted_by_kind.get(source_item.kind, shifted_row[0])
+                heading_x = _heading_x_for_replacement(label, shifted_source, source_span, content_rect)
+                page_headings[-1].append(_position_chart_heading_span(label, source_span, heading_x, heading_y0))
+                used_heading_labels.add(label)
+        pages[-1].extend(shifted_row)
         current_y = line_bottom + row_gap
-    return [page_replacements for page_replacements in pages if page_replacements]
+    pairs = [(page_replacements, headings) for page_replacements, headings in zip(pages, page_headings) if page_replacements]
+    page_results = [page_replacements for page_replacements, _headings in pairs]
+    heading_results = [headings for _page_replacements, headings in pairs]
+    return (page_results, heading_results) if return_headings else page_results
 
 
 def _erase_chart_replacements_from_page(page: fitz.Page, replacements: list[ChartReplacement]) -> None:
@@ -3725,6 +3926,29 @@ def _append_chart_continuation_page(doc: fitz.Document, after_page_index: int, s
     return page
 
 
+def _redraw_chart_headings(page: fitz.Page, headings: list[TextSpan]) -> None:
+    if not headings:
+        return
+    labels = {_normalized_span_text(heading.text) for heading in headings}
+    for span in _extract_page_spans(page):
+        if _normalized_span_text(span.text) in labels:
+            page.add_redact_annot(_expand_rect(fitz.Rect(span.bbox), padding=1.0), fill=(1.0, 1.0, 1.0))
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+
+    registered_fonts: set[str] = set()
+    for heading in headings:
+        text = _normalized_span_text(heading.text)
+        pdf_font_name, fontfile, _font_path = _register_pdf_font(page, heading.font, registered_fonts, required_text=text)
+        page.insert_text(
+            heading.origin,
+            text,
+            fontsize=heading.size,
+            fontname=pdf_font_name,
+            fontfile=fontfile,
+            color=_int_color_to_rgb(heading.color),
+        )
+
+
 def _apply_chart_replacements_to_document(
     doc: fitz.Document,
     page_index: int,
@@ -3755,24 +3979,29 @@ def _apply_chart_replacements_to_document(
             polar_figure_size=placement_polar_size,
         )
         return page_index
-    pages = _reflow_chart_replacements(
+    pages, page_headings = _reflow_chart_replacements(
         page,
         replacements,
         cartesian_figure_width=cartesian_figure_width,
         cartesian_figure_height=cartesian_figure_height,
         polar_figure_size=polar_figure_size,
+        return_headings=True,
     )
     if len(pages) <= 1:
         _erase_chart_replacements_from_page(page, replacements)
         _place_chart_replacements_on_page(page, pages[0] if pages else replacements, replacement_rects_are_final=True)
+        if page_headings:
+            _redraw_chart_headings(page, page_headings[0])
         return page_index
 
     _erase_chart_replacements_from_page(page, replacements)
     _place_chart_replacements_on_page(page, pages[0], replacement_rects_are_final=True)
+    _redraw_chart_headings(page, page_headings[0] if page_headings else [])
     insert_after = page_index
-    for page_replacements in pages[1:]:
+    for index, page_replacements in enumerate(pages[1:], start=1):
         continuation = _append_chart_continuation_page(doc, insert_after, doc[page_index])
         _place_chart_replacements_on_page(continuation, page_replacements, replacement_rects_are_final=True)
+        _redraw_chart_headings(continuation, page_headings[index] if index < len(page_headings) else [])
         insert_after += 1
     return insert_after
 
@@ -4276,7 +4505,6 @@ def _replace_netqui_1pol_placeholder_chart_images(
         cartesian_figure_width=cartesian_figure_width,
         cartesian_figure_height=cartesian_figure_height,
         polar_figure_size=polar_figure_size,
-        allow_reflow=False,
     )
     radiation_count = sum(1 for replacement in replacements if replacement.kind.startswith("radiation_"))
     target_count = 6 if selected_radiation_frequencies is None else len(selected_radiation_frequencies)
@@ -4382,7 +4610,6 @@ def _replace_chart_images(
                 cartesian_figure_width=cartesian_figure_width,
                 cartesian_figure_height=cartesian_figure_height,
                 polar_figure_size=polar_figure_size,
-                allow_reflow=False,
             )
             radiation_count = sum(1 for replacement in replacements if replacement.kind.startswith("radiation_"))
             radiation_assets = _find_selected_combined_polar_assets(
@@ -4421,7 +4648,6 @@ def _replace_chart_images(
                 cartesian_figure_width=cartesian_figure_width,
                 cartesian_figure_height=cartesian_figure_height,
                 polar_figure_size=polar_figure_size,
-                allow_reflow=False,
             )
             if remaining_pairs:
                 _append_rfe_radiation_pages(
@@ -4459,9 +4685,13 @@ def _replace_chart_images(
         cartesian_figure_width=cartesian_figure_width,
         cartesian_figure_height=cartesian_figure_height,
         polar_figure_size=polar_figure_size,
-        allow_reflow=adapter is None or adapter.key == "generic",
     )
-    if draw_spans:
+    custom_figure_size = (
+        _is_custom_figure_size(cartesian_figure_width, CARTESIAN_FIGURE_WIDTH_IN)
+        or _is_custom_figure_size(cartesian_figure_height, CARTESIAN_FIGURE_HEIGHT_IN)
+        or _is_custom_figure_size(polar_figure_size, POLAR_FIGURE_SIZE_IN)
+    )
+    if draw_spans and not custom_figure_size:
         _redraw_netqui_chart_section_titles(
             page,
             draw_spans,
