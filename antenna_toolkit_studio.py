@@ -1076,6 +1076,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self._suppress_ffs_item_change = False
         self._suppress_radiation_frequency_change = False
         self._project_radiation_frequencies: list[float] | None = None
+        self._ffs_frequency_cache: dict[str, tuple[int, int, list[float]]] = {}
         self._refresh_cache: dict[str, object] = {}
         self._refresh_cache_enabled = False
         self._refresh_timer = QTimer(self)
@@ -2779,7 +2780,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
     def _available_radiation_frequencies(self) -> list[float]:
         frequencies: set[float] = set()
         for path in self.selected_ffs():
-            frequencies.update(read_ffs_frequency_headers(path))
+            frequencies.update(self._cached_ffs_frequency_headers(path))
         if frequencies:
             return sorted(frequencies)
         manifest_path = self.project_results_dir() / f"{self.deduced_beam_output().stem}-artifacts.json"
@@ -2804,6 +2805,22 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 if value > 0:
                     frequencies.add(value)
         return sorted(frequencies)
+
+    def _cached_ffs_frequency_headers(self, path: str | Path) -> list[float]:
+        resolved = resolve_workspace_path(path)
+        cache_key = str(resolved)
+        try:
+            stat = resolved.stat()
+        except OSError:
+            self._ffs_frequency_cache.pop(cache_key, None)
+            return []
+        signature = (int(stat.st_mtime_ns), int(stat.st_size))
+        cached = self._ffs_frequency_cache.get(cache_key)
+        if cached and cached[:2] == signature:
+            return list(cached[2])
+        values = read_ffs_frequency_headers(resolved)
+        self._ffs_frequency_cache[cache_key] = (signature[0], signature[1], list(values))
+        return values
 
     def _closest_available_frequencies(self, targets: list[float], count: int) -> list[float]:
         available = self._available_radiation_frequencies()
@@ -3002,7 +3019,11 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         return snapshot
 
     def _stage_output_files(self, stage_key: str) -> list[Path]:
-        return stage_output_files(
+        cache_key = f"stage_files:{stage_key}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return list(cached)
+        files = stage_output_files(
             stage_key,
             project_dir=self.project_results_dir(),
             beam_output=self.deduced_beam_output(),
@@ -3010,6 +3031,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             datasheet_output=self.deduced_datasheet_output(),
             vswr_output=self.deduced_vswr_output(),
         )
+        self._cache_set(cache_key, list(files))
+        return files
 
     def _stage_generated_directories(self, stage_key: str) -> list[Path]:
         return stage_generated_directories(stage_key, project_dir=self.project_results_dir())

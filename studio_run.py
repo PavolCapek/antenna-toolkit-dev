@@ -128,7 +128,7 @@ class StudioRunMixin:
         self._live_stage_progress_current = max(0, min(self._live_stage_progress_total, current))
         self._live_stage_progress_label = str(payload.get("label", "")).strip()
         self._sync_live_progress_bar()
-        self.refresh_derived_paths()
+        self.request_derived_paths_refresh()
 
     def on_proc_progress_percent(self, pct: int) -> None:
         if not self._current_stage_key:
@@ -140,7 +140,7 @@ class StudioRunMixin:
         if not self._live_stage_progress_label:
             self._live_stage_progress_label = "Working"
         self._sync_live_progress_bar()
-        self.refresh_derived_paths()
+        self.request_derived_paths_refresh()
 
     def log(self, text: str, color: str | None = None, channel: str | None = None):
         if color:

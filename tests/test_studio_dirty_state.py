@@ -216,6 +216,24 @@ class StudioDirtyStateTests(unittest.TestCase):
         loaded = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(loaded.radiation_pattern_frequencies_ghz, [0.3, 1.5])
 
+    def test_radiation_frequency_headers_are_cached_until_file_changes(self) -> None:
+        ffs_path = Path(self.temp_dir.name) / "cached.ffs"
+        ffs_path.write_text("freq = 1 GHz\n", encoding="utf-8")
+        self.window._add_ffs_files([str(ffs_path)])
+        self.window._ffs_frequency_cache = {}
+
+        with mock.patch("antenna_toolkit_studio.read_ffs_frequency_headers", return_value=[1.0]) as reader:
+            self.assertEqual(self.window._available_radiation_frequencies(), [1.0])
+            self.assertEqual(self.window._available_radiation_frequencies(), [1.0])
+
+        reader.assert_called_once()
+
+        ffs_path.write_text("freq = 2 GHz\nchanged\n", encoding="utf-8")
+        with mock.patch("antenna_toolkit_studio.read_ffs_frequency_headers", return_value=[2.0]) as reader:
+            self.assertEqual(self.window._available_radiation_frequencies(), [2.0])
+
+        reader.assert_called_once()
+
     def test_run_preflight_reports_all_full_pipeline_blockers(self) -> None:
         missing_ffs = Path(self.temp_dir.name) / "missing.ffs"
         self.window._add_ffs_files([str(missing_ffs)])
@@ -805,6 +823,35 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.assertEqual(refresh.call_count, 1)
 
+    def test_progress_updates_debounce_refresh_work(self) -> None:
+        with mock.patch.object(self.window, "refresh_derived_paths") as refresh:
+            for index in range(5):
+                self.window.on_proc_progress(
+                    {"stage": "beam", "current": index + 1, "total": 5, "label": "Processing sample.ffs"}
+                )
+
+            self.assertEqual(refresh.call_count, 0)
+
+            self.window.flush_derived_paths_refresh()
+
+        self.assertEqual(refresh.call_count, 1)
+
+    def test_stage_output_files_are_cached_during_refresh(self) -> None:
+        beam_output = self.window.deduced_beam_output()
+        with mock.patch("antenna_toolkit_studio.stage_output_files", return_value=[beam_output]) as output_files:
+            self.window._refresh_cache = {}
+            self.window._refresh_cache_enabled = True
+            try:
+                first = self.window._stage_output_files("beam")
+                second = self.window._stage_output_files("beam")
+            finally:
+                self.window._refresh_cache = {}
+                self.window._refresh_cache_enabled = False
+
+        self.assertEqual(first, [beam_output])
+        self.assertEqual(second, [beam_output])
+        output_files.assert_called_once()
+
     def test_switching_projects_can_save_dirty_preset_and_project(self) -> None:
         preset_a = dict(self.window.collect_preset_values())
         preset_a["smooth"] = 5
@@ -925,6 +972,18 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         temp_root.cleanup()
         appdata_root.cleanup()
+
+    def test_persist_skips_unchanged_writes(self) -> None:
+        state_path = Path(self.temp_dir.name) / "state.json"
+        store = qt_module.Persist(state_path)
+
+        with mock.patch.object(store, "save", wraps=store.save) as save:
+            store.set("theme", "light")
+            store.set("theme", "light")
+            store.set("theme", "dark")
+
+        self.assertEqual(save.call_count, 2)
+        self.assertEqual(store.get("theme"), "dark")
 
     def test_theme_selector_supports_additional_themes_and_persists_selection(self) -> None:
         self.assertEqual(self.window.theme_selector.count(), 5)

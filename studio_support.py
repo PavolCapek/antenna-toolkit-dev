@@ -297,6 +297,8 @@ class Persist:
         return self.data.get(key, default)
 
     def set(self, key: str, value):
+        if key in self.data and self.data.get(key) == value:
+            return
         self.data[key] = value
         self.save()
 
