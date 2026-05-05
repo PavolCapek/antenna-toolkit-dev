@@ -160,15 +160,28 @@ class DatasheetVisualRegressionTests(unittest.TestCase):
                 [5.5],
             )
             by_kind = {replacement.kind: replacement for replacement in replacements}
+            gain_title = _span_for_text(page, "ANTENNA GAIN")
             beamwidth_title = _span_for_text(page, "ANTENNA BEAMWIDTH")
             azimuth_title = _span_for_text(page, "AZIMUTH PATTERN")
             elevation_title = _span_for_text(page, "ELEVATION PATTERN")
+            _planned_pages, planned_headings = _reflow_chart_replacements(
+                page,
+                replacements,
+                cartesian_figure_width=18.0,
+                cartesian_figure_height=8.0,
+                polar_figure_size=12.0,
+                return_headings=True,
+            )
+            planned_by_text = {heading.text: heading for heading in planned_headings[0]}
 
             self.assertAlmostEqual(by_kind["gain"].rect.width, by_kind["beamwidth"].rect.width, delta=0.01)
             self.assertGreater(by_kind["beamwidth"].rect.y0, beamwidth_title.y1)
             self.assertGreater(by_kind["azimuth_1"].rect.y0, azimuth_title.y1)
             self.assertGreater(by_kind["elevation_1"].rect.y0, elevation_title.y1)
             self.assertAlmostEqual(by_kind["azimuth_1"].rect.height, by_kind["elevation_1"].rect.height, delta=0.01)
+            self.assertAlmostEqual(planned_by_text["ANTENNA GAIN"].bbox.x0, gain_title.x0, delta=0.1)
+            self.assertAlmostEqual(planned_by_text["ANTENNA BEAMWIDTH"].bbox.x0, beamwidth_title.x0, delta=0.1)
+            self.assertAlmostEqual(planned_by_text["AZIMUTH PATTERN"].bbox.x0, azimuth_title.x0, delta=0.1)
 
     def test_netqui_1pol_selected_radiation_stays_on_template_page_with_custom_figure_sizes(self) -> None:
         template = REPO_ROOT / "Templates" / "Datasheet - Netqui - 1Pol.pdf"

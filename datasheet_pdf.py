@@ -3520,7 +3520,7 @@ def _reflow_row_heading_inputs(
 
 
 def _heading_x_for_replacement(label: str, replacement: ChartReplacement, source: TextSpan | None, content_rect: fitz.Rect) -> float:
-    if source is not None and label in {"ANTENNA BEAMWIDTH", "RADIATION PATTERNS"}:
+    if source is not None:
         return max(content_rect.x0, source.bbox.x0)
     return _replacement_union_rect(replacement).x0
 
