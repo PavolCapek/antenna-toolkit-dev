@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.commands import build_plot_command, build_vswr_command
+from pipeline.commands import build_datasheet_command, build_plot_command, build_vswr_command
 from pipeline.run_context import RunContext
 from pipeline.settings import PresetSettings
 
@@ -33,6 +33,50 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertEqual(settings.polar_legend_font_size, 9.0)
         self.assertEqual(settings.polar_azimuth_line_1_color, "#abcdef")
         self.assertEqual(settings.polar_elevation_line_2_color, "#123456")
+
+    @pytest.mark.export_acceptance
+    def test_datasheet_command_uses_typed_settings(self) -> None:
+        settings = PresetSettings(
+            cartesian_figure_width=9.25,
+            cartesian_figure_height=3.75,
+            polar_figure_size=7.5,
+            pdf_metadata_author="Jane Engineer",
+        )
+
+        command = build_datasheet_command(
+            python_executable="python",
+            script_path="datasheet_pdf.py",
+            output_path="out.pdf",
+            template_path="template.pdf",
+            extract_workbook="extract.xlsx",
+            technical_data_workbook="technical-data.xlsx",
+            settings=settings,
+            radiation_frequencies_ghz="2.4,5.8",
+        )
+
+        self.assertEqual(command[:4], ["python", "-u", "datasheet_pdf.py", "out.pdf"])
+        self.assertEqual(command[command.index("--template") + 1], "template.pdf")
+        self.assertEqual(command[command.index("--extract-workbook") + 1], "extract.xlsx")
+        self.assertEqual(command[command.index("--technical-data-workbook") + 1], "technical-data.xlsx")
+        self.assertEqual(command[command.index("--metadata-author") + 1], "Jane Engineer")
+        self.assertEqual(command[command.index("--cartesian-figure-width") + 1], "9.25")
+        self.assertEqual(command[command.index("--cartesian-figure-height") + 1], "3.75")
+        self.assertEqual(command[command.index("--polar-figure-size") + 1], "7.5")
+        self.assertEqual(command[command.index("--radiation-frequencies-ghz") + 1], "2.4,5.8")
+
+    @pytest.mark.export_acceptance
+    def test_datasheet_command_omits_optional_radiation_frequencies(self) -> None:
+        command = build_datasheet_command(
+            python_executable="python",
+            script_path="datasheet_pdf.py",
+            output_path="out.pdf",
+            template_path="template.pdf",
+            extract_workbook="extract.xlsx",
+            technical_data_workbook="technical-data.xlsx",
+            settings=PresetSettings(),
+        )
+
+        self.assertNotIn("--radiation-frequencies-ghz", command)
 
     @pytest.mark.export_acceptance
     def test_plot_command_uses_typed_settings(self) -> None:
@@ -138,6 +182,18 @@ class PipelineCommandTests(unittest.TestCase):
         )
         self.assertIn("Input data/demo.s2p", vswr_command)
         self.assertIn(str(context.vswr_output), vswr_command)
+
+        datasheet_command = build_datasheet_command(
+            python_executable="python",
+            script_path="datasheet_pdf.py",
+            template_path="template.pdf",
+            technical_data_workbook="technical-data.xlsx",
+            context=context,
+            radiation_frequencies_ghz=[2.4, 5.8],
+        )
+        self.assertIn(str(context.datasheet_output), datasheet_command)
+        self.assertIn(str(context.extract_output), datasheet_command)
+        self.assertEqual(datasheet_command[datasheet_command.index("--radiation-frequencies-ghz") + 1], "2.4,5.8")
 
 
 if __name__ == "__main__":

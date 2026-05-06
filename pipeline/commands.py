@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from pipeline.run_context import RunContext
@@ -20,6 +21,65 @@ def _append_if_nonzero(args: list[str], option: str, value: float) -> None:
 def _append_frequency_window(args: list[str], settings: PresetSettings) -> None:
     if settings.shared_fmin > 0 and settings.shared_fmax > settings.shared_fmin:
         args.extend(["--fmin", f"{settings.shared_fmin}", "--fmax", f"{settings.shared_fmax}"])
+
+
+def _radiation_frequencies_arg(value: str | Sequence[float] | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return ",".join(f"{frequency}" for frequency in value)
+
+
+def build_datasheet_command(
+    *,
+    python_executable: str,
+    script_path: str,
+    output_path: str | Path | None = None,
+    template_path: str | Path | None = None,
+    extract_workbook: str | Path | None = None,
+    technical_data_workbook: str | Path | None = None,
+    settings: PresetSettings | None = None,
+    metadata_author: str | None = None,
+    radiation_frequencies_ghz: str | Sequence[float] | None = None,
+    context: RunContext | None = None,
+) -> list[str]:
+    if context is not None:
+        output_path = context.datasheet_output
+        extract_workbook = context.extract_output
+        settings = context.settings
+    if settings is not None:
+        if template_path is None:
+            template_path = settings.datasheet_template
+        if metadata_author is None:
+            metadata_author = settings.pdf_metadata_author
+    if output_path is None or template_path is None or extract_workbook is None or settings is None:
+        raise ValueError("build_datasheet_command requires output_path, template_path, extract_workbook, and settings")
+    args = [
+        python_executable,
+        "-u",
+        script_path,
+        str(output_path),
+        "--template",
+        str(template_path),
+        "--extract-workbook",
+        str(extract_workbook),
+    ]
+    if technical_data_workbook is not None:
+        args.extend(["--technical-data-workbook", str(technical_data_workbook)])
+    _append_if_text(args, "--metadata-author", metadata_author or "")
+    args.extend(
+        [
+            "--cartesian-figure-width",
+            str(settings.cartesian_figure_width),
+            "--cartesian-figure-height",
+            str(settings.cartesian_figure_height),
+            "--polar-figure-size",
+            str(settings.polar_figure_size),
+        ]
+    )
+    _append_if_text(args, "--radiation-frequencies-ghz", _radiation_frequencies_arg(radiation_frequencies_ghz))
+    return args
 
 
 def build_plot_command(
