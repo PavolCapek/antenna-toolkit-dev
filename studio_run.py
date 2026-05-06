@@ -7,7 +7,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox
 
-from pipeline.commands import build_plot_command, build_vswr_command
+from pipeline.commands import build_datasheet_command, build_plot_command, build_vswr_command
 from pipeline.preflight import collect_preflight_issues
 from pipeline.run_context import RunContext
 from project_store import utc_now_iso
@@ -316,29 +316,15 @@ class StudioRunMixin:
                     context=context,
                 )
             elif stage_key == "datasheet":
-                args = [
-                    which_python(),
-                    "-u",
-                    SCRIPT_DATASHEET,
-                    str(context.datasheet_output),
-                    "--template",
-                    str(self.selected_datasheet_template_path()),
-                    "--extract-workbook",
-                    str(context.extract_output),
-                    "--technical-data-workbook",
-                    technical_data_workbook,
-                    "--metadata-author",
-                    self.selected_pdf_metadata_author(),
-                    "--cartesian-figure-width",
-                    str(context.settings.cartesian_figure_width),
-                    "--cartesian-figure-height",
-                    str(context.settings.cartesian_figure_height),
-                    "--polar-figure-size",
-                    str(context.settings.polar_figure_size),
-                ]
-                radiation_frequencies = self.radiation_frequencies_arg()
-                if radiation_frequencies is not None:
-                    args.extend(["--radiation-frequencies-ghz", radiation_frequencies])
+                args = build_datasheet_command(
+                    python_executable=which_python(),
+                    script_path=SCRIPT_DATASHEET,
+                    template_path=self.selected_datasheet_template_path(),
+                    technical_data_workbook=technical_data_workbook,
+                    metadata_author=self.selected_pdf_metadata_author(),
+                    radiation_frequencies_ghz=self.radiation_frequencies_arg(),
+                    context=context,
+                )
             else:
                 continue
             self._enqueue_stage(stage_key, args)
@@ -578,29 +564,19 @@ class StudioRunMixin:
             self.status(str(exc))
             return
         settings = self.current_preset_settings()
-        args = [
-            which_python(),
-            "-u",
-            SCRIPT_DATASHEET,
-            str(self.deduced_datasheet_output()),
-            "--template",
-            str(template_path),
-            "--extract-workbook",
-            str(extract_output),
-            "--technical-data-workbook",
-            technical_data_workbook,
-            "--metadata-author",
-            self.selected_pdf_metadata_author(),
-            "--cartesian-figure-width",
-            str(settings.cartesian_figure_width),
-            "--cartesian-figure-height",
-            str(settings.cartesian_figure_height),
-            "--polar-figure-size",
-            str(settings.polar_figure_size),
-        ]
-        radiation_frequencies = self.radiation_frequencies_arg()
-        if radiation_frequencies is not None:
-            args.extend(["--radiation-frequencies-ghz", radiation_frequencies])
+        context = self._build_run_context(settings=settings)
+        args = build_datasheet_command(
+            python_executable=which_python(),
+            script_path=SCRIPT_DATASHEET,
+            output_path=self.deduced_datasheet_output(),
+            template_path=template_path,
+            extract_workbook=extract_output,
+            technical_data_workbook=technical_data_workbook,
+            settings=settings,
+            metadata_author=self.selected_pdf_metadata_author(),
+            radiation_frequencies_ghz=self.radiation_frequencies_arg(),
+            context=context,
+        )
         self._save_project_if_dirty()
         self._enqueue_stage("datasheet", args)
 
@@ -668,27 +644,13 @@ class StudioRunMixin:
         )
         self._enqueue_stage("vswr", args_vswr)
         if args_extract:
-            datasheet_args = [
-                which_python(),
-                "-u",
-                SCRIPT_DATASHEET,
-                str(context.datasheet_output),
-                "--template",
-                str(template_path),
-                "--extract-workbook",
-                str(context.extract_output),
-                "--technical-data-workbook",
-                technical_data_workbook,
-                "--metadata-author",
-                self.selected_pdf_metadata_author(),
-                "--cartesian-figure-width",
-                str(context.settings.cartesian_figure_width),
-                "--cartesian-figure-height",
-                str(context.settings.cartesian_figure_height),
-                "--polar-figure-size",
-                str(context.settings.polar_figure_size),
-            ]
-            radiation_frequencies = self.radiation_frequencies_arg()
-            if radiation_frequencies is not None:
-                datasheet_args.extend(["--radiation-frequencies-ghz", radiation_frequencies])
+            datasheet_args = build_datasheet_command(
+                python_executable=which_python(),
+                script_path=SCRIPT_DATASHEET,
+                template_path=template_path,
+                technical_data_workbook=technical_data_workbook,
+                metadata_author=self.selected_pdf_metadata_author(),
+                radiation_frequencies_ghz=self.radiation_frequencies_arg(),
+                context=context,
+            )
             self._enqueue_stage("datasheet", datasheet_args)

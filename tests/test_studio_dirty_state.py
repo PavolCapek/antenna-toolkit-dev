@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
+import pandas as pd
 import pytest
 
 import studio_support as qt_module
@@ -91,6 +92,7 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
         self.app.processEvents()
+        self.window.flush_derived_paths_refresh()
 
         self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset has unsaved changes")
         self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
@@ -417,6 +419,7 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
         self.app.processEvents()
+        self.window.flush_derived_paths_refresh()
 
         self.assertFalse(self.window.has_unsaved_project_changes())
         self.assertTrue(self.window.has_unsaved_preset_changes())
@@ -489,7 +492,12 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.assertEqual(tabs, ["Inputs", "Processing", "Style", "Document", "Run"])
         self.assertGreaterEqual(self.window.datasheet_template_combo.findData("Datasheet - RFE.pdf"), 0)
+        self.assertGreaterEqual(self.window.datasheet_type_combo.findData("rfe"), 0)
+        self.assertGreaterEqual(self.window.datasheet_layout_combo.findData("auto"), 0)
         self.assertEqual(self.window.collect_preset_values()["datasheet_template"], "Datasheet - RFE.pdf")
+        self.assertEqual(self.window.collect_preset_values()["datasheet_type"], "auto")
+        self.assertEqual(self.window.collect_preset_values()["datasheet_layout"], "auto")
+        self.assertEqual(self.window.collect_preset_values()["datasheet_asset_ids"], "")
         self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "RF elements")
         self.window.pdf_metadata_author.setText("Preset Author")
         self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "Preset Author")
@@ -507,10 +515,15 @@ class StudioDirtyStateTests(unittest.TestCase):
             self.window.refresh_datasheet_template_options("Datasheet - RFE.pdf")
             initial_snapshot = self.window._current_stage_snapshot("datasheet")
             self.window.refresh_datasheet_template_options("Alternate Style.pdf")
+            type_index = self.window.datasheet_type_combo.findData("rfe")
+            self.window.datasheet_type_combo.setCurrentIndex(type_index)
             changed_snapshot = self.window._current_stage_snapshot("datasheet")
 
         self.assertEqual(self.window.collect_preset_values()["datasheet_template"], "Alternate Style.pdf")
+        self.assertEqual(self.window.collect_preset_values()["datasheet_type"], "rfe")
+        self.assertEqual(self.window.collect_preset_values()["datasheet_layout"], "rfe")
         self.assertNotEqual(initial_snapshot["settings"]["datasheet_template"], changed_snapshot["settings"]["datasheet_template"])
+        self.assertNotEqual(initial_snapshot["settings"]["datasheet_type"], changed_snapshot["settings"]["datasheet_type"])
         self.assertNotEqual(initial_snapshot["template_pdf"]["path"], changed_snapshot["template_pdf"]["path"])
 
     def test_missing_datasheet_template_is_reported(self) -> None:
@@ -652,7 +665,11 @@ class StudioDirtyStateTests(unittest.TestCase):
         cached_xlsx = Path(self.temp_dir.name) / "cached-google.xlsx"
         self.window._set_technical_data(url)
 
-        with mock.patch.object(self.window, "download_google_sheet_technical_data", return_value=cached_xlsx) as download:
+        def download_sheet(_url: str) -> Path:
+            pd.DataFrame([["Antenna Name", "Sample Horn"]]).to_excel(cached_xlsx, index=False, header=False)
+            return cached_xlsx
+
+        with mock.patch.object(self.window, "download_google_sheet_technical_data", side_effect=download_sheet) as download:
             result = self.window.prepare_technical_data_workbook()
 
         download.assert_called_once_with(url)
@@ -1282,6 +1299,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         queued_args: dict[str, list[str]] = {}
 
         with (
+            mock.patch.object(self.window, "_run_preflight_passes", return_value=True),
             mock.patch.object(self.window, "_save_project_if_dirty"),
             mock.patch.object(self.window, "prepare_technical_data_workbook", return_value=str(cached_xlsx)),
             mock.patch.object(
@@ -1320,6 +1338,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         queued_args: dict[str, list[str]] = {}
 
         with (
+            mock.patch.object(self.window, "_run_preflight_passes", return_value=True),
             mock.patch.object(self.window, "_stage_is_stale", return_value=False),
             mock.patch.object(self.window, "_stage_output_exists", return_value=True),
             mock.patch.object(self.window, "_save_project_if_dirty"),
@@ -1348,6 +1367,7 @@ class StudioDirtyStateTests(unittest.TestCase):
             {"stage": "beam", "current": 2, "total": 5, "label": "Processing sample.ffs"}
         )
         self.app.processEvents()
+        self.window.flush_derived_paths_refresh()
 
         self.assertEqual(self.window.stage_status_labels["beam"].text(), "Running (2/5 | Processing sample.ffs)")
         self.assertEqual(self.window.stage_timestamp_labels["beam"].text(), "Generated: in progress")

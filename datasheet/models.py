@@ -9,6 +9,12 @@ from typing import Any
 import pandas as pd
 
 from datasheet.artifacts import artifact_manifest_path, load_artifact_manifest
+from datasheet.technical_data import (
+    TechnicalDataError,
+    load_technical_data_entries as load_technical_data_table_entries,
+    normalize_table_section,
+    normalize_technical_key,
+)
 
 
 FIELD_LABELS = [
@@ -329,22 +335,8 @@ def _format_technical_cell(value: object) -> str:
     return str(value).strip()
 
 
-def normalize_technical_key(value: object) -> str:
-    cleaned = re.sub(r"[\u200B-\u200D\uFEFF]", "", str(value or ""))
-    return re.sub(r"\s+", " ", cleaned.strip()).lower()
-
-
 def _normalize_table_header(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").strip().lower()).strip()
-
-
-def normalize_table_section(value: object) -> str:
-    key = _normalize_table_header(value)
-    if key in {"performance", "performance data", "electrical", "electrical data"}:
-        return "Performance" if "performance" in key else "Electrical Data"
-    if key in {"mechanical", "mechanical data"}:
-        return "Mechanical Data"
-    return "Technical Data"
 
 
 def canonical_field_key(value: object) -> str:
@@ -405,44 +397,19 @@ def _technical_workbook_has_section_column(data: pd.DataFrame) -> tuple[bool, in
 
 def load_technical_data_entries(path: Path) -> list[TechnicalDataEntry]:
     try:
-        data = pd.read_excel(path, sheet_name=0, header=None, dtype=object)
-    except Exception as exc:
-        raise ValueError(f"Could not read Technical Data workbook '{path}'.") from exc
-    has_section_column, start_index = _technical_workbook_has_section_column(data)
-    if data.shape[1] < 2:
-        data[1] = ""
-
-    entries: list[TechnicalDataEntry] = []
-    index_by_key: dict[tuple[str, str], int] = {}
-    for _idx, row in data.iloc[start_index:].iterrows():
-        if has_section_column:
-            section = normalize_table_section(row.iloc[0])
-            label = _format_technical_cell(row.iloc[1])
-            value = _format_technical_cell(row.iloc[2] if data.shape[1] > 2 else "")
-        else:
-            section = "Technical Data"
-            label = _format_technical_cell(row.iloc[0])
-            value = _format_technical_cell(row.iloc[1] if data.shape[1] > 1 else "")
-        key = normalize_technical_key(label)
-        if not key:
-            continue
-        dedupe_key = (normalize_table_section(section), key)
-        if dedupe_key in index_by_key:
-            entries[index_by_key[dedupe_key]].value = value
-            continue
-        index_by_key[dedupe_key] = len(entries)
-        entries.append(
-            TechnicalDataEntry(
-                label=label,
-                value=value,
-                section=section,
-                canonical_key=canonical_field_key(label),
-                source="excel",
-            )
+        entries = load_technical_data_table_entries(path, canonical_key_factory=canonical_field_key)
+    except TechnicalDataError as exc:
+        raise ValueError(str(exc)) from exc
+    return [
+        TechnicalDataEntry(
+            label=entry.label,
+            value=entry.value,
+            section=entry.section,
+            canonical_key=entry.canonical_key,
+            source=entry.source,
         )
-    if not entries:
-        raise ValueError("Technical Data workbook does not contain any field/value rows.")
-    return entries
+        for entry in entries
+    ]
 
 
 def technical_data_by_key(entries: list[TechnicalDataEntry]) -> dict[str, TechnicalDataEntry]:

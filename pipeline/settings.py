@@ -101,6 +101,9 @@ class PresetSettings:
     beam_eff_legend_labels: str = ""
     vswr_legend_labels: str = ""
     datasheet_template: str = DEFAULT_DATASHEET_TEMPLATE_NAME
+    datasheet_type: str = "auto"
+    datasheet_layout: str = "auto"
+    datasheet_asset_ids: str = ""
     pdf_metadata_author: str = DEFAULT_PDF_METADATA_AUTHOR
     rings: str = "0,-7.5,-15,-22.5,-30"
     angle: int = 30
@@ -162,6 +165,9 @@ class PresetSettings:
             beam_eff_legend_labels=_str_value(source, "beam_eff_legend_labels", defaults.beam_eff_legend_labels),
             vswr_legend_labels=_str_value(source, "vswr_legend_labels", defaults.vswr_legend_labels),
             datasheet_template=_str_value(source, "datasheet_template", defaults.datasheet_template),
+            datasheet_type=_str_value(source, "datasheet_type", defaults.datasheet_type),
+            datasheet_layout=_str_value(source, "datasheet_layout", defaults.datasheet_layout),
+            datasheet_asset_ids=_str_value(source, "datasheet_asset_ids", defaults.datasheet_asset_ids),
             pdf_metadata_author=_str_value(source, "pdf_metadata_author", defaults.pdf_metadata_author),
             rings=_str_value(source, "rings", defaults.rings),
             angle=_int_value(source, "angle", defaults.angle),
