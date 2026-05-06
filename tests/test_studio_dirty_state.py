@@ -899,6 +899,59 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertFalse(confirmed)
         self.assertTrue(self.window.has_unsaved_project_changes())
 
+    def test_duplicate_project_saves_dirty_project_before_copying(self) -> None:
+        self.window._add_ffs_files(["Input data/a.ffs"])
+        self.app.processEvents()
+
+        with (
+            mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Save),
+            mock.patch("antenna_toolkit_studio.QInputDialog.getText", return_value=("Saved Copy", True)),
+            mock.patch("antenna_toolkit_studio.QMessageBox.information"),
+        ):
+            self.window.duplicate_project()
+        self.app.processEvents()
+
+        duplicate = self.window.project_store.load_project("Saved_Copy")
+        original = self.window.project_store.load_project(self.project.slug)
+        self.assertEqual(original.ffs_items, [{"path": "Input data/a.ffs", "enabled": True, "port_label": ""}])
+        self.assertEqual(duplicate.ffs_items, original.ffs_items)
+        self.assertEqual(self.window.active_project_slug, "Saved_Copy")
+
+    def test_export_project_can_discard_dirty_project_before_exporting(self) -> None:
+        self.window._add_ffs_files(["Input data/a.ffs"])
+        bundle_path = Path(self.temp_dir.name) / "dirty_project_bundle.zip"
+        self.app.processEvents()
+
+        with (
+            mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Discard),
+            mock.patch("antenna_toolkit_studio.QFileDialog.getSaveFileName", return_value=(str(bundle_path), "ZIP (*.zip)")),
+            mock.patch.object(self.window.project_store, "export_project_bundle", wraps=self.window.project_store.export_project_bundle) as export_bundle,
+            mock.patch("antenna_toolkit_studio.QMessageBox.information"),
+        ):
+            self.window.export_project_bundle()
+        self.app.processEvents()
+
+        export_bundle.assert_called_once()
+        saved = self.window.project_store.load_project(self.project.slug)
+        self.assertEqual(saved.ffs_items, [])
+        self.assertTrue(self.window.has_unsaved_project_changes())
+        self.assertTrue(bundle_path.exists())
+
+    def test_import_project_cancel_keeps_dirty_project_and_skips_file_picker(self) -> None:
+        self.window._add_ffs_files(["Input data/a.ffs"])
+        self.app.processEvents()
+
+        with (
+            mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Cancel),
+            mock.patch("antenna_toolkit_studio.QFileDialog.getOpenFileName") as open_file,
+        ):
+            self.window.import_project_bundle()
+        self.app.processEvents()
+
+        open_file.assert_not_called()
+        self.assertTrue(self.window.has_unsaved_project_changes())
+        self.assertEqual(self.window.active_project_slug, self.project.slug)
+
     def test_helper_buttons_are_not_tab_stops(self) -> None:
         beam_field = next(field for field in self.window.findChildren(StepperField) if field.spinbox is self.window.beam_smooth)
         self.assertEqual(beam_field.minus.focusPolicy(), Qt.NoFocus)

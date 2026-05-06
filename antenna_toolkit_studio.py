@@ -4279,6 +4279,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if not self.active_project_slug:
             QMessageBox.information(self, "No Project Selected", "Select a project to duplicate.")
             return
+        if not self._confirm_pending_changes("duplicating this project"):
+            return
         suggested = f"{self.active_project_name or self.active_project_slug} copy"
         name, ok = QInputDialog.getText(self, "Duplicate Project", "New project name:", text=suggested)
         name = name.strip()
@@ -4292,6 +4294,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if not self.active_project_slug:
             QMessageBox.information(self, "No Project Selected", "Select a project to export.")
             return
+        if not self._confirm_pending_changes("exporting this project"):
+            return
         suggested = str((self.project_store.projects_dir / f"{self.active_project_slug}_bundle.zip").resolve())
         path, _ = QFileDialog.getSaveFileName(self, "Export Project Bundle", suggested, "ZIP (*.zip)")
         if not path:
@@ -4303,6 +4307,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         QMessageBox.information(self, "Bundle Exported", f"Project bundle written to:\n{bundle_path}")
 
     def import_project_bundle(self) -> None:
+        if not self._confirm_pending_changes("importing a project bundle"):
+            return
         path, _ = QFileDialog.getOpenFileName(self, "Import Project Bundle", str(self.project_store.projects_dir), "ZIP (*.zip)")
         if not path:
             return
