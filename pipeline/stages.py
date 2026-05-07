@@ -20,6 +20,8 @@ STAGE_SETTING_KEYS: dict[str, tuple[str, ...]] = {
         "datasheet_type",
         "datasheet_layout",
         "datasheet_asset_ids",
+        "technical_data_sheet_name",
+        "technical_data_product_id",
         "pdf_metadata_author",
     ),
     "plot": (

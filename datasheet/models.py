@@ -320,25 +320,6 @@ def build_performance_fields(extract_workbook: Path) -> dict[str, str]:
     }
 
 
-def _format_technical_cell(value: object) -> str:
-    if value is None:
-        return ""
-    try:
-        if pd.isna(value):
-            return ""
-    except (TypeError, ValueError):
-        pass
-    if isinstance(value, float):
-        if math.isfinite(value) and value.is_integer():
-            return str(int(value))
-        return f"{value:g}"
-    return str(value).strip()
-
-
-def _normalize_table_header(value: object) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", str(value or "").strip().lower()).strip()
-
-
 def canonical_field_key(value: object) -> str:
     key = normalize_technical_key(value)
     if not key:
@@ -359,45 +340,19 @@ def canonical_field_key(value: object) -> str:
     return key
 
 
-def _technical_workbook_has_section_column(data: pd.DataFrame) -> tuple[bool, int]:
-    if data.shape[1] < 3:
-        return False, 0
-    first_non_empty = 0
-    for index, row in data.iloc[:, :3].iterrows():
-        values = [_format_technical_cell(value) for value in row.tolist()]
-        if any(value for value in values):
-            first_non_empty = int(index)
-            break
-    headers = [_normalize_table_header(value) for value in data.iloc[first_non_empty, :3].tolist()]
-    if headers[:3] == ["section", "label", "value"]:
-        return True, first_non_empty + 1
-    known_sections = {
-        "technical",
-        "technical data",
-        "performance",
-        "performance data",
-        "electrical",
-        "electrical data",
-        "mechanical",
-        "mechanical data",
-    }
-    if headers[0] in known_sections:
-        return True, first_non_empty
-    sampled_sections = 0
-    sampled_labels = 0
-    for _index, row in data.iloc[first_non_empty:, :3].head(25).iterrows():
-        section_key = _normalize_table_header(row.iloc[0])
-        label = _format_technical_cell(row.iloc[1])
-        if section_key in known_sections:
-            sampled_sections += 1
-        if label:
-            sampled_labels += 1
-    return sampled_sections > 0 and sampled_labels > 0, first_non_empty
-
-
-def load_technical_data_entries(path: Path) -> list[TechnicalDataEntry]:
+def load_technical_data_entries(
+    path: Path,
+    *,
+    sheet_name: str | int | None = None,
+    product_id: str | None = None,
+) -> list[TechnicalDataEntry]:
     try:
-        entries = load_technical_data_table_entries(path, canonical_key_factory=canonical_field_key)
+        entries = load_technical_data_table_entries(
+            path,
+            sheet_name=sheet_name,
+            product_id=product_id,
+            canonical_key_factory=canonical_field_key,
+        )
     except TechnicalDataError as exc:
         raise ValueError(str(exc)) from exc
     return [
@@ -428,6 +383,8 @@ def load_datasheet_model(
     technical_data_workbook: Path | None = None,
     *,
     output_dir: Path | None = None,
+    technical_data_sheet_name: str | int | None = None,
+    technical_data_product_id: str | None = None,
 ) -> DatasheetModel:
     extract_workbook = extract_workbook.resolve()
     if output_dir is None:
@@ -438,7 +395,15 @@ def load_datasheet_model(
             bookstem = bookstem[: -len(suffix)]
             break
     manifest = load_artifact_manifest(artifact_manifest_path(output_dir, bookstem), bookstem=bookstem)
-    entries = load_technical_data_entries(technical_data_workbook.resolve()) if technical_data_workbook else []
+    entries = (
+        load_technical_data_entries(
+            technical_data_workbook.resolve(),
+            sheet_name=technical_data_sheet_name,
+            product_id=technical_data_product_id,
+        )
+        if technical_data_workbook
+        else []
+    )
     return DatasheetModel(
         extract_workbook=extract_workbook,
         technical_data_workbook=technical_data_workbook.resolve() if technical_data_workbook else None,

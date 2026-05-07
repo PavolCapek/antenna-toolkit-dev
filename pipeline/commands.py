@@ -73,6 +73,8 @@ def build_datasheet_command(
     if settings.datasheet_layout.strip() and settings.datasheet_layout.strip() != "auto":
         args.extend(["--datasheet-layout", settings.datasheet_layout.strip()])
     _append_if_text(args, "--datasheet-asset-ids", settings.datasheet_asset_ids)
+    _append_if_text(args, "--technical-data-sheet", settings.technical_data_sheet_name)
+    _append_if_text(args, "--technical-data-product-id", settings.technical_data_product_id)
     args.extend(
         [
             "--cartesian-figure-width",

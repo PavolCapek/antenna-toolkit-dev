@@ -27,6 +27,8 @@ def build_render_context(
     datasheet_type: str | None = None,
     datasheet_layout: str | None = None,
     datasheet_specs: Mapping[str, DatasheetSpec] | None = None,
+    technical_data_sheet_name: str | int | None = None,
+    technical_data_product_id: str | None = None,
 ) -> DatasheetRenderContext:
     adapter = resolve_template_adapter(
         template_path,
@@ -39,6 +41,8 @@ def build_render_context(
         extract_workbook.resolve(),
         technical_data_workbook.resolve() if technical_data_workbook else None,
         output_dir=output_dir,
+        technical_data_sheet_name=technical_data_sheet_name,
+        technical_data_product_id=technical_data_product_id,
     )
     return DatasheetRenderContext(model=model, adapter=adapter)
 

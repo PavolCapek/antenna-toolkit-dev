@@ -1899,6 +1899,12 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.datasheet_layout_combo.setToolTip("PDF layout strategy used by the selected datasheet definition.")
         self.datasheet_layout_combo.currentIndexChanged.connect(self.on_datasheet_layout_selected)
         self.refresh_datasheet_layout_options(str(self.store.get("datasheet_layout", "auto")))
+        self.technical_data_sheet_name = QLineEdit(str(self.store.get("technical_data_sheet_name", "")))
+        self.technical_data_sheet_name.setToolTip("Optional worksheet name or index for Technical Data.")
+        self.technical_data_sheet_name.textChanged.connect(lambda v: (self.store.set("technical_data_sheet_name", v), self._mark_project_dirty()))
+        self.technical_data_product_id = QLineEdit(str(self.store.get("technical_data_product_id", "")))
+        self.technical_data_product_id.setToolTip("Optional product ID used when Technical Data is a wide table with multiple products.")
+        self.technical_data_product_id.textChanged.connect(lambda v: (self.store.set("technical_data_product_id", v), self._mark_project_dirty()))
         self.pdf_metadata_author = QLineEdit(str(self.store.get("pdf_metadata_author", DEFAULT_PDF_METADATA_AUTHOR)))
         self.pdf_metadata_author.textChanged.connect(lambda v: self.store.set("pdf_metadata_author", v))
         metadata_form = QFormLayout()
@@ -1910,6 +1916,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         add_form_row(metadata_form, "Export style", self.datasheet_template_combo, "PDF template used as the datasheet export style.")
         add_form_row(metadata_form, "Datasheet type", self.datasheet_type_combo, "Datasheet definition used for aliases, required chart slots, and default behavior.")
         add_form_row(metadata_form, "PDF layout", self.datasheet_layout_combo, "Layout strategy for the selected datasheet definition.")
+        add_form_row(metadata_form, "Tech sheet", self.technical_data_sheet_name, "Optional worksheet name or index for Technical Data.")
+        add_form_row(metadata_form, "Product row", self.technical_data_product_id, "Optional product ID used when Technical Data has one row per product.")
         add_form_row(metadata_form, "Author", self.pdf_metadata_author, "Author value written into the exported PDF metadata.")
         metadata_card.body.addLayout(metadata_form)
 
@@ -2300,6 +2308,12 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.store.set("datasheet_type", self.selected_datasheet_type())
         self.store.set("datasheet_layout", self.selected_datasheet_layout())
         self.store.set("datasheet_asset_ids", "")
+        if hasattr(self, "technical_data_sheet_name"):
+            self.technical_data_sheet_name.setText("")
+            self.store.set("technical_data_sheet_name", "")
+        if hasattr(self, "technical_data_product_id"):
+            self.technical_data_product_id.setText("")
+            self.store.set("technical_data_product_id", "")
         if hasattr(self, "datasheet_asset_list"):
             self.datasheet_asset_list.clear()
             self.datasheet_asset_state_label.setText("Run Plots to populate generated images.")
@@ -4013,7 +4027,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             ],
             touchstone_file=serialize_workspace_path(THIS_DIR, self.selected_s2p()),
             technical_data_file=serialize_workspace_path(THIS_DIR, self.selected_technical_data()),
-            settings={},
+            settings=self.collect_preset_values(),
             presets={},
             active_preset=self.project_active_preset,
             radiation_pattern_frequencies_ghz=None if self._project_radiation_frequencies is None else self.selected_radiation_frequencies(),
@@ -4121,6 +4135,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self.datasheet_template_combo,
             self.datasheet_type_combo,
             self.datasheet_layout_combo,
+            self.technical_data_sheet_name,
+            self.technical_data_product_id,
             self.datasheet_asset_list,
             self.pdf_metadata_author,
         ):
@@ -4345,6 +4361,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self.apply_preset_values(self.global_presets.get(self.project_active_preset, {}))
         elif missing_preset:
             self.status(f"Preset '{self.project_active_preset}' is missing; using default settings")
+        if project.settings:
+            self.apply_preset_values(project.settings)
         self._persist_global_presets()
         self.refresh_preset_list(select_name=self.project_active_preset)
         self.store.set("beam_ffs", self.selected_ffs())
@@ -4601,6 +4619,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "datasheet_type": self.selected_datasheet_type(),
             "datasheet_layout": self.selected_datasheet_layout(),
             "datasheet_asset_ids": self._datasheet_asset_ids_text(),
+            "technical_data_sheet_name": self.technical_data_sheet_name.text().strip(),
+            "technical_data_product_id": self.technical_data_product_id.text().strip(),
             "pdf_metadata_author": self.selected_pdf_metadata_author(),
             "rings": self.rings.text().strip(),
             "angle": int(self.angle_step.value()),
@@ -4699,6 +4719,10 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if "datasheet_asset_ids" in values:
             self.store.set("datasheet_asset_ids", str(values["datasheet_asset_ids"]))
             self.refresh_datasheet_asset_list()
+        if "technical_data_sheet_name" in values:
+            self.technical_data_sheet_name.setText(str(values["technical_data_sheet_name"]))
+        if "technical_data_product_id" in values:
+            self.technical_data_product_id.setText(str(values["technical_data_product_id"]))
         if "pdf_metadata_author" in values: self.pdf_metadata_author.setText(str(values["pdf_metadata_author"]))
         if "rings" in values: self.rings.setText(str(values["rings"]))
         if "angle" in values: self.angle_step.setValue(int(values["angle"]))

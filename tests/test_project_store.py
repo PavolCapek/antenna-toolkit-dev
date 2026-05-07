@@ -71,8 +71,8 @@ class ProjectStoreTests(unittest.TestCase):
         self.assertEqual(loaded.active_preset, "Tight")
         self.assertEqual(loaded.ffs_items[0]["port_label"], "Port 1")
         self.assertEqual(loaded.technical_data_file, "Input data/tech.xlsx")
-        self.assertEqual(loaded.settings, {})
-        self.assertEqual(loaded.presets, {})
+        self.assertEqual(loaded.settings, {"smooth": 7, "grid_color": "#4b5563"})
+        self.assertEqual(loaded.presets, {"Tight": {"smooth": 7, "grid_color": "#4b5563"}})
         self.assertEqual(loaded.radiation_pattern_frequencies_ghz, [1.5, 3.0])
         self.assertEqual(loaded.run_state["stages"]["beam"]["status"], "success")
 
@@ -95,6 +95,8 @@ class ProjectStoreTests(unittest.TestCase):
         self.assertEqual(duplicate.slug, "Dish_B_Copy")
         self.assertEqual(duplicate.ffs_items[0]["port_label"], "V")
         self.assertEqual(duplicate.technical_data_file, "Input data/b-tech.xlsx")
+        self.assertEqual(duplicate.settings, {"smooth": 3})
+        self.assertEqual(duplicate.presets, {"Loose": {"smooth": 3}})
         self.assertEqual(duplicate.run_state["history"][0]["action"], "duplicated")
         self.assertTrue((duplicate.project_dir(self.root) / "Dish_B_Copy.xlsx").exists())
 
@@ -125,8 +127,8 @@ class ProjectStoreTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA_VERSION)
         self.assertIn("technical_data_file", payload)
         self.assertNotIn("radiation_pattern_frequencies_ghz", payload)
-        self.assertNotIn("settings", payload)
-        self.assertNotIn("presets", payload)
+        self.assertEqual(payload["settings"], {})
+        self.assertEqual(payload["presets"], {})
 
     def test_legacy_project_without_radiation_frequency_selection_stays_defaulted(self) -> None:
         project = ProjectRecord.from_dict({"name": "Legacy", "slug": "legacy"})

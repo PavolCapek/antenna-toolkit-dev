@@ -213,6 +213,7 @@ KNOWN_TEMPLATE_ADAPTERS = (
     NETQUI_TEMPLATE_ADAPTER,
     RFE_TEMPLATE_ADAPTER,
 )
+KNOWN_TEMPLATE_KEYS = {adapter.key for adapter in KNOWN_TEMPLATE_ADAPTERS} | {"generic"}
 
 
 def adapter_from_datasheet_spec(spec: DatasheetSpec) -> DatasheetTemplateAdapter:
@@ -297,6 +298,35 @@ def _resolve_spec_adapter(
     return adapter_from_datasheet_spec(layout_candidates[0])
 
 
+def _candidate_auto_specs(specs: Mapping[str, DatasheetSpec] | None) -> list[DatasheetSpec]:
+    resolved_specs = specs if specs is not None else load_default_datasheet_specs()
+    candidates = [
+        spec for spec in resolved_specs.values()
+        if spec.key not in KNOWN_TEMPLATE_KEYS and (spec.match.filename_tokens or spec.match.required_text_markers)
+    ]
+    return sorted(
+        candidates,
+        key=lambda spec: (
+            max((len(token) for token in spec.match.filename_tokens), default=0),
+            len(spec.match.required_text_markers),
+            spec.key,
+        ),
+        reverse=True,
+    )
+
+
+def _resolve_auto_spec_adapter(
+    template_path: Path,
+    doc: fitz.Document,
+    specs: Mapping[str, DatasheetSpec] | None,
+) -> DatasheetTemplateAdapter | None:
+    for spec in _candidate_auto_specs(specs):
+        adapter = adapter_from_datasheet_spec(spec)
+        if adapter.matches(template_path, doc):
+            return adapter
+    return None
+
+
 def resolve_template_adapter(
     template_path: str | Path,
     doc: fitz.Document,
@@ -316,4 +346,7 @@ def resolve_template_adapter(
     for adapter in KNOWN_TEMPLATE_ADAPTERS:
         if adapter.matches(path, doc):
             return adapter
+    auto_spec_adapter = _resolve_auto_spec_adapter(path, doc, specs)
+    if auto_spec_adapter is not None:
+        return auto_spec_adapter
     return GENERIC_TEMPLATE_ADAPTER

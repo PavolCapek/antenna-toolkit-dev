@@ -9,6 +9,7 @@ import pandas as pd
 
 from datasheet.artifacts import artifact_manifest_path, build_asset_record, load_artifact_manifest, update_artifact_manifest
 from datasheet.service import build_render_context
+from datasheet.specs import ChartLayoutSpec, ChartSlotSpec, DatasheetSpec, TemplateMatchSpec
 
 
 class DatasheetPipelineTests(unittest.TestCase):
@@ -158,3 +159,80 @@ class DatasheetPipelineTests(unittest.TestCase):
                     datasheet_layout="netqui",
                     output_dir=self.root,
                 )
+
+    def test_build_render_context_uses_technical_data_sheet_and_product_selection(self) -> None:
+        with pd.ExcelWriter(self.technical_workbook) as writer:
+            pd.DataFrame([["Ignore", "Me"]]).to_excel(writer, sheet_name="Sheet1", index=False, header=False)
+            pd.DataFrame(
+                [
+                    ["Product ID", "Gain", "VSWR"],
+                    ["SKU-1", "18 dBi", "1.7"],
+                    ["SKU-2", "21 dBi", "1.3"],
+                ]
+            ).to_excel(writer, sheet_name="Products", index=False, header=False)
+
+        with fitz.open(self.template_pdf) as doc:
+            context = build_render_context(
+                self.template_pdf,
+                doc,
+                self.extract_workbook,
+                self.technical_workbook,
+                technical_data_sheet_name="Products",
+                technical_data_product_id="SKU-2",
+                output_dir=self.root,
+            )
+
+        entries = {entry.canonical_key: entry.value for entry in context.model.technical_entries}
+        self.assertEqual(entries["gain"], "21 dBi")
+        self.assertEqual(entries["vswr"], "1.3")
+
+    def test_build_render_context_auto_discovers_external_matching_spec(self) -> None:
+        custom_template = self.root / "Custom Export.pdf"
+        with fitz.open() as doc:
+            doc.new_page(width=596.0, height=842.0)
+            doc.save(custom_template)
+        spec = DatasheetSpec(
+            key="custom",
+            display_name="Custom Datasheet",
+            layout_key="custom",
+            match=TemplateMatchSpec(filename_tokens=("custom",)),
+            chart_layout=ChartLayoutSpec(
+                min_image_slots=1,
+                slots=(ChartSlotSpec("beam_efficiency", 0, "beam_efficiency"),),
+            ),
+        )
+
+        with fitz.open(custom_template) as doc:
+            context = build_render_context(
+                custom_template,
+                doc,
+                self.extract_workbook,
+                datasheet_specs={"custom": spec},
+                output_dir=self.root,
+            )
+
+        self.assertEqual(context.adapter.key, "custom")
+        self.assertEqual(context.adapter.manifest.chart_layout.slots[0].asset_key, "beam_efficiency")
+
+    def test_build_render_context_auto_discovery_does_not_override_known_adapter(self) -> None:
+        spec = DatasheetSpec(
+            key="custom_netqui",
+            display_name="Custom Netqui",
+            layout_key="custom_netqui",
+            match=TemplateMatchSpec(filename_tokens=("netqui",)),
+            chart_layout=ChartLayoutSpec(
+                min_image_slots=1,
+                slots=(ChartSlotSpec("beam_efficiency", 0, "beam_efficiency"),),
+            ),
+        )
+
+        with fitz.open(self.template_pdf) as doc:
+            context = build_render_context(
+                self.template_pdf,
+                doc,
+                self.extract_workbook,
+                datasheet_specs={"custom_netqui": spec},
+                output_dir=self.root,
+            )
+
+        self.assertEqual(context.adapter.key, "netqui")

@@ -41,6 +41,19 @@ class TechnicalDataParserTests(unittest.TestCase):
             ("Mechanical Data", "Weight", "2 kg"),
         ])
 
+    def test_preserves_unknown_section_names_for_future_layouts(self) -> None:
+        pd.DataFrame(
+            [
+                ["Section", "Label", "Value"],
+                ["Environmental", "Wind load", "120 km/h"],
+                ["Compliance", "Standard", "ETSI"],
+            ]
+        ).to_excel(self.workbook, sheet_name="Sheet1", index=False, header=False)
+
+        entries = load_technical_data_entries(self.workbook)
+
+        self.assertEqual([entry.section for entry in entries], ["Environmental", "Compliance"])
+
     def test_loads_wide_single_product_table(self) -> None:
         pd.DataFrame(
             [

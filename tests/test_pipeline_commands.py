@@ -43,6 +43,8 @@ class PipelineCommandTests(unittest.TestCase):
             datasheet_type="rfe",
             datasheet_layout="rfe",
             datasheet_asset_ids="polar_single__azimuth__4p9ghz,polar_single__elevation__4p9ghz",
+            technical_data_sheet_name="Products",
+            technical_data_product_id="SKU-1",
             pdf_metadata_author="Jane Engineer",
         )
 
@@ -65,6 +67,8 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertEqual(command[command.index("--datasheet-type") + 1], "rfe")
         self.assertEqual(command[command.index("--datasheet-layout") + 1], "rfe")
         self.assertEqual(command[command.index("--datasheet-asset-ids") + 1], "polar_single__azimuth__4p9ghz,polar_single__elevation__4p9ghz")
+        self.assertEqual(command[command.index("--technical-data-sheet") + 1], "Products")
+        self.assertEqual(command[command.index("--technical-data-product-id") + 1], "SKU-1")
         self.assertEqual(command[command.index("--cartesian-figure-width") + 1], "9.25")
         self.assertEqual(command[command.index("--cartesian-figure-height") + 1], "3.75")
         self.assertEqual(command[command.index("--polar-figure-size") + 1], "7.5")
@@ -86,6 +90,8 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertNotIn("--datasheet-type", command)
         self.assertNotIn("--datasheet-layout", command)
         self.assertNotIn("--datasheet-asset-ids", command)
+        self.assertNotIn("--technical-data-sheet", command)
+        self.assertNotIn("--technical-data-product-id", command)
 
     @pytest.mark.export_acceptance
     def test_plot_command_uses_typed_settings(self) -> None:

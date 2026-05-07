@@ -96,10 +96,13 @@ def _normalize_header(value: object) -> str:
 
 def normalize_table_section(value: object) -> str:
     key = _normalize_header(value)
+    raw = _format_cell(value)
     if key in {"performance", "performance data", "electrical", "electrical data"}:
         return "Performance" if "performance" in key else "Electrical Data"
     if key in {"mechanical", "mechanical data"}:
         return "Mechanical Data"
+    if raw:
+        return " ".join(part.capitalize() for part in re.split(r"\s+", raw.strip()) if part)
     return "Technical Data"
 
 

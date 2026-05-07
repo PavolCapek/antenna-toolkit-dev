@@ -415,15 +415,16 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(loaded_after_save.presets, {})
         self.assertEqual(loaded_after_save.active_preset, "Preset A")
         first_saved_settings = dict(loaded_after_save.settings)
-        self.assertEqual(first_saved_settings, {})
+        self.assertEqual(first_saved_settings["datasheet_type"], "auto")
+        self.assertIn("technical_data_sheet_name", first_saved_settings)
 
         self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
         self.app.processEvents()
         self.window.flush_derived_paths_refresh()
 
-        self.assertFalse(self.window.has_unsaved_project_changes())
+        self.assertTrue(self.window.has_unsaved_project_changes())
         self.assertTrue(self.window.has_unsaved_preset_changes())
-        self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
+        self.assertIn("unsaved", self.window.project_save_state_indicator.text().lower())
         self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset has unsaved changes")
 
         self.window.cartesian_grid_line_width.setValue(1.4)
@@ -450,7 +451,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.window.save_preset()
         self.app.processEvents()
 
-        self.assertFalse(self.window.has_unsaved_project_changes())
+        self.assertTrue(self.window.has_unsaved_project_changes())
         self.assertFalse(self.window.has_unsaved_preset_changes())
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["smooth"], self.window.beam_smooth.value())
         self.assertEqual(self.window.preset_store.load_presets()["Preset A"]["cartesian_grid_line_width"], 1.4)
@@ -498,8 +499,14 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(self.window.collect_preset_values()["datasheet_type"], "auto")
         self.assertEqual(self.window.collect_preset_values()["datasheet_layout"], "auto")
         self.assertEqual(self.window.collect_preset_values()["datasheet_asset_ids"], "")
+        self.assertEqual(self.window.collect_preset_values()["technical_data_sheet_name"], "")
+        self.assertEqual(self.window.collect_preset_values()["technical_data_product_id"], "")
         self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "RF elements")
+        self.window.technical_data_sheet_name.setText("Products")
+        self.window.technical_data_product_id.setText("SKU-2")
         self.window.pdf_metadata_author.setText("Preset Author")
+        self.assertEqual(self.window.collect_preset_values()["technical_data_sheet_name"], "Products")
+        self.assertEqual(self.window.collect_preset_values()["technical_data_product_id"], "SKU-2")
         self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "Preset Author")
 
     def test_datasheet_template_selection_is_preset_backed_and_marks_snapshot_stale(self) -> None:
@@ -895,7 +902,7 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         saved_first = self.window.project_store.load_project(self.project.slug)
         self.assertEqual(self.window.global_presets["Preset A"]["smooth"], 9)
-        self.assertEqual(saved_first.settings, {})
+        self.assertEqual(saved_first.settings["smooth"], 9)
         self.assertEqual(saved_first.ffs_items[0]["path"], "Input data/a.ffs")
         self.assertEqual(self.window.active_project_slug, second.slug)
 
