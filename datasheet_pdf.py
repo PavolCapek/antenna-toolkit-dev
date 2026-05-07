@@ -72,6 +72,7 @@ MYRIAD_FONT_FILES = {
 
 MISSING_VALUE_COLOR = (0.9, 0.0, 0.0)
 NETQUI_TABLE_FONT_SIZE = 9.0
+NETQUI_TABLE_VERTICAL_OFFSET = 1.4
 NETQUI_CHART_HEADING_GAP = 4.0
 NETQUI_SECTION_GAP = 16.0
 NETQUI_HEADING_FONT = "OpenSans-Medium"
@@ -357,6 +358,7 @@ def _insert_wrapped_text(
     color: tuple[float, float, float],
     registered_fonts: set[str],
     center_vertically: bool = False,
+    vertical_offset: float = 0.0,
     line_height_factor: float = 1.2,
 ) -> None:
     pdf_font_name, fontfile, font_path = _register_pdf_font(page, font_name, registered_fonts, required_text=text)
@@ -369,7 +371,7 @@ def _insert_wrapped_text(
         descender = float(getattr(font, "descender", -0.25))
         glyph_height = max(0.1, (ascender - descender) * font_size)
         total_height = glyph_height + (max(1, len(lines)) - 1) * line_height
-        first_baseline = rect.y0 + max(0.0, (rect.height - total_height) / 2.0) + ascender * font_size
+        first_baseline = rect.y0 + max(0.0, (rect.height - total_height) / 2.0) + ascender * font_size + vertical_offset
     else:
         first_baseline = (rect.y0 + font_size) if origin is None else origin[1]
     max_baseline = rect.y1 + 0.8
@@ -1177,6 +1179,7 @@ def _replace_netqui_table(
                 color=slot.label_color,
                 registered_fonts=registered_fonts,
                 center_vertically=True,
+                vertical_offset=NETQUI_TABLE_VERTICAL_OFFSET,
             )
             value_color = MISSING_VALUE_COLOR if is_missing else (0.0, 0.0, 0.0)
             _insert_wrapped_text(
@@ -1189,6 +1192,7 @@ def _replace_netqui_table(
                 color=value_color,
                 registered_fonts=registered_fonts,
                 center_vertically=True,
+                vertical_offset=NETQUI_TABLE_VERTICAL_OFFSET,
                 line_height_factor=1.3,
             )
             page.draw_line(

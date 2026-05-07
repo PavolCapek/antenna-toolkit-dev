@@ -904,6 +904,29 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertNotIn("1142 x 200 x 618 mm", page_text)
         self.assertNotIn("6.7 kg", page_text)
 
+    def test_build_datasheet_pdf_netqui_template_lowers_table_text_for_visual_centering(self) -> None:
+        self._write_netqui_technical_template_pdf()
+        self._write_technical_workbook(
+            [
+                ("Antenna Name", ""),
+                ("Product ID", ""),
+            ]
+        )
+
+        build_datasheet_pdf(
+            output=self.output_pdf,
+            template=self.template_pdf,
+            extract_workbook=self.extract_workbook,
+            technical_data_workbook=self.technical_workbook,
+        )
+
+        with fitz.open(self.output_pdf) as doc:
+            spans = _extract_page_spans(doc[0])
+
+        frequency_value = next(span for span in spans if span.text == "4900 - 7125 MHz")
+        value_center_y = (frequency_value.bbox.y0 + frequency_value.bbox.y1) / 2.0
+        self.assertGreater(value_center_y, 450.5)
+
     def test_build_datasheet_pdf_netqui_template_uses_aliases_and_sectioned_extra_rows(self) -> None:
         self._write_netqui_technical_template_pdf()
         pd.DataFrame(
