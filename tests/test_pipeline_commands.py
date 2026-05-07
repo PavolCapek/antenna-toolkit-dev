@@ -40,6 +40,9 @@ class PipelineCommandTests(unittest.TestCase):
             cartesian_figure_width=9.25,
             cartesian_figure_height=3.75,
             polar_figure_size=7.5,
+            datasheet_type="rfe",
+            datasheet_layout="rfe",
+            datasheet_asset_ids="polar_single__azimuth__4p9ghz,polar_single__elevation__4p9ghz",
             pdf_metadata_author="Jane Engineer",
         )
 
@@ -59,6 +62,9 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertEqual(command[command.index("--extract-workbook") + 1], "extract.xlsx")
         self.assertEqual(command[command.index("--technical-data-workbook") + 1], "technical-data.xlsx")
         self.assertEqual(command[command.index("--metadata-author") + 1], "Jane Engineer")
+        self.assertEqual(command[command.index("--datasheet-type") + 1], "rfe")
+        self.assertEqual(command[command.index("--datasheet-layout") + 1], "rfe")
+        self.assertEqual(command[command.index("--datasheet-asset-ids") + 1], "polar_single__azimuth__4p9ghz,polar_single__elevation__4p9ghz")
         self.assertEqual(command[command.index("--cartesian-figure-width") + 1], "9.25")
         self.assertEqual(command[command.index("--cartesian-figure-height") + 1], "3.75")
         self.assertEqual(command[command.index("--polar-figure-size") + 1], "7.5")
@@ -77,6 +83,9 @@ class PipelineCommandTests(unittest.TestCase):
         )
 
         self.assertNotIn("--radiation-frequencies-ghz", command)
+        self.assertNotIn("--datasheet-type", command)
+        self.assertNotIn("--datasheet-layout", command)
+        self.assertNotIn("--datasheet-asset-ids", command)
 
     @pytest.mark.export_acceptance
     def test_plot_command_uses_typed_settings(self) -> None:
@@ -153,7 +162,13 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertEqual(command[command.index("--legend-labels") + 1], "Port 1")
 
     def test_commands_accept_run_context(self) -> None:
-        settings = PresetSettings(plot_line_1="#101010", plot_line_2="#202020")
+        settings = PresetSettings(
+            plot_line_1="#101010",
+            plot_line_2="#202020",
+            datasheet_type="netqui_1pol",
+            datasheet_layout="netqui_1pol",
+            datasheet_asset_ids="polar_combined_planes__e-h-plane__6ghz",
+        )
         context = RunContext(
             project_slug="demo",
             project_dir=Path("project"),
@@ -194,6 +209,9 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertIn(str(context.datasheet_output), datasheet_command)
         self.assertIn(str(context.extract_output), datasheet_command)
         self.assertEqual(datasheet_command[datasheet_command.index("--radiation-frequencies-ghz") + 1], "2.4,5.8")
+        self.assertEqual(datasheet_command[datasheet_command.index("--datasheet-type") + 1], "netqui_1pol")
+        self.assertEqual(datasheet_command[datasheet_command.index("--datasheet-layout") + 1], "netqui_1pol")
+        self.assertEqual(datasheet_command[datasheet_command.index("--datasheet-asset-ids") + 1], "polar_combined_planes__e-h-plane__6ghz")
 
 
 if __name__ == "__main__":

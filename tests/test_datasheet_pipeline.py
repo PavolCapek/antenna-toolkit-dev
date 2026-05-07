@@ -110,3 +110,51 @@ class DatasheetPipelineTests(unittest.TestCase):
         self.assertEqual(context.adapter.manifest.chart_layout.min_image_slots, 4)
         self.assertEqual(context.model.performance_fields["Gain"], "19.5 dBi")
         self.assertEqual(context.model.artifact_manifest["charts"]["gain"]["svg"], str(self.chart_svg.resolve()))
+
+    def test_build_render_context_can_use_explicit_datasheet_type(self) -> None:
+        with fitz.open(self.template_pdf) as doc:
+            context = build_render_context(
+                self.template_pdf,
+                doc,
+                self.extract_workbook,
+                datasheet_type="rfe",
+                output_dir=self.root,
+            )
+
+        self.assertEqual(context.adapter.key, "rfe")
+        self.assertIsNotNone(context.adapter.manifest)
+        self.assertEqual(context.adapter.manifest.chart_layout.slot_order, "first_two_then_x")
+
+    def test_build_render_context_can_use_explicit_datasheet_layout(self) -> None:
+        with fitz.open(self.template_pdf) as doc:
+            context = build_render_context(
+                self.template_pdf,
+                doc,
+                self.extract_workbook,
+                datasheet_layout="rfe",
+                output_dir=self.root,
+            )
+
+        self.assertEqual(context.adapter.key, "rfe")
+
+    def test_build_render_context_validates_unknown_or_mismatched_spec_selection(self) -> None:
+        with fitz.open(self.template_pdf) as doc:
+            with self.assertRaisesRegex(ValueError, "Unknown datasheet type"):
+                build_render_context(
+                    self.template_pdf,
+                    doc,
+                    self.extract_workbook,
+                    datasheet_type="missing",
+                    output_dir=self.root,
+                )
+
+        with fitz.open(self.template_pdf) as doc:
+            with self.assertRaisesRegex(ValueError, "does not belong"):
+                build_render_context(
+                    self.template_pdf,
+                    doc,
+                    self.extract_workbook,
+                    datasheet_type="rfe",
+                    datasheet_layout="netqui",
+                    output_dir=self.root,
+                )

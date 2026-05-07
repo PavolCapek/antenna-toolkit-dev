@@ -42,6 +42,7 @@ from datasheet_pdf import (
     _replace_header_placeholders,
     _replace_chart_images,
     _reflow_chart_replacements,
+    _radiation_frequencies_from_asset_ids,
     _shift_chart_replacement,
     _update_footer_dates,
     build_datasheet_pdf,
@@ -1513,6 +1514,26 @@ class DatasheetPdfTests(unittest.TestCase):
                 manifest,
                 chart_key="polar_combined_planes",
             )
+
+    def test_selected_asset_ids_resolve_radiation_frequencies(self) -> None:
+        update_artifact_manifest(
+            self.root,
+            "extract",
+            gain=build_asset_record(self.gain_svg),
+            polar_combined_planes=[
+                build_asset_record(self.combined_eh_low_svg, frequency_ghz=4.9, plane_mode="e-h-plane"),
+                build_asset_record(self.combined_eh_mid_svg, frequency_ghz=6.0, plane_mode="e-h-plane"),
+                build_asset_record(self.combined_eh_high_svg, frequency_ghz=7.125, plane_mode="e-h-plane"),
+            ],
+        )
+        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
+
+        selected = _radiation_frequencies_from_asset_ids(
+            manifest,
+            "gain,polar_combined_planes__e-h-plane__7p125ghz,polar_combined_planes__e-h-plane__4p9ghz",
+        )
+
+        self.assertEqual(selected, [4.9, 7.125])
 
     def test_netqui_1pol_selected_radiation_frequencies_replace_only_requested_assets(self) -> None:
         self._write_netqui_chart_template_pdf()

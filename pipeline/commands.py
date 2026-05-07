@@ -68,6 +68,11 @@ def build_datasheet_command(
     if technical_data_workbook is not None:
         args.extend(["--technical-data-workbook", str(technical_data_workbook)])
     _append_if_text(args, "--metadata-author", metadata_author or "")
+    if settings.datasheet_type.strip() and settings.datasheet_type.strip() != "auto":
+        args.extend(["--datasheet-type", settings.datasheet_type.strip()])
+    if settings.datasheet_layout.strip() and settings.datasheet_layout.strip() != "auto":
+        args.extend(["--datasheet-layout", settings.datasheet_layout.strip()])
+    _append_if_text(args, "--datasheet-asset-ids", settings.datasheet_asset_ids)
     args.extend(
         [
             "--cartesian-figure-width",

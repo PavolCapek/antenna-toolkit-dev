@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 import fitz
 
 from datasheet.models import DatasheetModel, load_datasheet_model
+from datasheet.specs import DatasheetSpec
 from datasheet.templates import DatasheetTemplateAdapter, resolve_template_adapter
 
 
@@ -22,8 +24,17 @@ def build_render_context(
     technical_data_workbook: Path | None = None,
     *,
     output_dir: Path | None = None,
+    datasheet_type: str | None = None,
+    datasheet_layout: str | None = None,
+    datasheet_specs: Mapping[str, DatasheetSpec] | None = None,
 ) -> DatasheetRenderContext:
-    adapter = resolve_template_adapter(template_path, doc)
+    adapter = resolve_template_adapter(
+        template_path,
+        doc,
+        datasheet_type=datasheet_type,
+        datasheet_layout=datasheet_layout,
+        specs=datasheet_specs,
+    )
     model = load_datasheet_model(
         extract_workbook.resolve(),
         technical_data_workbook.resolve() if technical_data_workbook else None,

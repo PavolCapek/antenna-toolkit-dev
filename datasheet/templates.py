@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import fitz
 
 from datasheet.layouts.netqui_1pol import NETQUI_SLOT_ORDER_ROWS
 from datasheet.layouts.rfe import RFE_SLOT_ORDER_FIRST_TWO_THEN_X
+from datasheet.specs import DatasheetSpec, load_default_datasheet_specs
 
 
 @dataclass(frozen=True)
@@ -213,8 +215,104 @@ KNOWN_TEMPLATE_ADAPTERS = (
 )
 
 
-def resolve_template_adapter(template_path: str | Path, doc: fitz.Document) -> DatasheetTemplateAdapter:
+def adapter_from_datasheet_spec(spec: DatasheetSpec) -> DatasheetTemplateAdapter:
+    chart_layout = None
+    if spec.chart_layout is not None:
+        chart_layout = TemplateChartManifest(
+            page_index=spec.chart_layout.page_index,
+            min_image_slots=spec.chart_layout.min_image_slots,
+            slots=tuple(
+                TemplateChartSlot(
+                    slot.kind,
+                    slot.slot_index,
+                    slot.asset_key,
+                    required=slot.required,
+                    plane=slot.plane,
+                    frequency_role=slot.frequency_role,
+                    legend_mode=slot.legend_mode,
+                )
+                for slot in spec.chart_layout.slots
+            ),
+            normalize_width_kinds=spec.chart_layout.normalize_width_kinds,
+            slot_order=spec.chart_layout.slot_order,
+        )
+    table_layout = TemplateTableManifest(
+        aliases=tuple(
+            TemplateTableAlias(alias.canonical_key, alias.labels)
+            for alias in spec.table.aliases
+        ),
+        electrical_sections=spec.table.electrical_sections,
+        mechanical_sections=spec.table.mechanical_sections,
+    )
+    return DatasheetTemplateAdapter(
+        key=spec.key,
+        display_name=spec.display_name,
+        filename_tokens=spec.match.filename_tokens,
+        required_text_markers=spec.match.required_text_markers,
+        chart_layout_mode=spec.chart_layout_mode,
+        technical_layout_mode=spec.technical_layout_mode,
+        manifest=TemplateManifest(
+            key=spec.key,
+            chart_layout=chart_layout,
+            table_layout=table_layout,
+            technical_layout_mode=spec.technical_layout_mode,
+        ),
+    )
+
+
+def _normal_selection(value: str | None) -> str:
+    return str(value or "auto").strip() or "auto"
+
+
+def _resolve_spec_adapter(
+    *,
+    datasheet_type: str,
+    datasheet_layout: str,
+    specs: Mapping[str, DatasheetSpec] | None,
+) -> DatasheetTemplateAdapter | None:
+    if datasheet_type == "auto" and datasheet_layout == "auto":
+        return None
+    resolved_specs = specs if specs is not None else load_default_datasheet_specs()
+    if not resolved_specs:
+        raise ValueError("No datasheet specs are available.")
+    if datasheet_type != "auto":
+        spec = resolved_specs.get(datasheet_type)
+        if spec is None:
+            raise ValueError(f"Unknown datasheet type '{datasheet_type}'.")
+        if datasheet_layout != "auto" and datasheet_layout not in {spec.key, spec.layout_key}:
+            raise ValueError(
+                f"Datasheet layout '{datasheet_layout}' does not belong to datasheet type '{datasheet_type}'."
+            )
+        return adapter_from_datasheet_spec(spec)
+
+    layout_candidates = [
+        spec for spec in resolved_specs.values()
+        if datasheet_layout in {spec.key, spec.layout_key}
+    ]
+    if not layout_candidates:
+        raise ValueError(f"Unknown datasheet layout '{datasheet_layout}'.")
+    if len(layout_candidates) > 1:
+        keys = ", ".join(sorted(spec.key for spec in layout_candidates))
+        raise ValueError(f"Datasheet layout '{datasheet_layout}' is ambiguous across specs: {keys}.")
+    return adapter_from_datasheet_spec(layout_candidates[0])
+
+
+def resolve_template_adapter(
+    template_path: str | Path,
+    doc: fitz.Document,
+    *,
+    datasheet_type: str | None = None,
+    datasheet_layout: str | None = None,
+    specs: Mapping[str, DatasheetSpec] | None = None,
+) -> DatasheetTemplateAdapter:
     path = Path(template_path)
+    spec_adapter = _resolve_spec_adapter(
+        datasheet_type=_normal_selection(datasheet_type),
+        datasheet_layout=_normal_selection(datasheet_layout),
+        specs=specs,
+    )
+    if spec_adapter is not None:
+        return spec_adapter
     for adapter in KNOWN_TEMPLATE_ADAPTERS:
         if adapter.matches(path, doc):
             return adapter
