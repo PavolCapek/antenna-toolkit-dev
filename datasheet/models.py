@@ -333,6 +333,7 @@ def canonical_field_key(value: object) -> str:
         "wind survival [km/h]": "wind survival",
         "wind load [n]": "wind load",
         "effective projected area [cm2]": "effective projected area",
+        "effective projected area [cm²]": "effective projected area",
         "weight single unit [kg]": "weight",
         "size single unit [mm]": "single unit",
         "dimensions (lxwxd)": "dimensions",

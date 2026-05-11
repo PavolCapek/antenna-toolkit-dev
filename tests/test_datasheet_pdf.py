@@ -784,7 +784,7 @@ class DatasheetPdfTests(unittest.TestCase):
                 ["Weight Single Unit [kg]", "Netto", 2.7],
                 [None, "Brutto", 4.1],
                 ["Wind", None, None],
-                ["Effective Projected Area [cm2]", "Front", 271],
+                ["Effective Projected Area [cm²]", "Front", 271],
                 [None, "Side", 1018],
                 ["Wind Load [N]", "Front", 33],
                 [None, "Side", 123],
@@ -816,7 +816,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertIn("TwistPort Waveguide Connector", page_text)
         self.assertIn("40-80 mm (1.6-3.1 inch)", page_text)
         self.assertIn("33/123 N - Front/Side at 160 km/h (100 mph)", page_text)
-        self.assertIn("271/1018 cm2 - Front/Side (42.0/157.8 in2)", page_text)
+        self.assertIn("271/1018 cm² - Front/Side (42.0/157.8 in²)", page_text)
         self.assertIn("+/- 20° Elevation, +/- 20° Azimuth", page_text)
         self.assertIn("2.7 kg / 6.0 lbs - single unit", page_text)
         self.assertIn("560 x 450 x 190 mm (22.0 x 17.7 x 7.5 inch)", page_text)

@@ -396,8 +396,8 @@ def _parse_rfe_v2_rows(data: pd.DataFrame, *, canonical_key_factory) -> list[Tec
             combined.append((section_for_label, "Pole Mounting Diameter", _format_pole_diameter(values)))
         elif key == "wind load n":
             combined.append((section_for_label, "Wind Load", _format_wind_load(values, wind_speed)))
-        elif key == "effective projected area cm2":
-            combined.append((section_for_label, "Effective Projected Area", _format_front_side(values, metric_unit="cm2", imperial_factor=0.15500031, imperial_unit="in2", decimals=1)))
+        elif key in {"effective projected area cm2", "effective projected area cm"}:
+            combined.append((section_for_label, "Effective Projected Area", _format_front_side(values, metric_unit="cm²", imperial_factor=0.15500031, imperial_unit="in²", decimals=1)))
         elif key == "mechanical adjustment":
             combined.append((section_for_label, "Mechanical Adjustment", _format_adjustment(values)))
 

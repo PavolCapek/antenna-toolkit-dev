@@ -122,7 +122,7 @@ class TechnicalDataParserTests(unittest.TestCase):
                 ["Weight Single Unit [kg]", "Netto", 2.7],
                 [None, "Brutto", 4.1],
                 ["Wind", None, None],
-                ["Effective Projected Area [cm2]", "Front", 271],
+                ["Effective Projected Area [cm²]", "Front", 271],
                 [None, "Side", 1018],
                 ["Wind Load [N]", "Front", 33],
                 [None, "Side", 123],
@@ -150,7 +150,7 @@ class TechnicalDataParserTests(unittest.TestCase):
         self.assertEqual(by_key["weight"].value, "2.7 kg / 6.0 lbs - single unit\n4.1 kg / 9.0 lbs - single unit incl. package")
         self.assertEqual(by_key["pole mounting diameter"].value, "40-80 mm (1.6-3.1 inch)")
         self.assertEqual(by_key["wind load"].value, "33/123 N - Front/Side at 160 km/h (100 mph)")
-        self.assertEqual(by_key["effective projected area"].value, "271/1018 cm2 - Front/Side (42.0/157.8 in2)")
+        self.assertEqual(by_key["effective projected area"].value, "271/1018 cm² - Front/Side (42.0/157.8 in²)")
         self.assertEqual(by_key["mechanical adjustment"].value, "+/- 20° Elevation, +/- 20° Azimuth")
 
     def test_rfe_v2_profile_is_not_applied_by_default(self) -> None:
