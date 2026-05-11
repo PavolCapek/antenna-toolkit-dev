@@ -310,6 +310,19 @@ def _format_pole_diameter(values: dict[str, object]) -> str:
     )
 
 
+def _format_temperature(values: dict[str, object]) -> str:
+    min_value = _as_float(values.get("min"))
+    max_value = _as_float(values.get("max"))
+    if min_value is None or max_value is None:
+        return ""
+    min_f = min_value * 9.0 / 5.0 + 32.0
+    max_f = max_value * 9.0 / 5.0 + 32.0
+    return (
+        f"{_format_number(min_value)}°C to +{_format_number(max_value)}°C "
+        f"({_format_number(min_f)}°F to +{_format_number(max_f)}°F)"
+    )
+
+
 def _format_front_side(values: dict[str, object], *, metric_unit: str, imperial_factor: float, imperial_unit: str, decimals: int) -> str:
     front = _as_float(values.get("front"))
     side = _as_float(values.get("side"))
@@ -394,6 +407,8 @@ def _parse_rfe_v2_rows(data: pd.DataFrame, *, canonical_key_factory) -> list[Tec
             combined.append((section_for_label, "Weight", _format_weight(values)))
         elif key == "pole mounting diameter mm":
             combined.append((section_for_label, "Pole Mounting Diameter", _format_pole_diameter(values)))
+        elif key == "temperature":
+            combined.append((section_for_label, "Temperature", _format_temperature(values)))
         elif key == "wind load n":
             combined.append((section_for_label, "Wind Load", _format_wind_load(values, wind_speed)))
         elif key in {"effective projected area cm2", "effective projected area cm"}:

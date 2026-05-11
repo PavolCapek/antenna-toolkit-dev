@@ -765,6 +765,7 @@ class DatasheetPdfTests(unittest.TestCase):
                 ("Pole Mounting Diameter", "Template pole"),
                 ("Wind Load", "Template wind"),
                 ("Effective Projected Area", "Template area"),
+                ("Temperature", "Template temperature"),
                 ("Mechanical Adjustment", "Template adjustment"),
                 ("Weight", "Template weight"),
                 ("Single Unit", "Template single unit"),
@@ -793,6 +794,8 @@ class DatasheetPdfTests(unittest.TestCase):
                 ["Radio Connection", None, "TwistPort Waveguide Connector"],
                 ["Pole Mounting Diameter [mm]", "min", 40],
                 [None, "max", 80],
+                ["Temperature", "min", "-35°C"],
+                [None, "max", "60°C"],
                 ["Mechanical Adjustment", "Elevation", "+/- 20°"],
                 [None, "Azimuth", "+/- 20°"],
             ]
@@ -817,6 +820,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertIn("40-80 mm (1.6-3.1 inch)", page_text)
         self.assertIn("33/123 N - Front/Side at 160 km/h (100 mph)", page_text)
         self.assertIn("271/1018 cm² - Front/Side (42.0/157.8 in²)", page_text)
+        self.assertIn("-35°C to +60°C (-31°F to +140°F)", page_text)
         self.assertIn("+/- 20° Elevation, +/- 20° Azimuth", page_text)
         self.assertIn("2.7 kg / 6.0 lbs - single unit", page_text)
         self.assertIn("560 x 450 x 190 mm (22.0 x 17.7 x 7.5 inch)", page_text)

@@ -132,6 +132,8 @@ class TechnicalDataParserTests(unittest.TestCase):
                 ["Radio Connection", None, "TwistPort Waveguide Connector"],
                 ["Pole Mounting Diameter [mm]", "min", 40],
                 [None, "max", 80],
+                ["Temperature", "min", "-35°C"],
+                [None, "max", "60°C"],
                 ["Mechanical Adjustment", "Elevation", "+/- 20°"],
                 [None, "Azimuth", "+/- 20°"],
             ]
@@ -151,6 +153,7 @@ class TechnicalDataParserTests(unittest.TestCase):
         self.assertEqual(by_key["pole mounting diameter"].value, "40-80 mm (1.6-3.1 inch)")
         self.assertEqual(by_key["wind load"].value, "33/123 N - Front/Side at 160 km/h (100 mph)")
         self.assertEqual(by_key["effective projected area"].value, "271/1018 cm² - Front/Side (42.0/157.8 in²)")
+        self.assertEqual(by_key["temperature"].value, "-35°C to +60°C (-31°F to +140°F)")
         self.assertEqual(by_key["mechanical adjustment"].value, "+/- 20° Elevation, +/- 20° Azimuth")
 
     def test_rfe_v2_profile_is_not_applied_by_default(self) -> None:
