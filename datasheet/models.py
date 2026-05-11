@@ -326,8 +326,15 @@ def canonical_field_key(value: object) -> str:
         return ""
     technical_aliases = {
         "sku": "product id",
+        "product name": "antenna name",
         "rf connection": "radio connection",
         "material": "materials",
+        "pole mounting diameter [mm]": "pole mounting diameter",
+        "wind survival [km/h]": "wind survival",
+        "wind load [n]": "wind load",
+        "effective projected area [cm2]": "effective projected area",
+        "weight single unit [kg]": "weight",
+        "size single unit [mm]": "single unit",
         "dimensions (lxwxd)": "dimensions",
         "dimensions (h x w x d)": "dimensions",
     }
@@ -345,6 +352,7 @@ def load_technical_data_entries(
     *,
     sheet_name: str | int | None = None,
     product_id: str | None = None,
+    technical_data_profile: str | None = None,
 ) -> list[TechnicalDataEntry]:
     try:
         entries = load_technical_data_table_entries(
@@ -352,6 +360,7 @@ def load_technical_data_entries(
             sheet_name=sheet_name,
             product_id=product_id,
             canonical_key_factory=canonical_field_key,
+            technical_data_profile=technical_data_profile,
         )
     except TechnicalDataError as exc:
         raise ValueError(str(exc)) from exc
@@ -385,6 +394,7 @@ def load_datasheet_model(
     output_dir: Path | None = None,
     technical_data_sheet_name: str | int | None = None,
     technical_data_product_id: str | None = None,
+    technical_data_profile: str | None = None,
 ) -> DatasheetModel:
     extract_workbook = extract_workbook.resolve()
     if output_dir is None:
@@ -400,6 +410,7 @@ def load_datasheet_model(
             technical_data_workbook.resolve(),
             sheet_name=technical_data_sheet_name,
             product_id=technical_data_product_id,
+            technical_data_profile=technical_data_profile,
         )
         if technical_data_workbook
         else []

@@ -43,6 +43,7 @@ def build_render_context(
         output_dir=output_dir,
         technical_data_sheet_name=technical_data_sheet_name,
         technical_data_product_id=technical_data_product_id,
+        technical_data_profile="rfe" if adapter.key == "rfe" else None,
     )
     return DatasheetRenderContext(model=model, adapter=adapter)
 

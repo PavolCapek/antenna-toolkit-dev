@@ -244,12 +244,178 @@ def _parse_wide_product_table(
     return entries
 
 
+def _as_float(value: object) -> float | None:
+    text = _format_cell(value).replace(",", ".")
+    if not text:
+        return None
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    try:
+        number = float(match.group(0))
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _format_number(value: float | None, *, decimals: int = 0, trim: bool = True) -> str:
+    if value is None:
+        return ""
+    if decimals <= 0:
+        rounded = int(math.floor(value + 0.5)) if value >= 0 else int(math.ceil(value - 0.5))
+        return str(rounded)
+    text = f"{value:.{decimals}f}"
+    return text.rstrip("0").rstrip(".") if trim and "." in text else text
+
+
+def _format_metric(value: float | None, unit: str, *, decimals: int = 0) -> str:
+    text = _format_number(value, decimals=decimals)
+    return f"{text} {unit}".strip() if text else ""
+
+
+def _format_dimension(values: dict[str, object]) -> str:
+    ordered = [_as_float(values.get(key)) for key in ("x", "y", "z")]
+    metric = " x ".join(_format_number(value) for value in ordered if value is not None)
+    imperial = " x ".join(_format_number(value / 25.4, decimals=1, trim=False) for value in ordered if value is not None)
+    if metric and imperial:
+        return f"{metric} mm ({imperial} inch)"
+    return f"{metric} mm".strip()
+
+
+def _format_weight(values: dict[str, object]) -> str:
+    netto = _as_float(values.get("netto"))
+    brutto = _as_float(values.get("brutto"))
+    parts: list[str] = []
+    if netto is not None:
+        parts.append(
+            f"{_format_number(netto, decimals=1)} kg / "
+            f"{_format_number(netto * 2.2046226218, decimals=1, trim=False)} lbs - single unit"
+        )
+    if brutto is not None:
+        parts.append(
+            f"{_format_number(brutto, decimals=1)} kg / "
+            f"{_format_number(brutto * 2.2046226218, decimals=1, trim=False)} lbs - single unit incl. package"
+        )
+    return "\n".join(parts)
+
+
+def _format_pole_diameter(values: dict[str, object]) -> str:
+    min_value = _as_float(values.get("min"))
+    max_value = _as_float(values.get("max"))
+    if min_value is None or max_value is None:
+        return ""
+    return (
+        f"{_format_number(min_value)}-{_format_number(max_value)} mm "
+        f"({_format_number(min_value / 25.4, decimals=1)}-{_format_number(max_value / 25.4, decimals=1)} inch)"
+    )
+
+
+def _format_front_side(values: dict[str, object], *, metric_unit: str, imperial_factor: float, imperial_unit: str, decimals: int) -> str:
+    front = _as_float(values.get("front"))
+    side = _as_float(values.get("side"))
+    metric = "/".join(_format_number(value) for value in (front, side) if value is not None)
+    imperial = "/".join(_format_number(value * imperial_factor, decimals=decimals, trim=decimals <= 0) for value in (front, side) if value is not None)
+    if metric and imperial:
+        return f"{metric} {metric_unit} - Front/Side ({imperial} {imperial_unit})"
+    return f"{metric} {metric_unit}".strip()
+
+
+def _format_wind_load(values: dict[str, object], wind_speed: object | None) -> str:
+    front_side = _format_front_side(values, metric_unit="N", imperial_factor=1.0, imperial_unit="N", decimals=0)
+    text = re.sub(r"\s+\([^)]*\)$", "", front_side)
+    speed = _as_float(wind_speed)
+    if speed is not None:
+        mph = round(speed * 0.6213711922 / 5.0) * 5.0
+        text = f"{text} at {_format_number(speed)} km/h ({_format_number(mph)} mph)"
+    return text
+
+
+def _format_adjustment(values: dict[str, object]) -> str:
+    parts: list[str] = []
+    for label in ("elevation", "azimuth"):
+        value = _format_cell(values.get(label))
+        if value:
+            normalized = value.replace("\N{PLUS-MINUS SIGN}", "+/-")
+            parts.append(f"{normalized} {label.capitalize()}")
+    return ", ".join(parts)
+
+
+def _is_rfe_v2_table(data: pd.DataFrame, first_index: int) -> bool:
+    if data.shape[1] < 3:
+        return False
+    rows = data.iloc[first_index : first_index + 40, :3]
+    first_col = {_normalize_header(value) for value in rows.iloc[:, 0].tolist() if _format_cell(value)}
+    has_sections = {"general", "performance", "dimensions", "technical data"}.issubset(first_col)
+    has_product_name = any(_normalize_header(row.iloc[0]) == "product name" and _format_cell(row.iloc[2]) for _idx, row in rows.iterrows())
+    return has_sections and has_product_name
+
+
+def _parse_rfe_v2_rows(data: pd.DataFrame, *, canonical_key_factory) -> list[TechnicalDataEntry]:
+    rfe_section_keys = {*KNOWN_SECTION_KEYS, "general", "dimensions", "wind"}
+    section = "Technical Data"
+    rows_by_label: dict[str, dict[str, object]] = {}
+    simple_rows: list[tuple[str, str, str]] = []
+    section_by_label: dict[str, str] = {}
+    wind_speed: object | None = None
+
+    for _idx, row in data.iterrows():
+        label = _format_cell(row.iloc[0] if data.shape[1] > 0 else "")
+        qualifier = _format_cell(row.iloc[1] if data.shape[1] > 1 else "")
+        value = _format_cell(row.iloc[2] if data.shape[1] > 2 else "")
+        label_key = _normalize_header(label)
+        qualifier_key = _normalize_header(qualifier)
+        if label_key in rfe_section_keys and not qualifier and not value:
+            section = normalize_table_section(label)
+            continue
+        if not label:
+            if not qualifier:
+                continue
+            if not rows_by_label:
+                continue
+            last_label = next(reversed(rows_by_label))
+            rows_by_label[last_label][qualifier_key] = value
+            continue
+        if label_key == "wind load at speed km h":
+            wind_speed = value
+            continue
+        if qualifier:
+            rows_by_label.setdefault(label, {})[qualifier_key] = value
+            section_by_label.setdefault(label, section)
+        elif value:
+            simple_rows.append((section, "Antenna Name" if label_key == "product name" else label, value))
+
+    combined: list[tuple[str, str, str]] = []
+    for label, values in rows_by_label.items():
+        key = _normalize_header(label)
+        section_for_label = section_by_label.get(label, "Technical Data")
+        if key == "size single unit mm":
+            combined.append((section_for_label, "Single Unit", _format_dimension(values)))
+        elif key == "weight single unit kg":
+            combined.append((section_for_label, "Weight", _format_weight(values)))
+        elif key == "pole mounting diameter mm":
+            combined.append((section_for_label, "Pole Mounting Diameter", _format_pole_diameter(values)))
+        elif key == "wind load n":
+            combined.append((section_for_label, "Wind Load", _format_wind_load(values, wind_speed)))
+        elif key == "effective projected area cm2":
+            combined.append((section_for_label, "Effective Projected Area", _format_front_side(values, metric_unit="cm2", imperial_factor=0.15500031, imperial_unit="in2", decimals=1)))
+        elif key == "mechanical adjustment":
+            combined.append((section_for_label, "Mechanical Adjustment", _format_adjustment(values)))
+
+    entries: list[TechnicalDataEntry] = []
+    for section_name, label, value in [*simple_rows, *combined]:
+        if not normalize_technical_key(label):
+            continue
+        entries.append(_entry_factory(section=section_name, label=label, value=value, canonical_key_factory=canonical_key_factory))
+    return entries
+
+
 def load_technical_data_entries(
     path: Path,
     *,
     sheet_name: str | int | None = None,
     product_id: str | None = None,
     canonical_key_factory=None,
+    technical_data_profile: str | None = None,
 ) -> list[TechnicalDataEntry]:
     validate_technical_data_file(path)
     if canonical_key_factory is None:
@@ -266,7 +432,9 @@ def load_technical_data_entries(
         raise TechnicalDataError("Technical Data workbook does not contain any rows.")
     first_index = _first_non_empty_index(data)
     wide_header_index = _wide_table_header_index(data, first_index)
-    if wide_header_index is not None:
+    if technical_data_profile == "rfe" and _is_rfe_v2_table(data, first_index):
+        entries = _parse_rfe_v2_rows(data, canonical_key_factory=canonical_key_factory)
+    elif wide_header_index is not None:
         entries = _parse_wide_product_table(
             data,
             header_index=wide_header_index,

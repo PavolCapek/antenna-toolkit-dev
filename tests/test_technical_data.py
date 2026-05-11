@@ -12,6 +12,7 @@ from datasheet.technical_data import (
     TechnicalDataError,
     load_technical_data_entries,
 )
+from datasheet.models import canonical_field_key
 
 
 class TechnicalDataParserTests(unittest.TestCase):
@@ -105,6 +106,72 @@ class TechnicalDataParserTests(unittest.TestCase):
         self.assertEqual(prepared, self.workbook.resolve())
         self.assertEqual(entries[0].label, "Antenna Name")
         self.assertEqual(entries[0].value, "Sample Horn")
+
+    def test_loads_rfe_v2_profile_with_combined_metric_and_imperial_values(self) -> None:
+        pd.DataFrame(
+            [
+                ["General", None, None],
+                ["Product name", None, "45° Asymmetrical Horn Antenna"],
+                ["Product ID", None, "AH45WB"],
+                ["Performance", None, None],
+                ["Polarization", None, "Dual Linear H + V"],
+                ["Dimensions", None, None],
+                ["Size Single Unit [mm]", "X", 560],
+                [None, "Y", 450],
+                [None, "Z", 190],
+                ["Weight Single Unit [kg]", "Netto", 2.7],
+                [None, "Brutto", 4.1],
+                ["Wind", None, None],
+                ["Effective Projected Area [cm2]", "Front", 271],
+                [None, "Side", 1018],
+                ["Wind Load [N]", "Front", 33],
+                [None, "Side", 123],
+                ["Wind Load at speed [km/h]", None, 160],
+                ["Wind Survival [km/h]", None, 160],
+                ["Technical Data", None, None],
+                ["Radio Connection", None, "TwistPort Waveguide Connector"],
+                ["Pole Mounting Diameter [mm]", "min", 40],
+                [None, "max", 80],
+                ["Mechanical Adjustment", "Elevation", "+/- 20°"],
+                [None, "Azimuth", "+/- 20°"],
+            ]
+        ).to_excel(self.workbook, sheet_name="Sheet1", index=False, header=False)
+
+        entries = load_technical_data_entries(
+            self.workbook,
+            canonical_key_factory=canonical_field_key,
+            technical_data_profile="rfe",
+        )
+        by_key = {entry.canonical_key: entry for entry in entries}
+
+        self.assertEqual(by_key["antenna name"].value, "45° Asymmetrical Horn Antenna")
+        self.assertEqual(by_key["product id"].value, "AH45WB")
+        self.assertEqual(by_key["single unit"].value, "560 x 450 x 190 mm (22.0 x 17.7 x 7.5 inch)")
+        self.assertEqual(by_key["weight"].value, "2.7 kg / 6.0 lbs - single unit\n4.1 kg / 9.0 lbs - single unit incl. package")
+        self.assertEqual(by_key["pole mounting diameter"].value, "40-80 mm (1.6-3.1 inch)")
+        self.assertEqual(by_key["wind load"].value, "33/123 N - Front/Side at 160 km/h (100 mph)")
+        self.assertEqual(by_key["effective projected area"].value, "271/1018 cm2 - Front/Side (42.0/157.8 in2)")
+        self.assertEqual(by_key["mechanical adjustment"].value, "+/- 20° Elevation, +/- 20° Azimuth")
+
+    def test_rfe_v2_profile_is_not_applied_by_default(self) -> None:
+        pd.DataFrame(
+            [
+                ["General", None, None],
+                ["Product name", None, "45° Asymmetrical Horn Antenna"],
+                ["Product ID", None, "AH45WB"],
+                ["Performance", None, None],
+                ["Polarization", None, "Dual Linear H + V"],
+                ["Dimensions", None, None],
+                ["Size Single Unit [mm]", "X", 560],
+                [None, "Y", 450],
+                [None, "Z", 190],
+                ["Technical Data", None, None],
+                ["Radio Connection", None, "TwistPort Waveguide Connector"],
+            ]
+        ).to_excel(self.workbook, sheet_name="Sheet1", index=False, header=False)
+
+        with self.assertRaisesRegex(TechnicalDataError, "multiple product rows"):
+            load_technical_data_entries(self.workbook)
 
 
 if __name__ == "__main__":

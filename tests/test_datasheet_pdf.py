@@ -178,6 +178,7 @@ class DatasheetPdfTests(unittest.TestCase):
         metadata: dict[str, str] | None = None,
         xml_metadata: str | None = None,
         field_rows: list[tuple[str, str]] | None = None,
+        technical_rows: list[tuple[str, str]] | None = None,
     ) -> None:
         with fitz.open() as doc:
             page = doc.new_page()
@@ -187,7 +188,7 @@ class DatasheetPdfTests(unittest.TestCase):
                 page.insert_text((80.0, 66.0), "PRODUCT_ID_PLACEHOLDER", fontsize=7, fontname="helv", color=(0.14, 0.12, 0.12))
                 page.insert_text((34.0, 96.0), "ANTENNA NAME", fontsize=18, fontname="helv", color=(0.14, 0.12, 0.12))
                 page.insert_text((36.0, 158.0), "TECHNICAL DATA", fontsize=8, fontname="helv", color=(0.14, 0.12, 0.12))
-                tech_rows = [
+                tech_rows = technical_rows or [
                     ("Radio Connection", "Template connector"),
                     ("Antenna Type", "Template type"),
                     ("Materials", "Template material"),
@@ -755,6 +756,70 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertTrue(any(((span["color"] >> 16) & 0xFF) > 180 for span in placeholder_spans))
         self.assertNotIn("Template connector", page_text)
         self.assertAlmostEqual(custom_bottom_line - previous_line, 12.0, places=1)
+
+    def test_build_datasheet_pdf_uses_rfe_v2_technical_data_profile(self) -> None:
+        self._write_template_pdf(
+            add_technical_data=True,
+            technical_rows=[
+                ("Radio Connection", "Template connector"),
+                ("Pole Mounting Diameter", "Template pole"),
+                ("Wind Load", "Template wind"),
+                ("Effective Projected Area", "Template area"),
+                ("Mechanical Adjustment", "Template adjustment"),
+                ("Weight", "Template weight"),
+                ("Single Unit", "Template single unit"),
+            ],
+        )
+        pd.DataFrame(
+            [
+                ["General", None, None],
+                ["Product name", None, "45° Asymmetrical Horn Antenna"],
+                ["Product ID", None, "AH45WB"],
+                ["Performance", None, None],
+                ["Polarization", None, "Dual Linear H + V"],
+                ["Dimensions", None, None],
+                ["Size Single Unit [mm]", "X", 560],
+                [None, "Y", 450],
+                [None, "Z", 190],
+                ["Weight Single Unit [kg]", "Netto", 2.7],
+                [None, "Brutto", 4.1],
+                ["Wind", None, None],
+                ["Effective Projected Area [cm2]", "Front", 271],
+                [None, "Side", 1018],
+                ["Wind Load [N]", "Front", 33],
+                [None, "Side", 123],
+                ["Wind Load at speed [km/h]", None, 160],
+                ["Technical Data", None, None],
+                ["Radio Connection", None, "TwistPort Waveguide Connector"],
+                ["Pole Mounting Diameter [mm]", "min", 40],
+                [None, "max", 80],
+                ["Mechanical Adjustment", "Elevation", "+/- 20°"],
+                [None, "Azimuth", "+/- 20°"],
+            ]
+        ).to_excel(self.technical_workbook, sheet_name="Sheet1", index=False, header=False)
+
+        replacements = build_datasheet_pdf(
+            output=self.output_pdf,
+            template=self.template_pdf,
+            extract_workbook=self.extract_workbook,
+            technical_data_workbook=self.technical_workbook,
+            datasheet_type="rfe",
+        )
+
+        self.assertEqual(replacements["Antenna Name"], "45° Asymmetrical Horn Antenna")
+        self.assertEqual(replacements["Product ID"], "AH45WB")
+        with fitz.open(self.output_pdf) as doc:
+            page_text = doc[0].get_text()
+
+        self.assertIn("45° Asymmetrical Horn Antenna", page_text)
+        self.assertIn("AH45WB", page_text)
+        self.assertIn("TwistPort Waveguide Connector", page_text)
+        self.assertIn("40-80 mm (1.6-3.1 inch)", page_text)
+        self.assertIn("33/123 N - Front/Side at 160 km/h (100 mph)", page_text)
+        self.assertIn("271/1018 cm2 - Front/Side (42.0/157.8 in2)", page_text)
+        self.assertIn("+/- 20° Elevation, +/- 20° Azimuth", page_text)
+        self.assertIn("2.7 kg / 6.0 lbs - single unit", page_text)
+        self.assertIn("560 x 450 x 190 mm (22.0 x 17.7 x 7.5 inch)", page_text)
 
     def test_netqui_placeholder_header_replaces_sku_inside_span_and_footer_date(self) -> None:
         entries = [
