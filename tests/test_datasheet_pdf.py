@@ -179,6 +179,7 @@ class DatasheetPdfTests(unittest.TestCase):
         xml_metadata: str | None = None,
         field_rows: list[tuple[str, str]] | None = None,
         technical_rows: list[tuple[str, str]] | None = None,
+        technical_row_steps: list[float] | None = None,
     ) -> None:
         with fitz.open() as doc:
             page = doc.new_page()
@@ -196,13 +197,14 @@ class DatasheetPdfTests(unittest.TestCase):
                 ]
                 tech_y = 174.0
                 for index, (label, value) in enumerate(tech_rows):
+                    row_step = technical_row_steps[index] if technical_row_steps and index < len(technical_row_steps) else 12.0
                     page.insert_text((38.0, tech_y), label, fontsize=7, fontname="helv", color=(0.14, 0.12, 0.12))
                     page.insert_text((140.0, tech_y), value, fontsize=7, fontname="helv", color=(0.25, 0.25, 0.25))
                     if omit_first_technical_value_separator and index == 0:
-                        page.draw_line((36.638, tech_y + 6.0), (138.0, tech_y + 6.0), color=(0.14, 0.12, 0.12), width=0.25)
+                        page.draw_line((36.638, tech_y + row_step - 6.0), (138.0, tech_y + row_step - 6.0), color=(0.14, 0.12, 0.12), width=0.25)
                     else:
-                        page.draw_line((36.638, tech_y + 6.0), (299.0, tech_y + 6.0), color=(0.14, 0.12, 0.12), width=0.25)
-                    tech_y += 12.0
+                        page.draw_line((36.638, tech_y + row_step - 6.0), (299.0, tech_y + row_step - 6.0), color=(0.14, 0.12, 0.12), width=0.25)
+                    tech_y += row_step
                 page.insert_text((36.0, 300.0), "PERFORMANCE", fontsize=8, fontname="helv", color=(0.14, 0.12, 0.12))
                 y = 316.0
             else:
@@ -755,7 +757,7 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertTrue(placeholder_spans)
         self.assertTrue(any(((span["color"] >> 16) & 0xFF) > 180 for span in placeholder_spans))
         self.assertNotIn("Template connector", page_text)
-        self.assertAlmostEqual(custom_bottom_line - previous_line, 12.0, places=1)
+        self.assertLess(custom_bottom_line - previous_line, 16.0)
 
     def test_build_datasheet_pdf_uses_rfe_v2_technical_data_profile(self) -> None:
         self._write_template_pdf(
@@ -824,6 +826,41 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertIn("+/- 20° Elevation, +/- 20° Azimuth", page_text)
         self.assertIn("2.7 kg / 6.0 lbs - single unit", page_text)
         self.assertIn("560 x 450 x 190 mm (22.0 x 17.7 x 7.5 inch)", page_text)
+
+    def test_technical_table_rows_shrink_to_replacement_content_height(self) -> None:
+        self._write_template_pdf(
+            add_technical_data=True,
+            technical_rows=[
+                ("Radio Connection", "Template connector"),
+                ("Pole Mounting Diameter", "40-80 mm (1.6-3.1 inch)\nRecommended close to max"),
+                ("Temperature", "Template temperature"),
+            ],
+            technical_row_steps=[12.0, 24.0, 12.0],
+        )
+        self._write_technical_workbook(
+            [
+                ("Antenna Name", "Sample Horn"),
+                ("Product ID", "SH123"),
+                ("Radio Connection", "Waveguide input"),
+                ("Pole Mounting Diameter", "40-80 mm (1.6-3.1 inch)"),
+                ("Temperature", "-35°C to +60°C (-31°F to +140°F)"),
+            ]
+        )
+
+        build_datasheet_pdf(
+            output=self.output_pdf,
+            template=self.template_pdf,
+            extract_workbook=self.extract_workbook,
+            technical_data_workbook=self.technical_workbook,
+            datasheet_type="rfe",
+        )
+
+        with fitz.open(self.output_pdf) as doc:
+            spans = _extract_page_spans(doc[0])
+        pole = next(span for span in spans if span.text == "Pole Mounting Diameter")
+        temperature = next(span for span in spans if span.text == "Temperature")
+
+        self.assertLess(temperature.origin[1] - pole.origin[1], 16.0)
 
     def test_netqui_placeholder_header_replaces_sku_inside_span_and_footer_date(self) -> None:
         entries = [
@@ -899,12 +936,11 @@ class DatasheetPdfTests(unittest.TestCase):
         with fitz.open(self.output_pdf) as doc:
             page = doc[0]
             radio_span = next(span for span in _extract_page_spans(page) if span.text == "Radio Connection")
-            expected_y = round(radio_span.origin[1] + 6.0, 1)
             restored_lines = [
                 drawing["rect"]
                 for drawing in page.get_drawings()
                 if drawing.get("rect")
-                and abs(drawing["rect"].y0 - expected_y) <= 0.4
+                and radio_span.bbox.y1 < drawing["rect"].y0 < radio_span.bbox.y1 + 8.0
                 and abs(drawing["rect"].y1 - drawing["rect"].y0) <= 0.3
                 and drawing["rect"].x0 <= 37.0
                 and drawing["rect"].x1 >= 298.0

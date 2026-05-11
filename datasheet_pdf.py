@@ -784,6 +784,38 @@ def _technical_data_row_step(slots: list[TechnicalDataRowSlot]) -> float:
     return Counter(rounded).most_common(1)[0][0]
 
 
+def _technical_table_row_height(
+    page: fitz.Page,
+    *,
+    label: str,
+    value: str,
+    label_font_name: str,
+    value_font_name: str,
+    font_size: float,
+    label_width: float,
+    value_width: float,
+    minimum_height: float,
+    registered_fonts: set[str],
+) -> float:
+    label_height = _wrapped_text_height(
+        page,
+        label,
+        font_name=label_font_name,
+        font_size=font_size,
+        width=label_width,
+        registered_fonts=registered_fonts,
+    )
+    value_height = _wrapped_text_height(
+        page,
+        value,
+        font_name=value_font_name,
+        font_size=font_size,
+        width=value_width,
+        registered_fonts=registered_fonts,
+    )
+    return max(minimum_height, label_height + 4.0, value_height + 4.0)
+
+
 def _replace_technical_table(
     doc: fitz.Document,
     tables: ResolvedDatasheetTables,
@@ -805,63 +837,130 @@ def _replace_technical_table(
         if (key := canonical_key_for_template(slot.label, adapter))
         and key not in PERFORMANCE_FIELD_KEYS
     ]
-    for slot in editable_slots:
-        page.add_redact_annot(slot.erase_rect, fill=None)
-    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0)
+    if not editable_slots:
+        return
 
+    row_step = _technical_data_row_step(slots)
+    minimum_height = max(1.0, row_step - 0.5)
+    table_left = min(36.638, min(slot.label_rect.x0 for slot in editable_slots) - 1.0)
+    table_right = max(slot.table_right for slot in editable_slots)
+    table_top = min(slot.value_rect.y0 for slot in editable_slots) - 1.0
+    row_specs: list[tuple[TechnicalDataRowSlot, str, bool, float]] = []
+    prototype = editable_slots[-1]
     for slot in editable_slots:
         row = row_for_fixed_label(tables, slot.label)
         if row is not None and row.canonical_key:
             used_keys.add(row.canonical_key)
         text, is_missing = _text_or_placeholder(row.value if row is not None else "")
-        _insert_wrapped_text(
+        font_size = _technical_table_font_size(slot.value_font_size, layout_mode)
+        row_height = _technical_table_row_height(
             page,
-            slot.value_rect,
-            text,
-            origin=None if layout_mode in {"netqui", "netqui_1pol"} else slot.value_origin,
-            font_name=slot.value_font_name,
-            font_size=_technical_table_font_size(slot.value_font_size, layout_mode),
-            color=MISSING_VALUE_COLOR if is_missing else slot.value_color,
+            label=slot.label,
+            value=text,
+            label_font_name=slot.label_font_name,
+            value_font_name=slot.value_font_name,
+            font_size=font_size,
+            label_width=max(slot.label_rect.width, slot.value_rect.x0 - slot.label_rect.x0 - 4.0),
+            value_width=slot.value_rect.width,
+            minimum_height=minimum_height,
             registered_fonts=registered_fonts,
-            center_vertically=layout_mode in {"netqui", "netqui_1pol"},
         )
-        page.draw_line(
-            (36.638, slot.row_bottom),
-            (slot.table_right, slot.row_bottom),
-            color=(0.13669031858444214, 0.12195010483264923, 0.1252918243408203),
-            width=0.25,
-            overlay=True,
-        )
-    extra_entries = extra_rows_for_sections(tables, used_keys=used_keys, section_filter=is_mechanical_section)
-    if not extra_entries:
-        return
+        row_specs.append((slot, text, is_missing, row_height))
 
-    row_top_offset = 0.5
-    row_step = _technical_data_row_step(slots)
-    row_height = max(1.0, row_step - row_top_offset)
+    extra_entries = extra_rows_for_sections(tables, used_keys=used_keys, section_filter=is_mechanical_section)
     region = _technical_data_region(page)
     bottom_limit = (region[1] - 8.0) if region else page.rect.y1 - 72.0
-    y = slots[-1].row_bottom + row_top_offset
-    prototype = slots[-1]
+    y = table_top
+    dynamic_bottom = table_top
     remaining: list[TechnicalDataEntry] = []
+    extra_specs: list[tuple[TechnicalDataEntry, float]] = []
+    drawable_extra_specs: list[tuple[TechnicalDataEntry, float]] = []
     for entry in extra_entries:
-        if y + row_height <= bottom_limit:
-            _draw_technical_data_row(
-                page,
-                entry.label,
-                entry.value,
-                fitz.Rect(38.0, y, prototype.table_right, y + row_height),
-                label_font_name=prototype.label_font_name,
-                value_font_name=prototype.value_font_name,
-                font_size=prototype.value_font_size,
-                label_color=prototype.label_color,
-                value_color=prototype.value_color,
-                table_right=prototype.table_right,
-                registered_fonts=registered_fonts,
-            )
-            y += row_step
-        else:
+        text, _is_missing = _text_or_placeholder(entry.value)
+        row_height = _technical_table_row_height(
+            page,
+            label=entry.label,
+            value=text,
+            label_font_name=prototype.label_font_name,
+            value_font_name=prototype.value_font_name,
+            font_size=prototype.value_font_size,
+            label_width=max(prototype.label_rect.width, prototype.value_rect.x0 - prototype.label_rect.x0 - 4.0),
+            value_width=prototype.value_rect.width,
+            minimum_height=minimum_height,
+            registered_fonts=registered_fonts,
+        )
+        extra_specs.append((entry, row_height))
+
+    for _slot, _text, _is_missing, row_height in row_specs:
+        dynamic_bottom = y + row_height
+        y = dynamic_bottom
+    for entry, row_height in extra_specs:
+        if y + row_height > bottom_limit:
             remaining.append(entry)
+            continue
+        drawable_extra_specs.append((entry, row_height))
+        dynamic_bottom = y + row_height
+        y = dynamic_bottom
+
+    erase_bottom = min(bottom_limit, max(max(slot.row_bottom for slot in editable_slots), dynamic_bottom) + 1.0)
+    erase_rect = fitz.Rect(table_left - 1.0, table_top, table_right + 1.0, erase_bottom)
+    page.add_redact_annot(erase_rect, fill=None)
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0)
+    page.draw_rect(
+        erase_rect,
+        color=(1.0, 1.0, 1.0),
+        fill=(1.0, 1.0, 1.0),
+        overlay=True,
+    )
+
+    line_color = (0.13669031858444214, 0.12195010483264923, 0.1252918243408203)
+    y = table_top
+    for slot, text, is_missing, row_height in row_specs:
+        row_rect = fitz.Rect(table_left, y, table_right, y + row_height)
+        label_rect = fitz.Rect(slot.label_rect.x0, row_rect.y0, slot.label_rect.x1, row_rect.y1)
+        value_rect = fitz.Rect(slot.value_rect.x0, row_rect.y0, slot.value_rect.x1, row_rect.y1)
+        font_size = _technical_table_font_size(slot.value_font_size, layout_mode)
+        _insert_wrapped_text(
+            page,
+            label_rect,
+            slot.label,
+            origin=None,
+            font_name=slot.label_font_name,
+            font_size=font_size,
+            color=slot.label_color,
+            registered_fonts=registered_fonts,
+            center_vertically=True,
+        )
+        _insert_wrapped_text(
+            page,
+            value_rect,
+            text,
+            origin=None,
+            font_name=slot.value_font_name,
+            font_size=font_size,
+            color=MISSING_VALUE_COLOR if is_missing else slot.value_color,
+            registered_fonts=registered_fonts,
+            center_vertically=True,
+        )
+        page.draw_line((table_left, row_rect.y1), (table_right, row_rect.y1), color=line_color, width=0.25, overlay=True)
+        y = row_rect.y1
+
+    for entry, row_height in drawable_extra_specs:
+        row_rect = fitz.Rect(table_left, y, table_right, y + row_height)
+        _draw_technical_data_row(
+            page,
+            entry.label,
+            entry.value,
+            row_rect,
+            label_font_name=prototype.label_font_name,
+            value_font_name=prototype.value_font_name,
+            font_size=prototype.value_font_size,
+            label_color=prototype.label_color,
+            value_color=prototype.value_color,
+            table_right=prototype.table_right,
+            registered_fonts=registered_fonts,
+        )
+        y = row_rect.y1
 
     if remaining:
         _insert_technical_continuation_page(doc, remaining, prototype, registered_fonts=registered_fonts)
