@@ -856,11 +856,22 @@ class DatasheetPdfTests(unittest.TestCase):
         )
 
         with fitz.open(self.output_pdf) as doc:
-            spans = _extract_page_spans(doc[0])
+            page = doc[0]
+            spans = _extract_page_spans(page)
+            drawings = page.get_drawings()
         pole = next(span for span in spans if span.text == "Pole Mounting Diameter")
         temperature = next(span for span in spans if span.text == "Temperature")
+        crossing_lines = [
+            drawing["rect"]
+            for drawing in drawings
+            if drawing.get("rect")
+            and abs(drawing["rect"].y1 - drawing["rect"].y0) <= 0.3
+            and pole.bbox.y0 < drawing["rect"].y0 < pole.bbox.y1
+            and drawing["rect"].x1 >= 250.0
+        ]
 
         self.assertLess(temperature.origin[1] - pole.origin[1], 16.0)
+        self.assertFalse(crossing_lines)
 
     def test_netqui_placeholder_header_replaces_sku_inside_span_and_footer_date(self) -> None:
         entries = [

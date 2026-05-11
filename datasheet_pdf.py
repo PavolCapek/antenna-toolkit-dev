@@ -905,7 +905,7 @@ def _replace_technical_table(
     erase_bottom = min(bottom_limit, max(max(slot.row_bottom for slot in editable_slots), dynamic_bottom) + 1.0)
     erase_rect = fitz.Rect(table_left - 1.0, table_top, table_right + 1.0, erase_bottom)
     page.add_redact_annot(erase_rect, fill=None)
-    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0)
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED)
     page.draw_rect(
         erase_rect,
         color=(1.0, 1.0, 1.0),
@@ -917,7 +917,7 @@ def _replace_technical_table(
     y = table_top
     for slot, text, is_missing, row_height in row_specs:
         row_rect = fitz.Rect(table_left, y, table_right, y + row_height)
-        label_rect = fitz.Rect(slot.label_rect.x0, row_rect.y0, slot.label_rect.x1, row_rect.y1)
+        label_rect = fitz.Rect(slot.label_rect.x0, row_rect.y0, slot.value_rect.x0 - 4.0, row_rect.y1)
         value_rect = fitz.Rect(slot.value_rect.x0, row_rect.y0, slot.value_rect.x1, row_rect.y1)
         font_size = _technical_table_font_size(slot.value_font_size, layout_mode)
         _insert_wrapped_text(
