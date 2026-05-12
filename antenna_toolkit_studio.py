@@ -73,6 +73,7 @@ DATASHEET_TEMPLATE_DIR = THIS_DIR / "Templates"
 LEGACY_DATASHEET_TEMPLATE_ALIASES = {
     "Datasheet.pdf": "Datasheet - RFE.pdf",
     "Datasheet Netqui.pdf": "Datasheet - Netqui.pdf",
+    "Datasheet - Netqui - 1Pol - Placeholder.pdf": "Datasheet - Netqui - 1Pol.pdf",
 }
 GOOGLE_SHEETS_OAUTH_CLIENT_KEY = "google_sheets_oauth_client_json"
 GOOGLE_SHEETS_TOKEN_FILENAME = "google_sheets_token.json"
@@ -3027,10 +3028,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if not available:
             return []
         template_name = self.selected_datasheet_template_name().lower() if hasattr(self, "datasheet_template_combo") else ""
-        if "netqui" in template_name and "1pol" in template_name and "placeholder" in template_name:
+        if "netqui" in template_name and "1pol" in template_name:
             count = min(6, len(available))
-        elif "netqui" in template_name and "1pol" in template_name:
-            count = min(3, len(available))
         else:
             count = 1
         if count == 1:

@@ -1442,9 +1442,16 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(adapter.key, "netqui_1pol")
 
     def test_netqui_1pol_placeholder_template_resolves_before_regular_1pol(self) -> None:
-        template_path = self.root / "Datasheet - Netqui - 1Pol - Placeholder.pdf"
+        template_path = self.root / "Datasheet - Netqui - 1Pol.pdf"
         self._write_netqui_chart_template_pdf()
         self.template_pdf.replace(template_path)
+        temp_path = self.root / "template-with-packaging.pdf"
+        with fitz.open(template_path) as doc:
+            packaging_page = doc.new_page(width=596.0, height=842.0)
+            packaging_page.insert_text((36.0, 48.0), "PACKAGING", fontsize=10.0, fontname="helv")
+            packaging_page.insert_text((36.0, 72.0), "MANUFACTURER INFORMATION", fontsize=10.0, fontname="helv")
+            doc.save(temp_path)
+        temp_path.replace(template_path)
 
         with fitz.open(template_path) as doc:
             adapter = resolve_template_adapter(template_path, doc)

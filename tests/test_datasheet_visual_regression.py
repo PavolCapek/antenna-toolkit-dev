@@ -309,7 +309,7 @@ class DatasheetVisualRegressionTests(unittest.TestCase):
 
         with fitz.open(output) as rendered_doc, fitz.open(template) as template_doc:
             adapter = resolve_template_adapter(template, template_doc)
-            self.assertEqual(adapter.key, "netqui_1pol")
+            self.assertEqual(adapter.key, "netqui_1pol_placeholder")
             replacements = _build_chart_replacements(
                 template_doc[1],
                 output,

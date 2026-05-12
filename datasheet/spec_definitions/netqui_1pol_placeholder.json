@@ -3,7 +3,8 @@
   "display_name": "Netqui 1Pol Placeholder Datasheet",
   "layout_key": "netqui_1pol_placeholder",
   "match": {
-    "filename_tokens": ["netqui - 1pol - placeholder"]
+    "filename_tokens": ["netqui - 1pol - placeholder"],
+    "required_text_markers": ["PACKAGING", "MANUFACTURER INFORMATION"]
   },
   "chart_layout_mode": "netqui_1pol_placeholder",
   "technical_layout_mode": "netqui_1pol",

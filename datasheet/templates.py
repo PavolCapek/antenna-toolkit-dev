@@ -66,15 +66,9 @@ class DatasheetTemplateAdapter:
         path_text = template_path.name.lower()
         if any(token in path_text for token in self.filename_tokens):
             return True
-        page_zero_text = ""
-        page_one_text = ""
-        if doc.page_count > 0:
-            page_zero_text = doc[0].get_text("text").upper()
-        if doc.page_count > 1:
-            page_one_text = doc[1].get_text("text").upper()
-        combined = f"{page_zero_text}\n{page_one_text}"
         if not self.required_text_markers:
             return False
+        combined = "\n".join(doc[index].get_text("text").upper() for index in range(doc.page_count))
         return all(marker in combined for marker in self.required_text_markers)
 
 
@@ -195,6 +189,7 @@ NETQUI_1POL_PLACEHOLDER_TEMPLATE_ADAPTER = DatasheetTemplateAdapter(
     key="netqui_1pol_placeholder",
     display_name="Netqui 1Pol Placeholder Datasheet",
     filename_tokens=("netqui - 1pol - placeholder",),
+    required_text_markers=("PACKAGING", "MANUFACTURER INFORMATION"),
     chart_layout_mode="netqui_1pol_placeholder",
     technical_layout_mode="netqui_1pol",
     manifest=NETQUI_1POL_PLACEHOLDER_TEMPLATE_MANIFEST,
