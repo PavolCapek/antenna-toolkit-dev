@@ -228,6 +228,36 @@ class StudioPresetsDocumentTests(StudioDirtyStateBase):
         self.assertEqual(self.window.current_preset_name(), "Preset B")
         self.assertEqual(self.window.beam_smooth.value(), 11)
 
+    def test_project_load_does_not_overlay_saved_settings_on_selected_preset(self) -> None:
+        preset = dict(self.window.collect_preset_values())
+        preset["cartesian_figure_width"] = 15.0
+        preset["cartesian_figure_height"] = 8.0
+        stale_settings = dict(preset)
+        stale_settings["cartesian_figure_width"] = 12.0
+        stale_settings["cartesian_figure_height"] = 7.0
+        self.window.global_presets = {"Preset A": preset}
+        self.window.global_active_preset = "Preset A"
+        self.window._persist_global_presets()
+
+        project = ProjectRecord(
+            name="Preset Snapshot Project",
+            slug="preset_snapshot_project",
+            settings=stale_settings,
+            presets={},
+            active_preset="Preset A",
+            run_state={},
+        )
+        self.window.project_store.save_project(project)
+
+        self.window.refresh_project_list(select_slug=project.slug)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.current_preset_name(), "Preset A")
+        self.assertEqual(self.window.cartesian_figure_width.value(), 15.0)
+        self.assertEqual(self.window.cartesian_figure_height.value(), 8.0)
+        self.assertFalse(self.window.has_unsaved_preset_changes())
+        self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset saved")
+
     def test_switching_presets_prompts_to_save_or_cancel_preset_changes(self) -> None:
         preset_a = dict(self.window.collect_preset_values())
         preset_b = dict(self.window.collect_preset_values())

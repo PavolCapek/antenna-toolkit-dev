@@ -4397,7 +4397,9 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self.apply_preset_values(self.global_presets.get(self.project_active_preset, {}))
         elif missing_preset:
             self.status(f"Preset '{self.project_active_preset}' is missing; using default settings")
-        if project.settings:
+            if project.settings:
+                self.apply_preset_values(project.settings)
+        elif project.settings:
             self.apply_preset_values(project.settings)
         self._persist_global_presets()
         self.refresh_preset_list(select_name=self.project_active_preset)
