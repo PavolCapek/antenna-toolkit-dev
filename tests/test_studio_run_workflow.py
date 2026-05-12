@@ -224,8 +224,10 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
     def test_pipeline_buttons_include_recovery_action(self) -> None:
         labels = [button.text() for button in self.window.hero_actions._buttons]
 
-        self.assertEqual(labels, ["Run Full Pipeline", "Run Needed Only", "Validate Project", "Clear Generated Files"])
-        self.assertFalse(self.window.btn_run_needed.isVisible())
+        self.assertEqual(labels, ["Run Full Pipeline", "Run Needed Only", "Clear Generated Files"])
+        self.assertFalse(self.window.btn_run_needed.isHidden())
+        self.assertFalse(self.window.btn_run_needed.isEnabled())
+        self.assertEqual(self.window.btn_validate.parent(), self.window.readiness_card)
 
     def test_pipeline_stage_list_gates_actions_by_output_state(self) -> None:
         self.assertEqual(set(self.window.stage_open_buttons.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})

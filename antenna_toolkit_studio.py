@@ -1194,9 +1194,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.btn_run_needed = QPushButton("Run Needed Only")
         self.btn_run_needed.setObjectName("ghostButton")
         self.btn_run_needed.clicked.connect(self.run_needed_outputs)
-        self.btn_validate = QPushButton("Validate Project")
-        self.btn_validate.setObjectName("ghostButton")
-        self.btn_validate.clicked.connect(self.validate_project)
         self.btn_clear_outputs = QPushButton("Clear Generated Files")
         self.btn_clear_outputs.setObjectName("ghostButton")
         self.btn_clear_outputs.clicked.connect(self.delete_all_outputs)
@@ -1205,14 +1202,12 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.btn_cancel.clicked.connect(self.cancel_run)
         self.btn_full.setToolTip("Run workbook generation, extract generation, plot generation, datasheet generation, and VSWR generation in sequence.")
         self.btn_run_needed.setToolTip("Run only the currently failed stage, or the outputs marked stale.")
-        self.btn_validate.setToolTip("Dry run stage validation and show a readiness report without running scripts.")
         self.btn_clear_outputs.setToolTip("Delete generated output files for the active project while keeping the project file and settings.")
         self.btn_cancel.setToolTip("Stop the current run and clear any queued stages.")
         self.hero_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=150)
         self.hero_actions.set_buttons([
             self.btn_full,
             self.btn_run_needed,
-            self.btn_validate,
             self.btn_clear_outputs,
         ])
         quick_actions.body.addWidget(self.hero_actions)
@@ -1447,7 +1442,12 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.readiness_action = QPushButton("Create project")
         self.readiness_action.setObjectName("primaryButton")
         self.readiness_action.setMinimumWidth(180)
+        self.btn_validate = QPushButton("Validate Project")
+        self.btn_validate.setObjectName("ghostButton")
+        self.btn_validate.clicked.connect(self.validate_project)
+        self.btn_validate.setToolTip("Dry run stage validation and show a readiness report without running scripts.")
         readiness_action_row.addWidget(self.readiness_action, 0, Qt.AlignLeft)
+        readiness_action_row.addWidget(self.btn_validate, 0, Qt.AlignLeft)
         readiness_action_row.addStretch(1)
         readiness_card.body.addLayout(readiness_action_row)
         self.workflow_tabs = QTabWidget()
@@ -1545,28 +1545,22 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         ffs_card.body.addLayout(ffs_label_row)
         self.add_ffs_button = QPushButton("Add .ffs"); self.add_ffs_button.clicked.connect(self.add_ffs)
         self.remove_ffs_button = QPushButton("Remove selected"); self.remove_ffs_button.clicked.connect(self.remove_ffs)
-        self.ffs_port_label_button = QPushButton("Port label"); self.ffs_port_label_button.clicked.connect(self.edit_selected_ffs_port_label)
         self.clear_ffs_button = QPushButton("Clear list"); self.clear_ffs_button.clicked.connect(self.clear_ffs)
         self.ffs_up_button = QPushButton("Move up"); self.ffs_up_button.clicked.connect(self.move_ffs_up)
         self.ffs_down_button = QPushButton("Move down"); self.ffs_down_button.clicked.connect(self.move_ffs_down)
-        self.ffs_toggle_button = QPushButton("Enable/disable"); self.ffs_toggle_button.clicked.connect(self.toggle_selected_ffs_enabled)
         self.add_ffs_button.setToolTip("Browse for CST far-field export files to include in this project.")
         self.remove_ffs_button.setToolTip("Remove the highlighted far-field files from the current project.")
-        self.ffs_port_label_button.setToolTip("Set the port label used in polar plot legends for the selected far-field file.")
         self.clear_ffs_button.setToolTip("Clear the full far-field file list.")
         self.ffs_up_button.setToolTip("Move the selected far-field files up in the processing order.")
         self.ffs_down_button.setToolTip("Move the selected far-field files down in the processing order.")
-        self.ffs_toggle_button.setToolTip("Temporarily disable or re-enable the selected far-field files without deleting them.")
         ffs_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=135)
         self.ffs_actions = ffs_actions
         ffs_actions.set_buttons([
             self.add_ffs_button,
             self.remove_ffs_button,
-            self.ffs_port_label_button,
             self.clear_ffs_button,
             self.ffs_up_button,
             self.ffs_down_button,
-            self.ffs_toggle_button,
         ])
         ffs_card.body.addWidget(ffs_actions)
 
@@ -1620,20 +1614,17 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.select_technical_data_button = QPushButton("Select Technical Data"); self.select_technical_data_button.clicked.connect(self.browse_technical_data)
         self.google_sheet_technical_data_button = QPushButton("Use Google Sheet"); self.google_sheet_technical_data_button.clicked.connect(self.use_google_sheet_technical_data)
         self.google_credentials_button = QPushButton("Google Sign In"); self.google_credentials_button.clicked.connect(self.configure_google_sheet_credentials)
-        self.clear_technical_data_button = QPushButton("Clear"); self.clear_technical_data_button.clicked.connect(self.clear_technical_data)
         self.open_technical_data_button = QPushButton("Open"); self.open_technical_data_button.clicked.connect(self.open_technical_data_source)
         self.select_technical_data_button.setToolTip("Choose the Excel workbook containing Antenna Name, Product ID, and Technical Data rows.")
         self.google_sheet_technical_data_button.setToolTip("Use a private Google Sheet as the Technical Data source. It will be downloaded as XLSX on each datasheet run.")
         self.google_credentials_button.setToolTip("Select OAuth client credentials and sign in to Google for private Sheet downloads.")
-        self.clear_technical_data_button.setToolTip("Clear the current Technical Data workbook selection.")
         self.open_technical_data_button.setToolTip("Open the selected Technical Data workbook or Google Sheet.")
-        technical_data_actions = ResponsiveButtonPanel(max_columns=5, min_button_width=145)
+        technical_data_actions = ResponsiveButtonPanel(max_columns=4, min_button_width=145)
         self.technical_data_actions = technical_data_actions
         technical_data_actions.set_buttons([
             self.select_technical_data_button,
             self.google_sheet_technical_data_button,
             self.google_credentials_button,
-            self.clear_technical_data_button,
             self.open_technical_data_button,
         ])
         technical_data_card.body.addWidget(technical_data_actions)
@@ -2053,6 +2044,25 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.readiness_action.setEnabled(enabled)
         self.readiness_action.setToolTip(tooltip or text)
         self.readiness_action.setVisible(text != "Run Full Pipeline")
+
+    def _update_google_credentials_button_state(self) -> None:
+        ready = self.google_sheets_auth_configured()
+        if ready:
+            self.google_credentials_button.setText("Google Sign In Ready")
+            self.google_credentials_button.setToolTip("Google Sheets sign-in is configured. Select a new OAuth client JSON to sign in again.")
+            self.google_credentials_button.setStyleSheet(
+                "QPushButton { background: #e8f6ee; border-color: #2f9e5b; color: #1f7a45; font-weight: 700; }"
+                "QPushButton:hover { background: #d8f0e3; border-color: #267f49; }"
+                "QPushButton:disabled { background: #eef4f1; border-color: #9cc9ad; color: #6b9479; }"
+            )
+        else:
+            self.google_credentials_button.setText("Google Sign In Needed")
+            self.google_credentials_button.setToolTip("Select OAuth client credentials and sign in to Google for private Sheet downloads.")
+            self.google_credentials_button.setStyleSheet(
+                "QPushButton { background: #fdecec; border-color: #d64545; color: #9b2c2c; font-weight: 700; }"
+                "QPushButton:hover { background: #fbdada; border-color: #b83232; }"
+                "QPushButton:disabled { background: #f5eeee; border-color: #d9aaaa; color: #a98080; }"
+            )
 
     def on_tab_changed(self, index: int) -> None:
         if index < 0:
@@ -3885,6 +3895,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 self.project_name.setText(f"{(self.active_project_name or self.active_project_slug)}{suffix}")
             self.open_s2p_button.setEnabled(bool(self.active_project_slug and self.selected_s2p()))
             self.open_technical_data_button.setEnabled(bool(self.active_project_slug and self.selected_technical_data()))
+            self._update_google_credentials_button_state()
             self._update_ffs_action_state()
             self._refresh_project_summary()
             self._update_project_action_state()
@@ -3923,6 +3934,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         for widget in (
             self.btn_full,
             self.btn_run_needed,
+            self.btn_validate,
             self.btn_clear_outputs,
             self.ffs_list,
             self.ffs_port_label_field,
@@ -3930,7 +3942,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self.technical_data_field,
             self.add_ffs_button,
             self.remove_ffs_button,
-            self.ffs_port_label_button,
             self.clear_ffs_button,
             self.select_s2p_button,
             self.clear_s2p_button,
@@ -3938,7 +3949,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self.select_technical_data_button,
             self.google_sheet_technical_data_button,
             self.google_credentials_button,
-            self.clear_technical_data_button,
             self.open_technical_data_button,
             self.radiation_frequency_list,
             self.radiation_defaults_button,
@@ -3950,7 +3960,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             widget.setEnabled(has_project)
         self.btn_clear_outputs.setEnabled(has_project and not is_running and has_generated_outputs)
         self.btn_run_needed.setEnabled(has_project and not is_running and bool(needed_stage_keys))
-        self.btn_run_needed.setVisible(has_project and bool(needed_stage_keys))
         if needed_stage_keys:
             needed_label = self._stage_label_list(needed_stage_keys)
             self.btn_run_needed.setToolTip(f"Run only failed or stale outputs: {needed_label}.")
@@ -4710,7 +4719,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         selected = bool(selected_items)
         count = self.ffs_list.count()
         self.remove_ffs_button.setEnabled(has_project and selected)
-        self.ffs_port_label_button.setEnabled(has_project and selected)
         self.ffs_port_label_field.setEnabled(has_project and selected)
         previous = self.ffs_port_label_field.blockSignals(True)
         self.ffs_port_label_field.setText(self._item_port_label(selected_items[0]) if selected else "")
@@ -4718,7 +4726,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.clear_ffs_button.setEnabled(has_project and count > 0)
         self.ffs_up_button.setEnabled(has_project and selected)
         self.ffs_down_button.setEnabled(has_project and selected)
-        self.ffs_toggle_button.setEnabled(has_project and selected)
 
     def _add_ffs_files(self, files: list[object], save: bool = True):
         existing = {self._item_path(self.ffs_list.item(i)) for i in range(self.ffs_list.count())}

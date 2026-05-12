@@ -31,6 +31,23 @@ class StudioGoogleSheetsTests(StudioDirtyStateBase):
 
         self.assertTrue(any("Google Sheets sign-in is required" in message for message in messages))
 
+    def test_google_sign_in_button_shows_setup_state(self) -> None:
+        self.window.refresh_derived_paths()
+
+        self.assertEqual(self.window.google_credentials_button.text(), "Google Sign In Needed")
+        self.assertIn("#d64545", self.window.google_credentials_button.styleSheet())
+
+        client = Path(self.temp_dir.name) / "client.json"
+        client.write_text("client", encoding="utf-8")
+        token_path = self.window.google_sheets_token_path()
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text("token", encoding="utf-8")
+        self.window.store.set(studio_module.GOOGLE_SHEETS_OAUTH_CLIENT_KEY, str(client))
+        self.window.refresh_derived_paths()
+
+        self.assertEqual(self.window.google_credentials_button.text(), "Google Sign In Ready")
+        self.assertIn("#2f9e5b", self.window.google_credentials_button.styleSheet())
+
     def test_google_sheet_cached_workbook_changes_datasheet_snapshot(self) -> None:
         self.window._set_technical_data("https://docs.google.com/spreadsheets/d/sheet123abc/edit")
         cache_path = self.window.technical_data_cache_path()
