@@ -26,6 +26,45 @@ class StudioUiLayoutTests(StudioDirtyStateBase):
         self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset has unsaved changes")
         self.assertEqual(self.window.project_save_state_indicator.text(), "Project has unsaved changes")
 
+    def test_project_unsaved_indicator_lists_added_far_field_file(self) -> None:
+        self.window._add_ffs_files(["Input data/a.ffs"])
+        self.app.processEvents()
+
+        diff_items = self.window.project_save_state_indicator.diff_items()
+
+        self.assertTrue(any(item.startswith("Far-field file added:") and item.endswith("a.ffs") for item in diff_items))
+
+    def test_project_unsaved_indicator_diff_clears_after_save(self) -> None:
+        self.window._add_ffs_files(["Input data/a.ffs"])
+        self.app.processEvents()
+
+        self.assertTrue(self.window.project_save_state_indicator.diff_items())
+
+        self.window.save_project_changes()
+        self.app.processEvents()
+
+        self.assertEqual(self.window.project_save_state_indicator.diff_items(), [])
+
+    def test_preset_unsaved_indicator_lists_changed_control(self) -> None:
+        self.window.global_presets["Preset A"] = self.window.collect_preset_values()
+        self.window.global_active_preset = "Preset A"
+        self.window.project_active_preset = "Preset A"
+        self.window.refresh_preset_list(select_name="Preset A")
+        self.window.save_project_changes()
+        self.app.processEvents()
+
+        self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
+        self.app.processEvents()
+        self.window.flush_derived_paths_refresh()
+
+        diff_items = self.window.preset_save_state_indicator.diff_items()
+
+        self.assertTrue(any(item.startswith("Beam smoothing:") for item in diff_items))
+
+    def test_clean_indicators_do_not_advertise_hover_diff_entries(self) -> None:
+        self.assertEqual(self.window.project_save_state_indicator.diff_items(), [])
+        self.assertEqual(self.window.preset_save_state_indicator.diff_items(), [])
+
     def test_style_color_selectors_share_palette_with_previews(self) -> None:
         selectors = [
             self.window.plot_grid,

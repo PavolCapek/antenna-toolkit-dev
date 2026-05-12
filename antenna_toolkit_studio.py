@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, QByteArray, Signal, QSize
 from PySide6.QtGui import QColor, QPalette, QFont, QIcon, QPixmap
@@ -508,6 +509,68 @@ class Card(QFrame):
         self.body = QVBoxLayout()
         self.body.setSpacing(8)
         outer.addLayout(self.body, 1)
+
+
+class HoverDiffIndicator(QLabel):
+    def __init__(self, text: str = "", parent: QWidget | None = None):
+        super().__init__(text, parent)
+        self._diff_items: list[str] = []
+        self._popup = QFrame(None, Qt.ToolTip)
+        self._popup.setObjectName("saveStateDiffPopup")
+        self._popup.setFrameShape(QFrame.StyledPanel)
+        self._popup_layout = QVBoxLayout(self._popup)
+        self._popup_layout.setContentsMargins(10, 8, 10, 8)
+        self._popup_layout.setSpacing(4)
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.setInterval(140)
+        self._hide_timer.timeout.connect(self._hide_if_unhovered)
+
+    def set_diff_items(self, items: list[str]) -> None:
+        self._diff_items = [str(item) for item in items if str(item).strip()]
+        if not self._diff_items:
+            self._popup.hide()
+
+    def diff_items(self) -> list[str]:
+        return list(self._diff_items)
+
+    def enterEvent(self, event) -> None:
+        super().enterEvent(event)
+        self._hide_timer.stop()
+        self._show_popup()
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        self._hide_timer.start()
+
+    def _show_popup(self) -> None:
+        if not self._diff_items:
+            return
+        while self._popup_layout.count():
+            item = self._popup_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        for text in self._diff_items:
+            row = QLabel(text)
+            row.setObjectName("saveStateDiffItem")
+            row.setWordWrap(True)
+            row.setMaximumWidth(380)
+            self._popup_layout.addWidget(row)
+        self._popup.setStyleSheet(
+            "QFrame#saveStateDiffPopup { background: #ffffff; color: #172033; "
+            "border: 1px solid #b9c2d0; border-radius: 8px; } "
+            "QLabel#saveStateDiffItem { background: transparent; padding: 1px 0; }"
+        )
+        self._popup.adjustSize()
+        self._popup.move(self.mapToGlobal(self.rect().bottomLeft()))
+        self._popup.show()
+
+    def _hide_if_unhovered(self) -> None:
+        if self.underMouse() or self._popup.underMouse():
+            self._hide_timer.start()
+            return
+        self._popup.hide()
 
 
 class ResponsiveCardPanel(QWidget):
@@ -1385,7 +1448,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.project_health.setObjectName("helper")
         self.project_health.setWordWrap(True)
         project_card.body.addWidget(self.project_health)
-        self.project_save_state_indicator = QLabel("No project selected")
+        self.project_save_state_indicator = HoverDiffIndicator("No project selected")
         self.project_save_state_indicator.setObjectName("saveStateIndicator")
         project_card.body.addWidget(self.project_save_state_indicator, 0, Qt.AlignLeft)
 
@@ -1484,7 +1547,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.preset_state_label.setObjectName("helper")
         self.preset_state_label.setWordWrap(True)
         preset_card.body.addWidget(self.preset_state_label)
-        self.preset_save_state_indicator = QLabel("No preset selected")
+        self.preset_save_state_indicator = HoverDiffIndicator("No preset selected")
         self.preset_save_state_indicator.setObjectName("saveStateIndicator")
         preset_card.body.addWidget(self.preset_save_state_indicator, 0, Qt.AlignLeft)
         self.preset_new_button = QPushButton("New"); self.preset_new_button.clicked.connect(self.create_preset)
@@ -2178,6 +2241,13 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             return False
         return self._project_signature() != self._saved_project_signature
 
+    def _saved_project_dict(self) -> dict[str, Any]:
+        try:
+            payload = json.loads(self._saved_project_signature or "{}")
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
     def _active_preset_for_dirty_check(self) -> str:
         return str(self.project_active_preset or self.global_active_preset or self.current_preset_name()).strip()
 
@@ -2196,6 +2266,151 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             return False
         preset = self.global_presets.get(name)
         return isinstance(preset, dict) and self._normalized_preset_values(preset) != self._normalized_preset_values(self.collect_preset_values())
+
+    def _limited_diff_items(self, items: list[str], limit: int = 12) -> list[str]:
+        if len(items) <= limit:
+            return items
+        return items[:limit] + [f"{len(items) - limit} more changes..."]
+
+    def _display_diff_value(self, value: Any) -> str:
+        if value in (None, ""):
+            return "empty"
+        if isinstance(value, bool):
+            return "on" if value else "off"
+        if isinstance(value, float):
+            return f"{value:g}"
+        if isinstance(value, list):
+            if not value:
+                return "none"
+            return ", ".join(self._display_diff_value(item) for item in value[:4]) + ("..." if len(value) > 4 else "")
+        if isinstance(value, dict):
+            return f"{len(value)} value(s)"
+        text = str(value).strip()
+        if any(sep in text for sep in ("\\", "/")):
+            text = display_workspace_path(text)
+        return text if len(text) <= 72 else f"{text[:69]}..."
+
+    def _diff_change_text(self, label: str, before: Any, after: Any) -> str:
+        return f"{label}: {self._display_diff_value(before)} -> {self._display_diff_value(after)}"
+
+    def _preset_field_label(self, key: str) -> str:
+        labels = {
+            "smooth": "Beam smoothing",
+            "theta": "Theta window",
+            "smooth2": "Plot smoothing",
+            "shared_xstep": "Shared X step",
+            "shared_fmin": "Shared frequency minimum",
+            "shared_fmax": "Shared frequency maximum",
+            "shared_xlog": "Shared logarithmic X axis",
+            "gain_ymin": "Gain Y minimum",
+            "gain_ymax": "Gain Y maximum",
+            "gain_y_step": "Gain Y step",
+            "beamwidth_ymin": "Beamwidth Y minimum",
+            "beamwidth_ymax": "Beamwidth Y maximum",
+            "beamwidth_y_step": "Beamwidth Y step",
+            "beam_eff_ymin": "Beam efficiency Y minimum",
+            "beam_eff_ymax": "Beam efficiency Y maximum",
+            "beam_eff_y_step": "Beam efficiency Y step",
+            "vswr_ymin": "VSWR Y minimum",
+            "vswr_ymax": "VSWR Y maximum",
+            "vswr_ystep": "VSWR Y step",
+            "vswr_smooth": "VSWR smoothing",
+            "grid_color": "Grid color",
+            "cartesian_grid_line_width": "Cartesian grid width",
+            "polar_grid_line_width": "Polar grid width",
+            "cartesian_line_width": "Cartesian line width",
+            "cartesian_figure_width": "Cartesian figure width",
+            "cartesian_figure_height": "Cartesian figure height",
+            "polar_figure_size": "Polar figure size",
+            "polar_line_width": "Polar line width",
+            "cartesian_font_size": "Cartesian font size",
+            "polar_font_size": "Polar font size",
+            "cartesian_legend_font_size": "Cartesian legend font size",
+            "polar_legend_font_size": "Polar legend font size",
+            "plot_line_1": "Plot line 1 color",
+            "plot_line_2": "Plot line 2 color",
+            "polar_azimuth_line_1_color": "Azimuth line 1 color",
+            "polar_azimuth_line_1_style": "Azimuth line 1 style",
+            "polar_azimuth_line_2_color": "Azimuth line 2 color",
+            "polar_azimuth_line_2_style": "Azimuth line 2 style",
+            "polar_elevation_line_1_color": "Elevation line 1 color",
+            "polar_elevation_line_1_style": "Elevation line 1 style",
+            "polar_elevation_line_2_color": "Elevation line 2 color",
+            "polar_elevation_line_2_style": "Elevation line 2 style",
+            "beamwidth_3db_color": "3 dB beamwidth color",
+            "beamwidth_6db_color": "6 dB beamwidth color",
+            "beamwidth_10db_color": "10 dB beamwidth color",
+            "gain_legend_labels": "Gain legend labels",
+            "beamwidth_legend_labels": "Beamwidth legend labels",
+            "beam_eff_legend_labels": "Beam efficiency legend labels",
+            "vswr_legend_labels": "VSWR legend labels",
+            "datasheet_template": "Datasheet template",
+            "pdf_metadata_author": "PDF metadata author",
+            "rings": "Polar rings",
+            "angle": "Polar angle step",
+            "clip": "Polar clip",
+        }
+        return labels.get(key, key.replace("_", " ").title())
+
+    def _preset_diff_items(self, before: dict[str, Any] | None = None, after: dict[str, Any] | None = None) -> list[str]:
+        old_values = self._normalized_preset_values(before if isinstance(before, dict) else {})
+        new_values = self._normalized_preset_values(after if isinstance(after, dict) else self.collect_preset_values())
+        items: list[str] = []
+        for key in sorted(set(old_values) | set(new_values), key=self._preset_field_label):
+            if old_values.get(key) != new_values.get(key):
+                items.append(self._diff_change_text(self._preset_field_label(key), old_values.get(key), new_values.get(key)))
+        return self._limited_diff_items(items)
+
+    def _project_diff_items(self) -> list[str]:
+        if not self.active_project_slug:
+            return []
+        before = self._saved_project_dict()
+        project = self.current_project()
+        after = project.to_dict() if project else {}
+        if not before or not after:
+            return []
+        items: list[str] = []
+        old_ffs = before.get("ffs_items", []) if isinstance(before.get("ffs_items"), list) else []
+        new_ffs = after.get("ffs_items", []) if isinstance(after.get("ffs_items"), list) else []
+        old_by_path = {str(item.get("path", "")).strip(): item for item in old_ffs if isinstance(item, dict) and str(item.get("path", "")).strip()}
+        new_by_path = {str(item.get("path", "")).strip(): item for item in new_ffs if isinstance(item, dict) and str(item.get("path", "")).strip()}
+        old_paths = list(old_by_path)
+        new_paths = list(new_by_path)
+        for path in new_paths:
+            if path not in old_by_path:
+                items.append(f"Far-field file added: {self._display_diff_value(path)}")
+        for path in old_paths:
+            if path not in new_by_path:
+                items.append(f"Far-field file removed: {self._display_diff_value(path)}")
+        if old_paths != new_paths and set(old_paths) == set(new_paths):
+            items.append("Far-field file order changed")
+        for path in [path for path in new_paths if path in old_by_path]:
+            old_item = old_by_path[path]
+            new_item = new_by_path[path]
+            if bool(old_item.get("enabled", True)) != bool(new_item.get("enabled", True)):
+                items.append(self._diff_change_text(f"Far-field enabled ({self._display_diff_value(path)})", bool(old_item.get("enabled", True)), bool(new_item.get("enabled", True))))
+            if str(old_item.get("port_label", "")).strip() != str(new_item.get("port_label", "")).strip():
+                items.append(self._diff_change_text(f"Port label ({self._display_diff_value(path)})", old_item.get("port_label", ""), new_item.get("port_label", "")))
+        for key, label in (
+            ("touchstone_file", "Touchstone file"),
+            ("technical_data_file", "Technical Data source"),
+            ("active_preset", "Active preset"),
+            ("radiation_pattern_frequencies_ghz", "Radiation frequencies"),
+        ):
+            if before.get(key) != after.get(key):
+                items.append(self._diff_change_text(label, before.get(key), after.get(key)))
+        if before.get("settings", {}) != after.get("settings", {}):
+            items.extend(self._preset_diff_items(before.get("settings", {}), after.get("settings", {})))
+        if before.get("run_state", {}) != after.get("run_state", {}):
+            items.append("Run metadata changed")
+        return self._limited_diff_items(items)
+
+    def _current_preset_diff_items(self) -> list[str]:
+        name = self._active_preset_for_dirty_check()
+        preset = self.global_presets.get(name)
+        if not name or not isinstance(preset, dict):
+            return []
+        return self._preset_diff_items(preset, self.collect_preset_values())
 
     def _mark_project_dirty(self) -> None:
         if self._loading_project or not self.active_project_slug:
@@ -2602,6 +2817,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         theme = THEME_STYLES.get(self.theme, THEME_STYLES["light"])
         key = state if state in {"saved", "unsaved", "neutral"} else "neutral"
         label.setText(text)
+        if isinstance(label, HoverDiffIndicator):
+            label.set_diff_items([])
         label.setStyleSheet(
             "QLabel#saveStateIndicator { "
             f"background: {theme[f'state_{key}_bg']}; "
@@ -3638,6 +3855,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         unsaved_changes = self.has_unsaved_project_changes()
         if unsaved_changes:
             self._set_save_state_indicator(self.project_save_state_indicator, "Project has unsaved changes", "unsaved")
+            self.project_save_state_indicator.set_diff_items(self._project_diff_items())
             self.project_health.setText("Unsaved project or preset changes are pending.")
             self.run_summary.setText("Current edits are not saved yet.")
         else:
@@ -4051,6 +4269,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 self.preset_state_label.setText(f"Preset '{self.current_preset_name()}' is available globally. Select a project to save that choice with it.")
                 if preset_dirty:
                     self._set_save_state_indicator(self.preset_save_state_indicator, "Preset has unsaved changes", "unsaved")
+                    self.preset_save_state_indicator.set_diff_items(self._current_preset_diff_items())
                 else:
                     self._set_save_state_indicator(self.preset_save_state_indicator, "Preset saved", "saved")
             else:
@@ -4072,6 +4291,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 f"Current controls differ from preset '{self.project_active_preset}'. Save to update it or create a new preset."
             )
             self._set_save_state_indicator(self.preset_save_state_indicator, "Preset has unsaved changes", "unsaved")
+            self.preset_save_state_indicator.set_diff_items(self._current_preset_diff_items())
 
     def refresh_project_list(self, select_slug: str = "", *, confirm_changes: bool = False) -> None:
         projects = self.project_store.list_projects()
