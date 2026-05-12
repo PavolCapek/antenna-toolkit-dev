@@ -2106,7 +2106,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.readiness_action.setText(text)
         self.readiness_action.setEnabled(enabled)
         self.readiness_action.setToolTip(tooltip or text)
-        self.readiness_action.setVisible(text != "Run Full Pipeline")
+        self.readiness_action.setVisible(text not in {"Run Full Pipeline", "Open Inputs"})
 
     def _update_google_credentials_button_state(self) -> None:
         ready = self.google_sheets_auth_configured()

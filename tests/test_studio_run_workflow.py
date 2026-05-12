@@ -254,6 +254,15 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertIn("Plots are stale.", self.window.readiness_summary.text())
         self.assertFalse(self.window.readiness_action.isVisible())
 
+    def test_readiness_pane_hides_open_inputs_action(self) -> None:
+        with mock.patch.object(self.window, "has_unsaved_project_changes", return_value=False):
+            self.window.refresh_derived_paths()
+            self.app.processEvents()
+
+        self.assertIn("Add far-field files", self.window.readiness_summary.text())
+        self.assertEqual(self.window.readiness_action.text(), "Open Inputs")
+        self.assertFalse(self.window.readiness_action.isVisible())
+
     def test_pipeline_stage_list_gates_actions_by_output_state(self) -> None:
         self.assertEqual(set(self.window.stage_open_buttons.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
         self.assertEqual(set(self.window.stage_timestamp_labels.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
