@@ -24,7 +24,7 @@ class StudioUiLayoutTests(StudioDirtyStateBase):
         self.window.flush_derived_paths_refresh()
 
         self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset has unsaved changes")
-        self.assertEqual(self.window.project_save_state_indicator.text(), "Project has unsaved changes")
+        self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
 
     def test_project_unsaved_indicator_lists_added_far_field_file(self) -> None:
         self.window._add_ffs_files(["Input data/a.ffs"])

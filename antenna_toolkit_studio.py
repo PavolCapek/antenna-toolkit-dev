@@ -4051,6 +4051,14 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
     def selected_pdf_metadata_author(self) -> str:
         return self.pdf_metadata_author.text().strip()
 
+    def _project_uses_saved_preset(self) -> bool:
+        return bool(self.project_active_preset and self.project_active_preset in self.global_presets)
+
+    def _project_record_settings(self) -> dict[str, object]:
+        if self._project_uses_saved_preset():
+            return {}
+        return self.collect_preset_values()
+
     def current_project(self) -> ProjectRecord | None:
         if not self.active_project_slug:
             return None
@@ -4068,7 +4076,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             ],
             touchstone_file=serialize_workspace_path(THIS_DIR, self.selected_s2p()),
             technical_data_file=serialize_workspace_path(THIS_DIR, self.selected_technical_data()),
-            settings=self.collect_preset_values(),
+            settings=self._project_record_settings(),
             presets={},
             active_preset=self.project_active_preset,
             radiation_pattern_frequencies_ghz=None if self._project_radiation_frequencies is None else self.selected_radiation_frequencies(),
