@@ -2320,51 +2320,6 @@ def _normalize_selected_radiation_frequencies(values: list[float] | tuple[float,
     return sorted(selected)
 
 
-def _parse_asset_ids(value: str | list[str] | tuple[str, ...] | None) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        raw_items = value.split(",")
-    else:
-        raw_items = value
-    result: list[str] = []
-    seen: set[str] = set()
-    for raw in raw_items:
-        text = str(raw or "").strip()
-        if text and text not in seen:
-            result.append(text)
-            seen.add(text)
-    return result
-
-
-def _radiation_frequencies_from_asset_ids(
-    artifact_manifest: dict[str, object] | None,
-    asset_ids: str | list[str] | tuple[str, ...] | None,
-) -> list[float] | None:
-    selected_ids = _parse_asset_ids(asset_ids)
-    if not selected_ids:
-        return None
-    catalog = build_asset_catalog(artifact_manifest)
-    by_id = catalog.by_id()
-    frequencies: list[float] = []
-    seen: set[float] = set()
-    missing: list[str] = []
-    for asset_id in selected_ids:
-        item = by_id.get(asset_id)
-        if item is None:
-            missing.append(asset_id)
-            continue
-        if item.chart_family != "polar" or item.frequency_ghz is None:
-            continue
-        frequency = round(float(item.frequency_ghz), 6)
-        if frequency > 0 and frequency not in seen:
-            frequencies.append(frequency)
-            seen.add(frequency)
-    if missing:
-        raise ValueError(f"Unknown generated image asset ID(s): {', '.join(missing)}.")
-    return frequencies if frequencies else None
-
-
 def _selected_frequency_asset_map(
     assets: dict[float, Path],
     selected_frequencies: list[float],
@@ -3021,9 +2976,8 @@ def _manifest_slot_asset(
     spans: list[TextSpan],
     page: fitz.Page,
     artifact_manifest: dict[str, object] | None,
-    selected_asset_ids: list[str] | None = None,
 ) -> Path | None:
-    catalog_asset = _catalog_slot_asset(slot_spec, artifact_manifest, selected_asset_ids=selected_asset_ids)
+    catalog_asset = _catalog_slot_asset(slot_spec, artifact_manifest)
     if catalog_asset is not None:
         return catalog_asset
     if slot_spec.asset_key == "gain":
@@ -3062,18 +3016,9 @@ def _manifest_slot_asset(
 def _catalog_slot_asset(
     slot_spec: TemplateChartSlot,
     artifact_manifest: dict[str, object] | None,
-    *,
-    selected_asset_ids: list[str] | None = None,
 ) -> Path | None:
     catalog = build_asset_catalog(artifact_manifest)
-    by_id = catalog.by_id()
-    if selected_asset_ids:
-        candidates = [
-            by_id[asset_id] for asset_id in selected_asset_ids
-            if asset_id in by_id and by_id[asset_id].manifest_key == slot_spec.asset_key
-        ]
-    else:
-        candidates = list(catalog.by_manifest_key(slot_spec.asset_key))
+    candidates = list(catalog.by_manifest_key(slot_spec.asset_key))
     if not candidates:
         return None
     if slot_spec.plane:
@@ -3104,7 +3049,6 @@ def _build_manifest_chart_replacements(
     chart_manifest: TemplateChartManifest,
     spans: list[TextSpan],
     artifact_manifest: dict[str, object] | None = None,
-    selected_asset_ids: list[str] | None = None,
 ) -> list[ChartReplacement]:
     if chart_manifest.slot_order == "rows":
         ordered_slots = [slot for row in _chart_slot_rows(ordered_slots) for slot in row]
@@ -3120,7 +3064,7 @@ def _build_manifest_chart_replacements(
                     f"Datasheet template does not contain required chart slot '{slot_spec.kind}' at index {slot_spec.slot_index}."
                 )
             continue
-        asset = _manifest_slot_asset(slot_spec, output, extract_workbook, spans, page, artifact_manifest, selected_asset_ids=selected_asset_ids)
+        asset = _manifest_slot_asset(slot_spec, output, extract_workbook, spans, page, artifact_manifest)
         if asset is None:
             if slot_spec.required:
                 raise ValueError(f"Missing required chart asset for template slot '{slot_spec.kind}'.")
@@ -3245,7 +3189,6 @@ def _build_chart_replacements(
     artifact_manifest: dict[str, object] | None = None,
     adapter: DatasheetTemplateAdapter | None = None,
     spans_override: list[TextSpan] | None = None,
-    selected_asset_ids: list[str] | None = None,
 ) -> list[ChartReplacement]:
     slots = _collect_chart_slots(page)
     if len(slots) < 2:
@@ -3263,7 +3206,6 @@ def _build_chart_replacements(
             chart_manifest,
             spans,
             artifact_manifest=artifact_manifest,
-            selected_asset_ids=selected_asset_ids,
         )
 
     chart_mode = adapter.chart_layout_mode if adapter is not None else ("netqui" if _is_netqui_chart_page(spans, ordered_slots) else "generic")
@@ -4760,7 +4702,6 @@ def _replace_chart_images(
     artifact_manifest: dict[str, object] | None = None,
     adapter: DatasheetTemplateAdapter | None = None,
     selected_radiation_frequencies: list[float] | None = None,
-    selected_asset_ids: list[str] | None = None,
     registered_fonts: set[str] | None = None,
     netqui_heading_font_buffer: bytes | None = None,
     cartesian_figure_width: float | None = None,
@@ -4893,7 +4834,6 @@ def _replace_chart_images(
         artifact_manifest=artifact_manifest,
         adapter=adapter,
         spans_override=spans_override,
-        selected_asset_ids=selected_asset_ids,
     )
     _apply_chart_replacements_to_document(
         doc,
@@ -4924,11 +4864,6 @@ def build_datasheet_pdf(
     technical_data_workbook: Path | None = None,
     metadata_author: str | None = None,
     radiation_frequencies_ghz: list[float] | tuple[float, ...] | None = None,
-    datasheet_type: str = "auto",
-    datasheet_layout: str = "auto",
-    datasheet_asset_ids: str | list[str] | tuple[str, ...] | None = None,
-    technical_data_sheet_name: str | int | None = None,
-    technical_data_product_id: str | None = None,
     cartesian_figure_width: float | None = None,
     cartesian_figure_height: float | None = None,
     polar_figure_size: float | None = None,
@@ -4946,10 +4881,6 @@ def build_datasheet_pdf(
             extract_workbook.resolve(),
             technical_data_workbook.resolve() if technical_data_workbook else None,
             output_dir=output.parent,
-            datasheet_type=datasheet_type,
-            datasheet_layout=datasheet_layout,
-            technical_data_sheet_name=technical_data_sheet_name,
-            technical_data_product_id=technical_data_product_id,
         )
         adapter = context.adapter
         model = context.model
@@ -5033,11 +4964,7 @@ def build_datasheet_pdf(
             )
             _redraw_template_table_separators(doc[0], adapter)
         emit_progress("datasheet", next_step, total_steps, "Embedding chart assets")
-        selected_asset_ids = _parse_asset_ids(datasheet_asset_ids)
         selected_radiation_frequencies = _normalize_selected_radiation_frequencies(radiation_frequencies_ghz)
-        selected_asset_frequencies = _radiation_frequencies_from_asset_ids(model.artifact_manifest, selected_asset_ids)
-        if selected_asset_frequencies is not None:
-            selected_radiation_frequencies = selected_asset_frequencies
         _replace_chart_images(
             doc,
             output,
@@ -5045,7 +4972,6 @@ def build_datasheet_pdf(
             artifact_manifest=model.artifact_manifest,
             adapter=adapter,
             selected_radiation_frequencies=selected_radiation_frequencies,
-            selected_asset_ids=selected_asset_ids,
             registered_fonts=registered_fonts,
             netqui_heading_font_buffer=_font_buffer_for_display_font(doc, NETQUI_HEADING_FONT),
             cartesian_figure_width=cartesian_figure_width,
@@ -5070,11 +4996,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--technical-data-workbook", type=Path, help="Technical Data Excel workbook path.")
     parser.add_argument("--metadata-author", help="Author value to write into the PDF metadata.")
     parser.add_argument("--radiation-frequencies-ghz", help="Comma-separated radiation pattern frequencies to include in GHz.")
-    parser.add_argument("--datasheet-type", default="auto", help="Datasheet spec key to use, or auto.")
-    parser.add_argument("--datasheet-layout", default="auto", help="Datasheet layout key to use, or auto.")
-    parser.add_argument("--datasheet-asset-ids", help="Comma-separated generated image asset IDs selected for the datasheet.")
-    parser.add_argument("--technical-data-sheet", help="Technical Data worksheet name or index.")
-    parser.add_argument("--technical-data-product-id", help="Product ID to select from a wide Technical Data table.")
     parser.add_argument("--cartesian-figure-width", type=float, help="Current cartesian figure width in inches.")
     parser.add_argument("--cartesian-figure-height", type=float, help="Current cartesian figure height in inches.")
     parser.add_argument("--polar-figure-size", type=float, help="Current square polar figure size in inches.")
@@ -5093,16 +5014,6 @@ def _parse_radiation_frequencies_arg(value: str | None) -> list[float] | None:
     return _normalize_selected_radiation_frequencies(parsed) or []
 
 
-def _parse_sheet_selector_arg(value: str | None) -> str | int | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        return int(text)
-    except ValueError:
-        return text
-
-
 def main() -> int:
     args = parse_args()
     try:
@@ -5113,11 +5024,6 @@ def main() -> int:
             technical_data_workbook=args.technical_data_workbook,
             metadata_author=args.metadata_author,
             radiation_frequencies_ghz=_parse_radiation_frequencies_arg(args.radiation_frequencies_ghz),
-            datasheet_type=args.datasheet_type,
-            datasheet_layout=args.datasheet_layout,
-            datasheet_asset_ids=args.datasheet_asset_ids,
-            technical_data_sheet_name=_parse_sheet_selector_arg(args.technical_data_sheet),
-            technical_data_product_id=args.technical_data_product_id,
             cartesian_figure_width=args.cartesian_figure_width,
             cartesian_figure_height=args.cartesian_figure_height,
             polar_figure_size=args.polar_figure_size,

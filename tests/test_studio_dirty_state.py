@@ -95,7 +95,7 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.window.flush_derived_paths_refresh()
 
         self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset has unsaved changes")
-        self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
+        self.assertEqual(self.window.project_save_state_indicator.text(), "Project has unsaved changes")
 
     def test_style_color_selectors_share_palette_with_previews(self) -> None:
         selectors = [
@@ -415,8 +415,8 @@ class StudioDirtyStateTests(unittest.TestCase):
         self.assertEqual(loaded_after_save.presets, {})
         self.assertEqual(loaded_after_save.active_preset, "Preset A")
         first_saved_settings = dict(loaded_after_save.settings)
-        self.assertEqual(first_saved_settings["datasheet_type"], "auto")
-        self.assertIn("technical_data_sheet_name", first_saved_settings)
+        self.assertNotIn("datasheet_type", first_saved_settings)
+        self.assertNotIn("technical_data_sheet_name", first_saved_settings)
 
         self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
         self.app.processEvents()
@@ -493,20 +493,14 @@ class StudioDirtyStateTests(unittest.TestCase):
 
         self.assertEqual(tabs, ["Inputs", "Processing", "Style", "Document", "Run"])
         self.assertGreaterEqual(self.window.datasheet_template_combo.findData("Datasheet - RFE.pdf"), 0)
-        self.assertGreaterEqual(self.window.datasheet_type_combo.findData("rfe"), 0)
-        self.assertGreaterEqual(self.window.datasheet_layout_combo.findData("auto"), 0)
         self.assertEqual(self.window.collect_preset_values()["datasheet_template"], "Datasheet - RFE.pdf")
-        self.assertEqual(self.window.collect_preset_values()["datasheet_type"], "auto")
-        self.assertEqual(self.window.collect_preset_values()["datasheet_layout"], "auto")
-        self.assertEqual(self.window.collect_preset_values()["datasheet_asset_ids"], "")
-        self.assertEqual(self.window.collect_preset_values()["technical_data_sheet_name"], "")
-        self.assertEqual(self.window.collect_preset_values()["technical_data_product_id"], "")
+        self.assertNotIn("datasheet_type", self.window.collect_preset_values())
+        self.assertNotIn("datasheet_layout", self.window.collect_preset_values())
+        self.assertNotIn("datasheet_asset_ids", self.window.collect_preset_values())
+        self.assertNotIn("technical_data_sheet_name", self.window.collect_preset_values())
+        self.assertNotIn("technical_data_product_id", self.window.collect_preset_values())
         self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "RF elements")
-        self.window.technical_data_sheet_name.setText("Products")
-        self.window.technical_data_product_id.setText("SKU-2")
         self.window.pdf_metadata_author.setText("Preset Author")
-        self.assertEqual(self.window.collect_preset_values()["technical_data_sheet_name"], "Products")
-        self.assertEqual(self.window.collect_preset_values()["technical_data_product_id"], "SKU-2")
         self.assertEqual(self.window.collect_preset_values()["pdf_metadata_author"], "Preset Author")
 
     def test_datasheet_template_selection_is_preset_backed_and_marks_snapshot_stale(self) -> None:
@@ -522,15 +516,10 @@ class StudioDirtyStateTests(unittest.TestCase):
             self.window.refresh_datasheet_template_options("Datasheet - RFE.pdf")
             initial_snapshot = self.window._current_stage_snapshot("datasheet")
             self.window.refresh_datasheet_template_options("Alternate Style.pdf")
-            type_index = self.window.datasheet_type_combo.findData("rfe")
-            self.window.datasheet_type_combo.setCurrentIndex(type_index)
             changed_snapshot = self.window._current_stage_snapshot("datasheet")
 
         self.assertEqual(self.window.collect_preset_values()["datasheet_template"], "Alternate Style.pdf")
-        self.assertEqual(self.window.collect_preset_values()["datasheet_type"], "rfe")
-        self.assertEqual(self.window.collect_preset_values()["datasheet_layout"], "rfe")
         self.assertNotEqual(initial_snapshot["settings"]["datasheet_template"], changed_snapshot["settings"]["datasheet_template"])
-        self.assertNotEqual(initial_snapshot["settings"]["datasheet_type"], changed_snapshot["settings"]["datasheet_type"])
         self.assertNotEqual(initial_snapshot["template_pdf"]["path"], changed_snapshot["template_pdf"]["path"])
 
     def test_missing_datasheet_template_is_reported(self) -> None:

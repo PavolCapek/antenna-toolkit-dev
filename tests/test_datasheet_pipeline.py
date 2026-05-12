@@ -112,79 +112,23 @@ class DatasheetPipelineTests(unittest.TestCase):
         self.assertEqual(context.model.performance_fields["Gain"], "19.5 dBi")
         self.assertEqual(context.model.artifact_manifest["charts"]["gain"]["svg"], str(self.chart_svg.resolve()))
 
-    def test_build_render_context_can_use_explicit_datasheet_type(self) -> None:
-        with fitz.open(self.template_pdf) as doc:
+    def test_build_render_context_auto_detects_template_adapter_from_filename(self) -> None:
+        rfe_template = self.root / "Datasheet - RFE.pdf"
+        with fitz.open() as doc:
+            doc.new_page(width=596.0, height=842.0)
+            doc.save(rfe_template)
+
+        with fitz.open(rfe_template) as doc:
             context = build_render_context(
-                self.template_pdf,
+                rfe_template,
                 doc,
                 self.extract_workbook,
-                datasheet_type="rfe",
                 output_dir=self.root,
             )
 
         self.assertEqual(context.adapter.key, "rfe")
         self.assertIsNotNone(context.adapter.manifest)
         self.assertEqual(context.adapter.manifest.chart_layout.slot_order, "first_two_then_x")
-
-    def test_build_render_context_can_use_explicit_datasheet_layout(self) -> None:
-        with fitz.open(self.template_pdf) as doc:
-            context = build_render_context(
-                self.template_pdf,
-                doc,
-                self.extract_workbook,
-                datasheet_layout="rfe",
-                output_dir=self.root,
-            )
-
-        self.assertEqual(context.adapter.key, "rfe")
-
-    def test_build_render_context_validates_unknown_or_mismatched_spec_selection(self) -> None:
-        with fitz.open(self.template_pdf) as doc:
-            with self.assertRaisesRegex(ValueError, "Unknown datasheet type"):
-                build_render_context(
-                    self.template_pdf,
-                    doc,
-                    self.extract_workbook,
-                    datasheet_type="missing",
-                    output_dir=self.root,
-                )
-
-        with fitz.open(self.template_pdf) as doc:
-            with self.assertRaisesRegex(ValueError, "does not belong"):
-                build_render_context(
-                    self.template_pdf,
-                    doc,
-                    self.extract_workbook,
-                    datasheet_type="rfe",
-                    datasheet_layout="netqui",
-                    output_dir=self.root,
-                )
-
-    def test_build_render_context_uses_technical_data_sheet_and_product_selection(self) -> None:
-        with pd.ExcelWriter(self.technical_workbook) as writer:
-            pd.DataFrame([["Ignore", "Me"]]).to_excel(writer, sheet_name="Sheet1", index=False, header=False)
-            pd.DataFrame(
-                [
-                    ["Product ID", "Gain", "VSWR"],
-                    ["SKU-1", "18 dBi", "1.7"],
-                    ["SKU-2", "21 dBi", "1.3"],
-                ]
-            ).to_excel(writer, sheet_name="Products", index=False, header=False)
-
-        with fitz.open(self.template_pdf) as doc:
-            context = build_render_context(
-                self.template_pdf,
-                doc,
-                self.extract_workbook,
-                self.technical_workbook,
-                technical_data_sheet_name="Products",
-                technical_data_product_id="SKU-2",
-                output_dir=self.root,
-            )
-
-        entries = {entry.canonical_key: entry.value for entry in context.model.technical_entries}
-        self.assertEqual(entries["gain"], "21 dBi")
-        self.assertEqual(entries["vswr"], "1.3")
 
     def test_build_render_context_auto_discovers_external_matching_spec(self) -> None:
         custom_template = self.root / "Custom Export.pdf"

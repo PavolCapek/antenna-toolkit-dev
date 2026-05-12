@@ -256,43 +256,6 @@ def adapter_from_datasheet_spec(spec: DatasheetSpec) -> DatasheetTemplateAdapter
     )
 
 
-def _normal_selection(value: str | None) -> str:
-    return str(value or "auto").strip() or "auto"
-
-
-def _resolve_spec_adapter(
-    *,
-    datasheet_type: str,
-    datasheet_layout: str,
-    specs: Mapping[str, DatasheetSpec] | None,
-) -> DatasheetTemplateAdapter | None:
-    if datasheet_type == "auto" and datasheet_layout == "auto":
-        return None
-    resolved_specs = specs if specs is not None else load_default_datasheet_specs()
-    if not resolved_specs:
-        raise ValueError("No datasheet specs are available.")
-    if datasheet_type != "auto":
-        spec = resolved_specs.get(datasheet_type)
-        if spec is None:
-            raise ValueError(f"Unknown datasheet type '{datasheet_type}'.")
-        if datasheet_layout != "auto" and datasheet_layout not in {spec.key, spec.layout_key}:
-            raise ValueError(
-                f"Datasheet layout '{datasheet_layout}' does not belong to datasheet type '{datasheet_type}'."
-            )
-        return adapter_from_datasheet_spec(spec)
-
-    layout_candidates = [
-        spec for spec in resolved_specs.values()
-        if datasheet_layout in {spec.key, spec.layout_key}
-    ]
-    if not layout_candidates:
-        raise ValueError(f"Unknown datasheet layout '{datasheet_layout}'.")
-    if len(layout_candidates) > 1:
-        keys = ", ".join(sorted(spec.key for spec in layout_candidates))
-        raise ValueError(f"Datasheet layout '{datasheet_layout}' is ambiguous across specs: {keys}.")
-    return adapter_from_datasheet_spec(layout_candidates[0])
-
-
 def _candidate_auto_specs(specs: Mapping[str, DatasheetSpec] | None) -> list[DatasheetSpec]:
     resolved_specs = specs if specs is not None else load_default_datasheet_specs()
     candidates = [
@@ -326,18 +289,9 @@ def resolve_template_adapter(
     template_path: str | Path,
     doc: fitz.Document,
     *,
-    datasheet_type: str | None = None,
-    datasheet_layout: str | None = None,
     specs: Mapping[str, DatasheetSpec] | None = None,
 ) -> DatasheetTemplateAdapter:
     path = Path(template_path)
-    spec_adapter = _resolve_spec_adapter(
-        datasheet_type=_normal_selection(datasheet_type),
-        datasheet_layout=_normal_selection(datasheet_layout),
-        specs=specs,
-    )
-    if spec_adapter is not None:
-        return spec_adapter
     for adapter in KNOWN_TEMPLATE_ADAPTERS:
         if adapter.matches(path, doc):
             return adapter

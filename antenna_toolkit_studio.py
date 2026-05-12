@@ -58,9 +58,6 @@ from studio_runtime import (
     google_sheet_export_url,
     is_google_sheet_url,
 )
-from datasheet.artifacts import artifact_manifest_path, load_artifact_manifest
-from datasheet.asset_catalog import build_asset_catalog
-from datasheet.specs import DatasheetSpecError, load_default_datasheet_specs
 from datasheet.technical_data import GoogleSheetTechnicalDataSource, LocalTechnicalDataSource, TechnicalDataError
 
 APP_TITLE = "Antenna Toolkit Studio"
@@ -1081,12 +1078,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self._applying_preset_values = False
         self._suppress_ffs_item_change = False
         self._suppress_radiation_frequency_change = False
-        self._suppress_datasheet_asset_change = False
         self._project_radiation_frequencies: list[float] | None = None
-        try:
-            self._datasheet_specs = load_default_datasheet_specs()
-        except DatasheetSpecError:
-            self._datasheet_specs = {}
         self._ffs_frequency_cache: dict[str, tuple[int, int, list[float]]] = {}
         self._refresh_cache: dict[str, object] = {}
         self._refresh_cache_enabled = False
@@ -1892,20 +1884,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.datasheet_template_combo.setToolTip("PDF template used as the datasheet export style.")
         self.refresh_datasheet_template_options(str(self.store.get("datasheet_template", DEFAULT_DATASHEET_TEMPLATE_NAME)))
         self.datasheet_template_combo.currentIndexChanged.connect(self.on_datasheet_template_selected)
-        self.datasheet_type_combo = QComboBox()
-        self.datasheet_type_combo.setToolTip("Datasheet definition used to interpret template slots, table aliases, and defaults.")
-        self.datasheet_type_combo.currentIndexChanged.connect(self.on_datasheet_type_selected)
-        self.refresh_datasheet_type_options(str(self.store.get("datasheet_type", "auto")), str(self.store.get("datasheet_layout", "auto")))
-        self.datasheet_layout_combo = QComboBox()
-        self.datasheet_layout_combo.setToolTip("PDF layout strategy used by the selected datasheet definition.")
-        self.datasheet_layout_combo.currentIndexChanged.connect(self.on_datasheet_layout_selected)
-        self.refresh_datasheet_layout_options(str(self.store.get("datasheet_layout", "auto")))
-        self.technical_data_sheet_name = QLineEdit(str(self.store.get("technical_data_sheet_name", "")))
-        self.technical_data_sheet_name.setToolTip("Optional worksheet name or index for Technical Data.")
-        self.technical_data_sheet_name.textChanged.connect(lambda v: (self.store.set("technical_data_sheet_name", v), self._mark_project_dirty()))
-        self.technical_data_product_id = QLineEdit(str(self.store.get("technical_data_product_id", "")))
-        self.technical_data_product_id.setToolTip("Optional product ID used when Technical Data is a wide table with multiple products.")
-        self.technical_data_product_id.textChanged.connect(lambda v: (self.store.set("technical_data_product_id", v), self._mark_project_dirty()))
         self.pdf_metadata_author = QLineEdit(str(self.store.get("pdf_metadata_author", DEFAULT_PDF_METADATA_AUTHOR)))
         self.pdf_metadata_author.textChanged.connect(lambda v: self.store.set("pdf_metadata_author", v))
         metadata_form = QFormLayout()
@@ -1915,28 +1893,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         metadata_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         metadata_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         add_form_row(metadata_form, "Export style", self.datasheet_template_combo, "PDF template used as the datasheet export style.")
-        add_form_row(metadata_form, "Datasheet type", self.datasheet_type_combo, "Datasheet definition used for aliases, required chart slots, and default behavior.")
-        add_form_row(metadata_form, "PDF layout", self.datasheet_layout_combo, "Layout strategy for the selected datasheet definition.")
-        add_form_row(metadata_form, "Tech sheet", self.technical_data_sheet_name, "Optional worksheet name or index for Technical Data.")
-        add_form_row(metadata_form, "Product row", self.technical_data_product_id, "Optional product ID used when Technical Data has one row per product.")
         add_form_row(metadata_form, "Author", self.pdf_metadata_author, "Author value written into the exported PDF metadata.")
         metadata_card.body.addLayout(metadata_form)
-
-        asset_card = Card("Generated image selection", "Document")
-        asset_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        asset_help = QLabel("Generated plot assets are listed after Plots run. Checked items are saved with the export settings for future layout-specific placement.")
-        asset_help.setWordWrap(True)
-        asset_help.setObjectName("helper")
-        asset_card.body.addWidget(asset_help)
-        self.datasheet_asset_list = QListWidget()
-        self.datasheet_asset_list.setMinimumHeight(240)
-        self.datasheet_asset_list.setToolTip("Generated SVG assets available to datasheet layouts.")
-        self.datasheet_asset_list.itemChanged.connect(self.on_datasheet_asset_item_changed)
-        asset_card.body.addWidget(self.datasheet_asset_list, 1)
-        self.datasheet_asset_state_label = QLabel("Run Plots to populate generated images.")
-        self.datasheet_asset_state_label.setWordWrap(True)
-        self.datasheet_asset_state_label.setObjectName("helper")
-        asset_card.body.addWidget(self.datasheet_asset_state_label)
 
         processing_panel = ResponsiveCardPanel(max_columns=2, min_card_width=320)
         self.processing_panel = processing_panel
@@ -1963,7 +1921,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         style_lay.addStretch(1)
 
         document_lay.addWidget(metadata_card)
-        document_lay.addWidget(asset_card, 1)
         document_lay.addStretch(1)
 
         self.workflow_tabs.addTab(inputs_scroll, "Inputs")
@@ -2082,136 +2039,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self._mark_project_dirty()
         self.refresh_radiation_frequency_list()
 
-    def _datasheet_type_options(self) -> list[tuple[str, str]]:
-        specs = getattr(self, "_datasheet_specs", {})
-        options = [("auto", "Auto from template")]
-        options.extend((key, spec.display_name) for key, spec in sorted(specs.items(), key=lambda item: item[1].display_name.lower()))
-        return options
-
-    def refresh_datasheet_type_options(self, select_key: str | None = None, select_layout: str | None = None) -> None:
-        if not hasattr(self, "datasheet_type_combo"):
-            return
-        current_key = str(select_key or self.selected_datasheet_type() or "auto").strip() or "auto"
-        self.datasheet_type_combo.blockSignals(True)
-        self.datasheet_type_combo.clear()
-        for key, label in self._datasheet_type_options():
-            self.datasheet_type_combo.addItem(label, key)
-        index = self.datasheet_type_combo.findData(current_key)
-        if index < 0:
-            index = 0
-        self.datasheet_type_combo.setCurrentIndex(index)
-        self.datasheet_type_combo.blockSignals(False)
-        if hasattr(self, "datasheet_layout_combo"):
-            self.refresh_datasheet_layout_options(select_layout)
-
-    def selected_datasheet_type(self) -> str:
-        if not hasattr(self, "datasheet_type_combo"):
-            return "auto"
-        return str(self.datasheet_type_combo.currentData() or "auto").strip() or "auto"
-
-    def _datasheet_layout_options(self) -> list[tuple[str, str]]:
-        specs = getattr(self, "_datasheet_specs", {})
-        selected_type = self.selected_datasheet_type()
-        if selected_type != "auto":
-            spec = specs.get(selected_type)
-            if spec is not None:
-                return [(spec.layout_key, spec.layout_key.replace("_", " ").title())]
-        layout_keys = sorted({spec.layout_key for spec in specs.values() if spec.layout_key})
-        return [("auto", "Auto from datasheet type")] + [(key, key.replace("_", " ").title()) for key in layout_keys]
-
-    def refresh_datasheet_layout_options(self, select_key: str | None = None) -> None:
-        if not hasattr(self, "datasheet_layout_combo"):
-            return
-        current_key = str(select_key or self.selected_datasheet_layout() or "auto").strip() or "auto"
-        self.datasheet_layout_combo.blockSignals(True)
-        self.datasheet_layout_combo.clear()
-        for key, label in self._datasheet_layout_options():
-            self.datasheet_layout_combo.addItem(label, key)
-        index = self.datasheet_layout_combo.findData(current_key)
-        if index < 0:
-            index = 0
-        self.datasheet_layout_combo.setCurrentIndex(index)
-        self.datasheet_layout_combo.blockSignals(False)
-
-    def selected_datasheet_layout(self) -> str:
-        if not hasattr(self, "datasheet_layout_combo"):
-            return "auto"
-        return str(self.datasheet_layout_combo.currentData() or "auto").strip() or "auto"
-
-    def on_datasheet_type_selected(self, *_args) -> None:
-        self.store.set("datasheet_type", self.selected_datasheet_type())
-        self.refresh_datasheet_layout_options(self.selected_datasheet_layout())
-        self.store.set("datasheet_layout", self.selected_datasheet_layout())
-        self._mark_project_dirty()
-
-    def on_datasheet_layout_selected(self, *_args) -> None:
-        self.store.set("datasheet_layout", self.selected_datasheet_layout())
-        self._mark_project_dirty()
-
-    def selected_datasheet_asset_ids(self) -> list[str]:
-        if not hasattr(self, "datasheet_asset_list"):
-            raw = str(self.store.get("datasheet_asset_ids", "") or "")
-            return [item for item in (part.strip() for part in raw.split(",")) if item]
-        selected: list[str] = []
-        for index in range(self.datasheet_asset_list.count()):
-            item = self.datasheet_asset_list.item(index)
-            if item.checkState() == Qt.Checked:
-                asset_id = str(item.data(Qt.UserRole) or "").strip()
-                if asset_id:
-                    selected.append(asset_id)
-        return selected
-
-    def _datasheet_asset_ids_text(self) -> str:
-        return ",".join(self.selected_datasheet_asset_ids())
-
-    def _asset_manifest_bookstem(self) -> str:
-        bookstem = self.deduced_beam_output().stem
-        return bookstem or (self.active_project_slug or "project")
-
-    def refresh_datasheet_asset_list(self) -> None:
-        if not hasattr(self, "datasheet_asset_list"):
-            return
-        previous = set(self.selected_datasheet_asset_ids())
-        if not previous:
-            previous = {item for item in str(self.store.get("datasheet_asset_ids", "") or "").split(",") if item.strip()}
-        manifest = load_artifact_manifest(
-            artifact_manifest_path(self.project_results_dir(), self._asset_manifest_bookstem()),
-            bookstem=self._asset_manifest_bookstem(),
-        )
-        catalog = build_asset_catalog(manifest)
-        self._suppress_datasheet_asset_change = True
-        self.datasheet_asset_list.clear()
-        for asset in catalog.items:
-            detail_parts = [asset.chart_family]
-            if asset.plane:
-                detail_parts.append(asset.plane)
-            if asset.polarization:
-                detail_parts.append(asset.polarization)
-            if asset.frequency_ghz is not None:
-                detail_parts.append(f"{asset.frequency_ghz:g} GHz")
-            item = QListWidgetItem(f"{asset.label} ({', '.join(detail_parts)})")
-            item.setData(Qt.UserRole, asset.asset_id)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked if asset.asset_id in previous else Qt.Unchecked)
-            item.setToolTip(display_workspace_path(asset.svg_path))
-            self.datasheet_asset_list.addItem(item)
-        self._suppress_datasheet_asset_change = False
-        if catalog.items:
-            checked_count = len(self.selected_datasheet_asset_ids())
-            self.datasheet_asset_state_label.setText(f"{len(catalog.items)} generated image assets available. {checked_count} selected.")
-        else:
-            self.datasheet_asset_state_label.setText("Run Plots to populate generated images.")
-
-    def on_datasheet_asset_item_changed(self, *_args) -> None:
-        if self._suppress_datasheet_asset_change:
-            return
-        self.store.set("datasheet_asset_ids", self._datasheet_asset_ids_text())
-        self._mark_project_dirty()
-        if hasattr(self, "datasheet_asset_state_label"):
-            checked_count = len(self.selected_datasheet_asset_ids())
-            total = self.datasheet_asset_list.count()
-            self.datasheet_asset_state_label.setText(f"{total} generated image assets available. {checked_count} selected.")
-
     def _set_readiness_action(self, text: str, callback, enabled: bool = True, tooltip: str = "") -> None:
         previous = getattr(self, "_readiness_action_callback", None)
         if previous is not None:
@@ -2305,19 +2132,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.vswr_legend_labels.clear()
         self.refresh_datasheet_template_options(DEFAULT_DATASHEET_TEMPLATE_NAME)
         self.store.set("datasheet_template", self.selected_datasheet_template_name())
-        self.refresh_datasheet_type_options("auto", "auto")
-        self.store.set("datasheet_type", self.selected_datasheet_type())
-        self.store.set("datasheet_layout", self.selected_datasheet_layout())
-        self.store.set("datasheet_asset_ids", "")
-        if hasattr(self, "technical_data_sheet_name"):
-            self.technical_data_sheet_name.setText("")
-            self.store.set("technical_data_sheet_name", "")
-        if hasattr(self, "technical_data_product_id"):
-            self.technical_data_product_id.setText("")
-            self.store.set("technical_data_product_id", "")
-        if hasattr(self, "datasheet_asset_list"):
-            self.datasheet_asset_list.clear()
-            self.datasheet_asset_state_label.setText("Run Plots to populate generated images.")
         self.pdf_metadata_author.setText(DEFAULT_PDF_METADATA_AUTHOR)
         self.rings.setText("0,-7.5,-15,-22.5,-30")
         self.angle_step.setValue(30)
@@ -4075,7 +3889,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self._refresh_project_summary()
             self._update_project_action_state()
             self.refresh_radiation_frequency_list()
-            self.refresh_datasheet_asset_list()
         finally:
             if not was_enabled:
                 self._refresh_cache = {}
@@ -4132,11 +3945,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self.radiation_select_all_button,
             self.radiation_clear_button,
             self.datasheet_template_combo,
-            self.datasheet_type_combo,
-            self.datasheet_layout_combo,
-            self.technical_data_sheet_name,
-            self.technical_data_product_id,
-            self.datasheet_asset_list,
             self.pdf_metadata_author,
         ):
             widget.setEnabled(has_project)
@@ -4615,11 +4423,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "beam_eff_legend_labels": self.beam_eff_legend_labels.text().strip(),
             "vswr_legend_labels": self.vswr_legend_labels.text().strip(),
             "datasheet_template": self.selected_datasheet_template_name(),
-            "datasheet_type": self.selected_datasheet_type(),
-            "datasheet_layout": self.selected_datasheet_layout(),
-            "datasheet_asset_ids": self._datasheet_asset_ids_text(),
-            "technical_data_sheet_name": self.technical_data_sheet_name.text().strip(),
-            "technical_data_product_id": self.technical_data_product_id.text().strip(),
             "pdf_metadata_author": self.selected_pdf_metadata_author(),
             "rings": self.rings.text().strip(),
             "angle": int(self.angle_step.value()),
@@ -4711,17 +4514,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if "datasheet_template" in values:
             self.refresh_datasheet_template_options(str(values["datasheet_template"]))
             self.store.set("datasheet_template", self.selected_datasheet_template_name())
-        if "datasheet_type" in values or "datasheet_layout" in values:
-            self.refresh_datasheet_type_options(str(values.get("datasheet_type", "auto")), str(values.get("datasheet_layout", "auto")))
-            self.store.set("datasheet_type", self.selected_datasheet_type())
-            self.store.set("datasheet_layout", self.selected_datasheet_layout())
-        if "datasheet_asset_ids" in values:
-            self.store.set("datasheet_asset_ids", str(values["datasheet_asset_ids"]))
-            self.refresh_datasheet_asset_list()
-        if "technical_data_sheet_name" in values:
-            self.technical_data_sheet_name.setText(str(values["technical_data_sheet_name"]))
-        if "technical_data_product_id" in values:
-            self.technical_data_product_id.setText(str(values["technical_data_product_id"]))
         if "pdf_metadata_author" in values: self.pdf_metadata_author.setText(str(values["pdf_metadata_author"]))
         if "rings" in values: self.rings.setText(str(values["rings"]))
         if "angle" in values: self.angle_step.setValue(int(values["angle"]))

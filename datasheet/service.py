@@ -24,25 +24,17 @@ def build_render_context(
     technical_data_workbook: Path | None = None,
     *,
     output_dir: Path | None = None,
-    datasheet_type: str | None = None,
-    datasheet_layout: str | None = None,
     datasheet_specs: Mapping[str, DatasheetSpec] | None = None,
-    technical_data_sheet_name: str | int | None = None,
-    technical_data_product_id: str | None = None,
 ) -> DatasheetRenderContext:
     adapter = resolve_template_adapter(
         template_path,
         doc,
-        datasheet_type=datasheet_type,
-        datasheet_layout=datasheet_layout,
         specs=datasheet_specs,
     )
     model = load_datasheet_model(
         extract_workbook.resolve(),
         technical_data_workbook.resolve() if technical_data_workbook else None,
         output_dir=output_dir,
-        technical_data_sheet_name=technical_data_sheet_name,
-        technical_data_product_id=technical_data_product_id,
         technical_data_profile="rfe" if adapter.key == "rfe" else None,
     )
     return DatasheetRenderContext(model=model, adapter=adapter)

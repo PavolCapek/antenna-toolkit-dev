@@ -17,11 +17,6 @@ STAGE_SETTING_KEYS: dict[str, tuple[str, ...]] = {
         "cartesian_figure_height",
         "polar_figure_size",
         "datasheet_template",
-        "datasheet_type",
-        "datasheet_layout",
-        "datasheet_asset_ids",
-        "technical_data_sheet_name",
-        "technical_data_product_id",
         "pdf_metadata_author",
     ),
     "plot": (

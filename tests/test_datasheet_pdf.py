@@ -33,7 +33,6 @@ from datasheet_pdf import (
     _find_beamwidth_plane_asset,
     _manifest_slot_asset,
     _normalize_plot_widths,
-    _parse_sheet_selector_arg,
     _polar_svg_rect,
     _redraw_template_table_separators,
     _separate_plot_and_legend_rects,
@@ -44,7 +43,6 @@ from datasheet_pdf import (
     _replace_header_placeholders,
     _replace_chart_images,
     _reflow_chart_replacements,
-    _radiation_frequencies_from_asset_ids,
     _shift_chart_replacement,
     _update_footer_dates,
     build_datasheet_pdf,
@@ -803,12 +801,13 @@ class DatasheetPdfTests(unittest.TestCase):
             ]
         ).to_excel(self.technical_workbook, sheet_name="Sheet1", index=False, header=False)
 
+        rfe_template = self.root / "Datasheet - RFE.pdf"
+        self.template_pdf.replace(rfe_template)
         replacements = build_datasheet_pdf(
             output=self.output_pdf,
-            template=self.template_pdf,
+            template=rfe_template,
             extract_workbook=self.extract_workbook,
             technical_data_workbook=self.technical_workbook,
-            datasheet_type="rfe",
         )
 
         self.assertEqual(replacements["Antenna Name"], "45° Asymmetrical Horn Antenna")
@@ -847,12 +846,13 @@ class DatasheetPdfTests(unittest.TestCase):
             ]
         )
 
+        rfe_template = self.root / "Datasheet - RFE.pdf"
+        self.template_pdf.replace(rfe_template)
         build_datasheet_pdf(
             output=self.output_pdf,
-            template=self.template_pdf,
+            template=rfe_template,
             extract_workbook=self.extract_workbook,
             technical_data_workbook=self.technical_workbook,
-            datasheet_type="rfe",
         )
 
         with fitz.open(self.output_pdf) as doc:
@@ -1664,39 +1664,6 @@ class DatasheetPdfTests(unittest.TestCase):
                 chart_key="polar_combined_planes",
             )
 
-    def test_selected_asset_ids_resolve_radiation_frequencies(self) -> None:
-        update_artifact_manifest(
-            self.root,
-            "extract",
-            gain=build_asset_record(self.gain_svg),
-            polar_combined_planes=[
-                build_asset_record(self.combined_eh_low_svg, frequency_ghz=4.9, plane_mode="e-h-plane"),
-                build_asset_record(self.combined_eh_mid_svg, frequency_ghz=6.0, plane_mode="e-h-plane"),
-                build_asset_record(self.combined_eh_high_svg, frequency_ghz=7.125, plane_mode="e-h-plane"),
-            ],
-        )
-        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
-
-        selected = _radiation_frequencies_from_asset_ids(
-            manifest,
-            "gain,polar_combined_planes__e-h-plane__7p125ghz,polar_combined_planes__e-h-plane__4p9ghz",
-        )
-
-        self.assertEqual(selected, [7.125, 4.9])
-
-    def test_selected_asset_ids_raise_for_unknown_ids(self) -> None:
-        update_artifact_manifest(
-            self.root,
-            "extract",
-            polar_combined_planes=[
-                build_asset_record(self.combined_eh_low_svg, frequency_ghz=4.9, plane_mode="e-h-plane"),
-            ],
-        )
-        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
-
-        with self.assertRaisesRegex(ValueError, "Unknown generated image asset ID"):
-            _radiation_frequencies_from_asset_ids(manifest, "missing-asset")
-
     def test_manifest_slot_asset_resolves_beam_efficiency_from_catalog(self) -> None:
         beam_efficiency_svg = self.root / "extract-beam-efficiency.svg"
         self._write_svg(beam_efficiency_svg, "#445566", width=300, height=120)
@@ -1718,35 +1685,6 @@ class DatasheetPdfTests(unittest.TestCase):
             )
 
         self.assertEqual(asset, beam_efficiency_svg)
-
-    def test_manifest_slot_asset_prefers_selected_catalog_ids_for_matching_slot(self) -> None:
-        update_artifact_manifest(
-            self.root,
-            "extract",
-            polar_combined_planes=[
-                build_asset_record(self.combined_eh_low_svg, frequency_ghz=4.9, plane_mode="e-h-plane"),
-                build_asset_record(self.combined_eh_high_svg, frequency_ghz=7.125, plane_mode="e-h-plane"),
-            ],
-        )
-        manifest = load_artifact_manifest(self.root / "extract-artifacts.json", bookstem="extract")
-
-        with fitz.open(self.template_pdf) as doc:
-            asset = _manifest_slot_asset(
-                TemplateChartSlot("selected_radiation", 0, "polar_combined_planes"),
-                self.output_pdf,
-                self.extract_workbook,
-                [],
-                doc[0],
-                manifest,
-                selected_asset_ids=["polar_combined_planes__e-h-plane__7p125ghz"],
-            )
-
-        self.assertEqual(asset, self.combined_eh_high_svg)
-
-    def test_sheet_selector_arg_parses_names_and_indexes(self) -> None:
-        self.assertIsNone(_parse_sheet_selector_arg(""))
-        self.assertEqual(_parse_sheet_selector_arg("Products"), "Products")
-        self.assertEqual(_parse_sheet_selector_arg("1"), 1)
 
     def test_netqui_1pol_selected_radiation_frequencies_replace_only_requested_assets(self) -> None:
         self._write_netqui_chart_template_pdf()
