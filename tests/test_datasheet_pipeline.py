@@ -9,7 +9,7 @@ import pandas as pd
 
 from datasheet.artifacts import artifact_manifest_path, build_asset_record, load_artifact_manifest, update_artifact_manifest
 from datasheet.service import build_render_context
-from datasheet.specs import ChartLayoutSpec, ChartSlotSpec, DatasheetSpec, TemplateMatchSpec
+from datasheet.specs import ChartLayoutSpec, ChartSlotSpec, DatasheetSpec, TemplateMatchSpec, load_default_datasheet_specs
 
 
 class DatasheetPipelineTests(unittest.TestCase):
@@ -129,6 +129,63 @@ class DatasheetPipelineTests(unittest.TestCase):
         self.assertEqual(context.adapter.key, "rfe")
         self.assertIsNotNone(context.adapter.manifest)
         self.assertEqual(context.adapter.manifest.chart_layout.slot_order, "first_two_then_x")
+
+    def test_default_datasheet_specs_define_template_contracts(self) -> None:
+        specs = load_default_datasheet_specs()
+        expected = {
+            "rfe": {
+                "filename_tokens": ("rfe", "rf elements"),
+                "chart_layout_mode": "generic",
+                "technical_layout_mode": "generic",
+                "slot_order": "first_two_then_x",
+                "slots": (
+                    ("gain", "gain"),
+                    ("beamwidth", "beamwidth"),
+                    ("azimuth", "polar_azimuth"),
+                    ("elevation", "polar_elevation"),
+                ),
+            },
+            "netqui": {
+                "filename_tokens": ("netqui",),
+                "chart_layout_mode": "netqui",
+                "technical_layout_mode": "netqui",
+                "slot_order": "rows",
+                "slots": (
+                    ("gain", "gain"),
+                    ("vswr", "vswr"),
+                    ("beamwidth_e_plane", "beamwidth_plane"),
+                    ("beamwidth_h_plane", "beamwidth_plane"),
+                ),
+            },
+            "netqui_1pol": {
+                "filename_tokens": ("netqui - 1pol", "netqui-1pol", "netqui_1pol"),
+                "chart_layout_mode": "netqui_1pol",
+                "technical_layout_mode": "netqui_1pol",
+                "slot_order": "rows",
+                "slots": (
+                    ("gain", "gain"),
+                    ("vswr", "vswr"),
+                    ("beamwidth_e_plane", "beamwidth_plane"),
+                    ("beamwidth_h_plane", "beamwidth_plane"),
+                    ("radiation_low", "polar_combined_planes_triplet"),
+                    ("radiation_mid", "polar_combined_planes_triplet"),
+                    ("radiation_high", "polar_combined_planes_triplet"),
+                ),
+            },
+        }
+
+        for key, contract in expected.items():
+            with self.subTest(key=key):
+                spec = specs[key]
+                self.assertEqual(spec.match.filename_tokens, contract["filename_tokens"])
+                self.assertEqual(spec.chart_layout_mode, contract["chart_layout_mode"])
+                self.assertEqual(spec.technical_layout_mode, contract["technical_layout_mode"])
+                self.assertIsNotNone(spec.chart_layout)
+                self.assertEqual(spec.chart_layout.slot_order, contract["slot_order"])
+                self.assertEqual(
+                    tuple((slot.kind, slot.asset_key) for slot in spec.chart_layout.slots),
+                    contract["slots"],
+                )
 
     def test_build_render_context_auto_discovers_external_matching_spec(self) -> None:
         custom_template = self.root / "Custom Export.pdf"
