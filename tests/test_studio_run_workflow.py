@@ -229,6 +229,31 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertFalse(self.window.btn_run_needed.isEnabled())
         self.assertEqual(self.window.btn_validate.parent(), self.window.readiness_card)
 
+    def test_readiness_pane_hides_stale_outputs_action(self) -> None:
+        ffs_path = Path(self.temp_dir.name) / "sample.ffs"
+        s2p_path = Path(self.temp_dir.name) / "sample.s2p"
+        technical_path = Path(self.temp_dir.name) / "technical.xlsx"
+        for path in (ffs_path, s2p_path, technical_path):
+            path.write_text("data", encoding="utf-8")
+        self.window._add_ffs_files([{"path": str(ffs_path), "enabled": True, "port_label": "Port 1"}])
+        self.window._set_touchstone(str(s2p_path))
+        self.window._set_technical_data(str(technical_path))
+
+        with (
+            mock.patch.object(self.window, "_stale_stage_keys", return_value=["plot"]),
+            mock.patch.object(self.window, "_stage_stale_detail", return_value="Plots are stale."),
+            mock.patch.object(self.window, "_latest_failed_stage_key", return_value=""),
+            mock.patch.object(self.window, "has_unsaved_project_changes", return_value=False),
+            mock.patch.object(self.window, "_stage_is_applicable", return_value=True),
+            mock.patch.object(self.window, "_stage_output_exists", return_value=True),
+        ):
+            self.window.refresh_derived_paths()
+            self.app.processEvents()
+
+        self.assertEqual(self.window.readiness_badges["outputs"].text(), "1 stale")
+        self.assertIn("Plots are stale.", self.window.readiness_summary.text())
+        self.assertFalse(self.window.readiness_action.isVisible())
+
     def test_pipeline_stage_list_gates_actions_by_output_state(self) -> None:
         self.assertEqual(set(self.window.stage_open_buttons.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
         self.assertEqual(set(self.window.stage_timestamp_labels.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})

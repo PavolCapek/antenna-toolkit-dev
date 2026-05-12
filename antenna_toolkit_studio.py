@@ -3798,7 +3798,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 self.readiness_summary.setText(f"{stale_details[0]} {self._recovery_plan_text()}")
             else:
                 self.readiness_summary.setText(self._recovery_plan_text())
-            self._set_readiness_action("Run Stale Outputs", self.run_needed_outputs, tooltip="Rebuild only the stale outputs.")
+            self._set_readiness_action("Run Full Pipeline", self.run_full, enabled=False, tooltip="")
             return
 
         if not ready_stages:
