@@ -3551,6 +3551,33 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             f"color: {text.name()};"
         )
 
+    def _readiness_badge_style(self, tone: str) -> str:
+        theme = THEME_STYLES.get(self.theme, THEME_STYLES["light"])
+        title = QColor(theme["title_color"])
+        helper = QColor(theme["helper_color"])
+        semantic_colors = {
+            "ready": QColor("#2f9e5b"),
+            "warning": QColor("#d69e2e"),
+            "blocked": QColor("#d64545"),
+            "running": QColor("#2f80ed"),
+            "optional": QColor("#6b7a90"),
+            "muted": QColor("#66758a"),
+        }
+        base = semantic_colors.get(tone, semantic_colors["muted"])
+        text = helper if tone in {"optional", "muted"} else title
+        background_alpha = 48 if tone in {"ready", "warning", "blocked", "running"} else 36
+        border_alpha = 170 if tone in {"ready", "warning", "blocked", "running"} else 120
+        return (
+            f"background: {self._chip_rgba(base, background_alpha)}; "
+            f"border: 1px solid {self._chip_rgba(base, border_alpha)}; "
+            f"color: {text.name()};"
+        )
+
+    def _set_readiness_badge(self, key: str, text: str, tone: str) -> None:
+        badge = self.readiness_badges[key]
+        badge.setText(text)
+        badge.setStyleSheet(self._readiness_badge_style(tone))
+
     def _refresh_stage_labels(self) -> None:
         if not self.stage_status_labels or not self.stage_open_buttons:
             return
@@ -3669,30 +3696,30 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         vswr_ready = has_project and frequency_ready and touchstone_ready
 
         if not has_project:
-            self.readiness_badges["project"].setText("Not selected")
-            self.readiness_badges["inputs"].setText("No files")
-            self.readiness_badges["touchstone"].setText("Not selected")
-            self.readiness_badges["outputs"].setText("No outputs")
+            self._set_readiness_badge("project", "Not selected", "muted")
+            self._set_readiness_badge("inputs", "No files", "muted")
+            self._set_readiness_badge("touchstone", "Not selected", "muted")
+            self._set_readiness_badge("outputs", "No outputs", "muted")
             self.readiness_summary.setText("Create a project first. Input paths, preset selection, and output freshness are tracked per project.")
             self._set_readiness_action("Create project", self.create_project, tooltip="Create a new project.")
             return
 
-        self.readiness_badges["project"].setText("Unsaved" if unsaved_changes else "Saved")
+        self._set_readiness_badge("project", "Unsaved" if unsaved_changes else "Saved", "warning" if unsaved_changes else "ready")
         if missing_enabled:
-            self.readiness_badges["inputs"].setText("Files missing")
+            self._set_readiness_badge("inputs", "Files missing", "blocked")
         elif total_ffs == 0:
-            self.readiness_badges["inputs"].setText("No files")
+            self._set_readiness_badge("inputs", "No files", "warning")
         elif enabled_ffs == 0:
-            self.readiness_badges["inputs"].setText("All disabled")
+            self._set_readiness_badge("inputs", "All disabled", "warning")
         else:
-            self.readiness_badges["inputs"].setText(f"{enabled_ffs} ready")
+            self._set_readiness_badge("inputs", f"{enabled_ffs} ready", "ready")
 
         if not s2p:
-            self.readiness_badges["touchstone"].setText("Optional")
+            self._set_readiness_badge("touchstone", "Optional", "optional")
         elif touchstone_ready:
-            self.readiness_badges["touchstone"].setText("Ready")
+            self._set_readiness_badge("touchstone", "Ready", "ready")
         else:
-            self.readiness_badges["touchstone"].setText("File missing")
+            self._set_readiness_badge("touchstone", "File missing", "blocked")
 
         if running:
             outputs_state = "Running"
@@ -3702,9 +3729,17 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             outputs_state = "Not generated"
         elif len(ready_stages) < len(applicable_stages):
             outputs_state = "Partial"
+            outputs_tone = "warning"
         else:
             outputs_state = "Up to date"
-        self.readiness_badges["outputs"].setText(outputs_state)
+            outputs_tone = "ready"
+        if running:
+            outputs_tone = "running"
+        elif stale_stages:
+            outputs_tone = "warning"
+        elif not ready_stages:
+            outputs_tone = "muted"
+        self._set_readiness_badge("outputs", outputs_state, outputs_tone)
 
         if running:
             stage_label = STAGE_LABELS.get(self._current_stage_key, self._current_stage_key.title()) if self._current_stage_key else "Pipeline"

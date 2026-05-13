@@ -192,3 +192,15 @@ class StudioUiLayoutTests(StudioDirtyStateBase):
         self.assertIn("rgba(214, 69, 69", failed_style)
         self.assertIn("rgba(102, 117, 138", muted_style)
         self.assertNotEqual(ready_style, running_style)
+
+    def test_readiness_badge_styles_use_status_colors(self) -> None:
+        ready_style = self.window._readiness_badge_style("ready")
+        warning_style = self.window._readiness_badge_style("warning")
+        blocked_style = self.window._readiness_badge_style("blocked")
+        running_style = self.window._readiness_badge_style("running")
+
+        self.assertIn("rgba(47, 158, 91", ready_style)
+        self.assertIn("rgba(214, 158, 46", warning_style)
+        self.assertIn("rgba(214, 69, 69", blocked_style)
+        self.assertIn("rgba(47, 128, 237", running_style)
+        self.assertNotEqual(ready_style, warning_style)
