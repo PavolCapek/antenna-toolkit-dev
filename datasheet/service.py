@@ -24,6 +24,7 @@ def build_render_context(
     technical_data_workbook: Path | None = None,
     *,
     output_dir: Path | None = None,
+    technical_data_sheet: str | int | None = None,
     datasheet_specs: Mapping[str, DatasheetSpec] | None = None,
 ) -> DatasheetRenderContext:
     adapter = resolve_template_adapter(
@@ -35,6 +36,7 @@ def build_render_context(
         extract_workbook.resolve(),
         technical_data_workbook.resolve() if technical_data_workbook else None,
         output_dir=output_dir,
+        technical_data_sheet=technical_data_sheet,
         technical_data_profile="rfe" if adapter.key == "rfe" else None,
     )
     return DatasheetRenderContext(model=model, adapter=adapter)

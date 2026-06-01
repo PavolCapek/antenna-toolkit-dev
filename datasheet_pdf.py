@@ -4867,6 +4867,7 @@ def build_datasheet_pdf(
     cartesian_figure_width: float | None = None,
     cartesian_figure_height: float | None = None,
     polar_figure_size: float | None = None,
+    technical_data_sheet: str | None = None,
 ) -> dict[str, str]:
     total_steps = 4 if technical_data_workbook else 3
     emit_progress("datasheet", 1, total_steps, f"Loading {extract_workbook.name}")
@@ -4881,6 +4882,7 @@ def build_datasheet_pdf(
             extract_workbook.resolve(),
             technical_data_workbook.resolve() if technical_data_workbook else None,
             output_dir=output.parent,
+            technical_data_sheet=technical_data_sheet,
         )
         adapter = context.adapter
         model = context.model
@@ -4994,6 +4996,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--template", type=Path, required=True, help="Template PDF path.")
     parser.add_argument("--extract-workbook", type=Path, required=True, help="Extracted workbook path.")
     parser.add_argument("--technical-data-workbook", type=Path, help="Technical Data Excel workbook path.")
+    parser.add_argument("--technical-data-sheet", help="Technical Data workbook sheet name.")
     parser.add_argument("--metadata-author", help="Author value to write into the PDF metadata.")
     parser.add_argument("--radiation-frequencies-ghz", help="Comma-separated radiation pattern frequencies to include in GHz.")
     parser.add_argument("--cartesian-figure-width", type=float, help="Current cartesian figure width in inches.")
@@ -5022,6 +5025,7 @@ def main() -> int:
             template=args.template,
             extract_workbook=args.extract_workbook,
             technical_data_workbook=args.technical_data_workbook,
+            technical_data_sheet=args.technical_data_sheet,
             metadata_author=args.metadata_author,
             radiation_frequencies_ghz=_parse_radiation_frequencies_arg(args.radiation_frequencies_ghz),
             cartesian_figure_width=args.cartesian_figure_width,

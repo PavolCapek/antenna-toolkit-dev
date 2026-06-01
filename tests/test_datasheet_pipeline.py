@@ -112,6 +112,23 @@ class DatasheetPipelineTests(unittest.TestCase):
         self.assertEqual(context.model.performance_fields["Gain"], "19.5 dBi")
         self.assertEqual(context.model.artifact_manifest["charts"]["gain"]["svg"], str(self.chart_svg.resolve()))
 
+    def test_build_render_context_uses_selected_technical_data_sheet(self) -> None:
+        with pd.ExcelWriter(self.technical_workbook) as writer:
+            pd.DataFrame([["Antenna Name", "Wrong sheet"]]).to_excel(writer, sheet_name="Intro", index=False, header=False)
+            pd.DataFrame([["Antenna Name", "Datasheet antenna"]]).to_excel(writer, sheet_name="Datasheet", index=False, header=False)
+
+        with fitz.open(self.template_pdf) as doc:
+            context = build_render_context(
+                self.template_pdf,
+                doc,
+                self.extract_workbook,
+                self.technical_workbook,
+                output_dir=self.root,
+                technical_data_sheet="Datasheet",
+            )
+
+        self.assertEqual(context.model.technical_entries[0].value, "Datasheet antenna")
+
     def test_build_render_context_auto_detects_template_adapter_from_filename(self) -> None:
         rfe_template = self.root / "Datasheet - RFE.pdf"
         with fitz.open() as doc:

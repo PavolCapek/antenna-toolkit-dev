@@ -50,6 +50,7 @@ class PipelineCommandTests(unittest.TestCase):
             template_path="template.pdf",
             extract_workbook="extract.xlsx",
             technical_data_workbook="technical-data.xlsx",
+            technical_data_sheet="Datasheet",
             settings=settings,
             radiation_frequencies_ghz="2.4,5.8",
         )
@@ -62,7 +63,7 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertNotIn("--datasheet-type", command)
         self.assertNotIn("--datasheet-layout", command)
         self.assertNotIn("--datasheet-asset-ids", command)
-        self.assertNotIn("--technical-data-sheet", command)
+        self.assertEqual(command[command.index("--technical-data-sheet") + 1], "Datasheet")
         self.assertNotIn("--technical-data-product-id", command)
         self.assertEqual(command[command.index("--cartesian-figure-width") + 1], "9.25")
         self.assertEqual(command[command.index("--cartesian-figure-height") + 1], "3.75")

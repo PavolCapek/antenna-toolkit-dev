@@ -31,6 +31,9 @@ from studio_support import (
 
 
 class StudioRunMixin:
+    def _technical_data_sheet_name(self) -> str:
+        return "Datasheet" if self.technical_data_is_google_sheet() else ""
+
     def _stage_validation_status(self, stage_key: str) -> tuple[str, list[str]]:
         blockers = self._run_preflight_messages([stage_key])
         if blockers:
@@ -321,6 +324,7 @@ class StudioRunMixin:
                     script_path=SCRIPT_DATASHEET,
                     template_path=self.selected_datasheet_template_path(),
                     technical_data_workbook=technical_data_workbook,
+                    technical_data_sheet=self._technical_data_sheet_name(),
                     metadata_author=self.selected_pdf_metadata_author(),
                     radiation_frequencies_ghz=self.radiation_frequencies_arg(),
                     context=context,
@@ -572,6 +576,7 @@ class StudioRunMixin:
             template_path=template_path,
             extract_workbook=extract_output,
             technical_data_workbook=technical_data_workbook,
+            technical_data_sheet=self._technical_data_sheet_name(),
             settings=settings,
             metadata_author=self.selected_pdf_metadata_author(),
             radiation_frequencies_ghz=self.radiation_frequencies_arg(),
@@ -649,6 +654,7 @@ class StudioRunMixin:
                 script_path=SCRIPT_DATASHEET,
                 template_path=template_path,
                 technical_data_workbook=technical_data_workbook,
+                technical_data_sheet=self._technical_data_sheet_name(),
                 metadata_author=self.selected_pdf_metadata_author(),
                 radiation_frequencies_ghz=self.radiation_frequencies_arg(),
                 context=context,

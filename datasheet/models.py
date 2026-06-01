@@ -393,6 +393,7 @@ def load_datasheet_model(
     technical_data_workbook: Path | None = None,
     *,
     output_dir: Path | None = None,
+    technical_data_sheet: str | int | None = None,
     technical_data_profile: str | None = None,
 ) -> DatasheetModel:
     extract_workbook = extract_workbook.resolve()
@@ -407,6 +408,7 @@ def load_datasheet_model(
     entries = (
         load_technical_data_entries(
             technical_data_workbook.resolve(),
+            sheet_name=technical_data_sheet,
             technical_data_profile=technical_data_profile,
         )
         if technical_data_workbook

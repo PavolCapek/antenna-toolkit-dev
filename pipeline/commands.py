@@ -39,6 +39,7 @@ def build_datasheet_command(
     template_path: str | Path | None = None,
     extract_workbook: str | Path | None = None,
     technical_data_workbook: str | Path | None = None,
+    technical_data_sheet: str | None = None,
     settings: PresetSettings | None = None,
     metadata_author: str | None = None,
     radiation_frequencies_ghz: str | Sequence[float] | None = None,
@@ -67,6 +68,7 @@ def build_datasheet_command(
     ]
     if technical_data_workbook is not None:
         args.extend(["--technical-data-workbook", str(technical_data_workbook)])
+    _append_if_text(args, "--technical-data-sheet", technical_data_sheet or "")
     _append_if_text(args, "--metadata-author", metadata_author or "")
     args.extend(
         [

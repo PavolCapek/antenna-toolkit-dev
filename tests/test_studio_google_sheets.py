@@ -141,6 +141,7 @@ class StudioGoogleSheetsTests(StudioDirtyStateBase):
             queued_args["datasheet"][queued_args["datasheet"].index("--technical-data-workbook") + 1],
             str(cached_xlsx),
         )
+        self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--technical-data-sheet") + 1], "Datasheet")
 
     def test_run_datasheet_uses_cached_google_sheet_workbook(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "sample.ffs"
@@ -181,4 +182,5 @@ class StudioGoogleSheetsTests(StudioDirtyStateBase):
             queued_args["datasheet"][queued_args["datasheet"].index("--technical-data-workbook") + 1],
             str(cached_xlsx),
         )
+        self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--technical-data-sheet") + 1], "Datasheet")
         self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--radiation-frequencies-ghz") + 1], "0.3")
