@@ -33,7 +33,9 @@ from datasheet_pdf import (
     _find_beamwidth_plane_asset,
     _manifest_slot_asset,
     _normalize_plot_widths,
+    _place_chart_replacements_on_page,
     _polar_svg_rect,
+    _redraw_chart_headings,
     _redraw_template_table_separators,
     _separate_plot_and_legend_rects,
     _shared_side_legend_scale,
@@ -2100,6 +2102,60 @@ class DatasheetPdfTests(unittest.TestCase):
 
         self.assertEqual(solid_runs, 1)
         self.assertGreaterEqual(dashed_runs, 3)
+
+    @pytest.mark.export_acceptance
+    def test_chart_batch_placement_preserves_later_svg_glyphs(self) -> None:
+        from matplotlib import pyplot as plt
+
+        def write_cartesian_svg(path: Path, y_max: float, y_step: float) -> None:
+            fig, ax = plt.subplots(figsize=(12.0, 5.04), dpi=120)
+            ax.set_ylim(0.0, y_max)
+            ax.set_yticks(list(range(0, int(y_max) + 1, int(y_step))))
+            ax.plot([4.9, 7.2], [y_max * 0.25, y_max * 0.35])
+            plt.tight_layout()
+            fig.savefig(path, format="svg", bbox_inches="tight")
+            plt.close(fig)
+
+        gain_svg = self.root / "glyph-gain.svg"
+        beamwidth_svg = self.root / "glyph-beamwidth.svg"
+        write_cartesian_svg(gain_svg, 22.0, 2.0)
+        write_cartesian_svg(beamwidth_svg, 100.0, 10.0)
+        gain_rect = fitz.Rect(24.0, 30.0, 334.87, 159.53)
+        beamwidth_rect = fitz.Rect(24.0, 220.0, 334.87, 349.53)
+
+        with fitz.open() as combined_doc:
+            combined_page = combined_doc.new_page(width=500.0, height=500.0)
+            _place_chart_replacements_on_page(
+                combined_page,
+                [
+                    ChartReplacement("gain", gain_rect, gain_svg),
+                    ChartReplacement("beamwidth", beamwidth_rect, beamwidth_svg),
+                ],
+                replacement_rects_are_final=True,
+            )
+            combined_pix = combined_page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), clip=beamwidth_rect, alpha=False)
+
+        with fitz.open() as beamwidth_doc:
+            beamwidth_page = beamwidth_doc.new_page(width=500.0, height=500.0)
+            _place_chart_replacements_on_page(
+                beamwidth_page,
+                [ChartReplacement("beamwidth", beamwidth_rect, beamwidth_svg)],
+                replacement_rects_are_final=True,
+            )
+            beamwidth_pix = beamwidth_page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), clip=beamwidth_rect, alpha=False)
+
+        self.assertEqual(combined_pix.samples, beamwidth_pix.samples)
+
+    def test_redraw_chart_headings_preserves_vector_graphics(self) -> None:
+        with fitz.open() as doc:
+            page = doc.new_page(width=240.0, height=120.0)
+            page.insert_text((30.0, 50.0), "ANTENNA BEAMWIDTH", fontsize=10.0, fontname="helv")
+            heading = next(span for span in _extract_page_spans(page) if span.text == "ANTENNA BEAMWIDTH")
+            page.draw_rect(fitz.Rect(40.0, 43.0, 45.0, 47.0), fill=(1.0, 0.0, 0.0), overlay=True)
+
+            _redraw_chart_headings(page, [heading])
+
+            self.assertTrue(any(drawing.get("fill") == (1.0, 0.0, 0.0) for drawing in page.get_drawings()))
 
     def test_build_replacements_from_workbook_does_not_emit_polarization(self) -> None:
         ffs_summary = pd.DataFrame(

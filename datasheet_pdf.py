@@ -3513,10 +3513,16 @@ def _place_svg_as_vector(
     *,
     top_align: bool = False,
     keep_proportion: bool = True,
+    source_docs: list[fitz.Document] | None = None,
 ) -> None:
     pdf_bytes = _svg_to_pdf_bytes(svg_path)
     placement_rect = _fitted_svg_rect(target_rect, svg_path, top_align=top_align) if keep_proportion else target_rect
-    with fitz.open("pdf", pdf_bytes) as pdf_doc:
+    pdf_doc = fitz.open("pdf", pdf_bytes)
+    if source_docs is not None:
+        source_docs.append(pdf_doc)
+        page.show_pdf_page(placement_rect, pdf_doc, 0, keep_proportion=keep_proportion, overlay=True)
+        return
+    with pdf_doc:
         page.show_pdf_page(placement_rect, pdf_doc, 0, keep_proportion=keep_proportion, overlay=True)
 
 
@@ -3994,34 +4000,50 @@ def _place_chart_replacements_on_page(
     replacement_rects_are_final: bool = False,
 ) -> None:
     shared_side_scale = _shared_side_legend_scale(replacements)
-    for replacement in replacements:
-        top_align = _is_netqui_cartesian_replacement(replacement.kind)
-        enforce_plot_box = replacement_rects_are_final
-        if replacement_rects_are_final:
-            plot_placement_rect = fitz.Rect(replacement.rect)
-        elif _is_cartesian_replacement(replacement.kind):
-            enforce_plot_box = cartesian_figure_width is not None and cartesian_figure_height is not None
-            plot_placement_rect = _cartesian_svg_rect(
-                replacement.rect,
+    source_docs: list[fitz.Document] = []
+    try:
+        for replacement in replacements:
+            top_align = _is_netqui_cartesian_replacement(replacement.kind)
+            enforce_plot_box = replacement_rects_are_final
+            if replacement_rects_are_final:
+                plot_placement_rect = fitz.Rect(replacement.rect)
+            elif _is_cartesian_replacement(replacement.kind):
+                enforce_plot_box = cartesian_figure_width is not None and cartesian_figure_height is not None
+                plot_placement_rect = _cartesian_svg_rect(
+                    replacement.rect,
+                    replacement.asset_path,
+                    top_align=top_align,
+                    figure_width=cartesian_figure_width,
+                    figure_height=cartesian_figure_height,
+                )
+            elif _is_polar_replacement(replacement.kind):
+                enforce_plot_box = polar_figure_size is not None
+                plot_placement_rect = _polar_svg_rect(
+                    replacement.rect,
+                    replacement.asset_path,
+                    top_align=top_align,
+                    figure_size=polar_figure_size,
+                )
+            else:
+                plot_placement_rect = _fitted_svg_rect(replacement.rect, replacement.asset_path, top_align=top_align)
+            _place_svg_as_vector(
+                page,
+                plot_placement_rect,
                 replacement.asset_path,
-                top_align=top_align,
-                figure_width=cartesian_figure_width,
-                figure_height=cartesian_figure_height,
+                keep_proportion=not enforce_plot_box,
+                source_docs=source_docs,
             )
-        elif _is_polar_replacement(replacement.kind):
-            enforce_plot_box = polar_figure_size is not None
-            plot_placement_rect = _polar_svg_rect(
-                replacement.rect,
-                replacement.asset_path,
-                top_align=top_align,
-                figure_size=polar_figure_size,
-            )
-        else:
-            plot_placement_rect = _fitted_svg_rect(replacement.rect, replacement.asset_path, top_align=top_align)
-        _place_svg_as_vector(page, plot_placement_rect, replacement.asset_path, keep_proportion=not enforce_plot_box)
-        if replacement.legend_rect is not None and replacement.legend_asset_path is not None:
-            legend_scale = None if _is_polar_radiation_replacement(replacement.kind) else shared_side_scale
-            _place_svg_as_vector(page, _legend_target_rect(replacement, legend_scale, plot_placement_rect), replacement.legend_asset_path)
+            if replacement.legend_rect is not None and replacement.legend_asset_path is not None:
+                legend_scale = None if _is_polar_radiation_replacement(replacement.kind) else shared_side_scale
+                _place_svg_as_vector(
+                    page,
+                    _legend_target_rect(replacement, legend_scale, plot_placement_rect),
+                    replacement.legend_asset_path,
+                    source_docs=source_docs,
+                )
+    finally:
+        for source_doc in source_docs:
+            source_doc.close()
 
 
 def _apply_chart_replacements_to_page(
@@ -4076,7 +4098,10 @@ def _redraw_chart_headings(page: fitz.Page, headings: list[TextSpan]) -> None:
     for span in _extract_page_spans(page):
         if _normalized_span_text(span.text) in labels:
             page.add_redact_annot(_expand_rect(fitz.Rect(span.bbox), padding=1.0), fill=None)
-    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+    page.apply_redactions(
+        images=fitz.PDF_REDACT_IMAGE_NONE,
+        graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+    )
 
     registered_fonts: set[str] = set()
     for heading in headings:
