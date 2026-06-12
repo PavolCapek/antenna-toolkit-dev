@@ -112,6 +112,9 @@ def numeric_cell(value: float, digits: Optional[int] = None) -> Optional[float]:
 
 # --- beam efficiency helpers (aligned with beam_band.py) ---
 
+_DEFAULT_NULL_MIN_DEPTH_DB = 20.0
+_DEFAULT_NULL_MIN_SEPARATION_DEG = 3.0
+
 def _odd_or_next(n: int) -> int:
     return n if n % 2 == 1 else (n + 1)
 
@@ -131,25 +134,82 @@ def _rolling_median(x: np.ndarray, w: int) -> np.ndarray:
         return np.convolve(xp, kernel, mode='valid')
 
 
-def _first_null_bounds_along_theta(cut: np.ndarray, peak_idx: int) -> tuple[int, int]:
-    """Find nearest local minima (first nulls) to the left/right of peak_idx."""
+def _find_valid_null_along_theta(
+    cut: np.ndarray,
+    thetas_deg: np.ndarray,
+    peak_idx: int,
+    direction: int,
+    *,
+    null_min_depth_db: float = _DEFAULT_NULL_MIN_DEPTH_DB,
+    null_min_separation_deg: float = _DEFAULT_NULL_MIN_SEPARATION_DEG,
+) -> int:
+    """Find the first real null from peak_idx, ignoring shallow main-beam ripple."""
     n = cut.size
-    iL = peak_idx
-    for i in range(peak_idx - 1, 1, -1):
-        if cut[i - 1] >= cut[i] <= cut[i + 1]:
-            iL = i
-            break
-    iR = peak_idx
-    for i in range(peak_idx + 1, n - 1):
-        if cut[i - 1] >= cut[i] <= cut[i + 1]:
-            iR = i
-            break
+    if n == 0:
+        return 0
+    if direction not in (-1, 1):
+        raise ValueError("direction must be -1 or 1")
+
+    edge_idx = 0 if direction < 0 else n - 1
+    peak_power = float(cut[peak_idx])
+    if not np.isfinite(peak_power) or peak_power <= 0:
+        return edge_idx
+
+    theta_peak = float(thetas_deg[peak_idx])
+    min_sep = max(0.0, float(null_min_separation_deg))
+    depth_db = abs(float(null_min_depth_db))
+
+    start = peak_idx + direction
+    stop = 0 if direction < 0 else n - 1
+    if start < 1 or start > n - 2:
+        return edge_idx
+
+    first_deep_idx: int | None = None
+    for i in range(start, stop, direction):
+        if abs(float(thetas_deg[i]) - theta_peak) < min_sep:
+            continue
+        rel_db = 10.0 * math.log10(max(float(cut[i]), 1e-300) / peak_power)
+        if first_deep_idx is None and rel_db <= -depth_db:
+            first_deep_idx = i
+        if cut[i - 1] >= cut[i] <= cut[i + 1] and rel_db <= -depth_db:
+            return i
+
+    return first_deep_idx if first_deep_idx is not None else edge_idx
+
+
+def _first_null_bounds_along_theta(
+    cut: np.ndarray,
+    thetas_deg: np.ndarray,
+    peak_idx: int,
+    *,
+    null_min_depth_db: float = _DEFAULT_NULL_MIN_DEPTH_DB,
+    null_min_separation_deg: float = _DEFAULT_NULL_MIN_SEPARATION_DEG,
+) -> tuple[int, int]:
+    """Find first valid null bounds to the left/right of peak_idx."""
+    iL = _find_valid_null_along_theta(
+        cut,
+        thetas_deg,
+        peak_idx,
+        -1,
+        null_min_depth_db=null_min_depth_db,
+        null_min_separation_deg=null_min_separation_deg,
+    )
+    iR = _find_valid_null_along_theta(
+        cut,
+        thetas_deg,
+        peak_idx,
+        1,
+        null_min_depth_db=null_min_depth_db,
+        null_min_separation_deg=null_min_separation_deg,
+    )
     return iL, iR
 
 
 def build_mainlobe_mask(power_lin: np.ndarray, thetas_deg: np.ndarray,
-                        smooth_w: int = 1, theta_window_deg: float = 8.0) -> tuple[np.ndarray, list[tuple[int, float, float]]]:
-    """Return (mask, bounds) where mask=1 in main-lobe between first nulls for each φ cut.
+                        smooth_w: int = 1, theta_window_deg: float = 8.0,
+                        null_min_depth_db: float = _DEFAULT_NULL_MIN_DEPTH_DB,
+                        null_min_separation_deg: float = _DEFAULT_NULL_MIN_SEPARATION_DEG) -> tuple[np.ndarray, list[tuple[int, float, float]]]:
+    """Return (mask, bounds) where mask=1 in main-lobe between first valid nulls for each φ cut.
     bounds: list of (ip, theta_L_deg, theta_R_deg) for inspection.
     """
     Nphi, Ntheta = power_lin.shape
@@ -173,7 +233,13 @@ def build_mainlobe_mask(power_lin: np.ndarray, thetas_deg: np.ndarray,
             cand_idx = np.arange(Ntheta)
 
         local_peak_idx = int(cand_idx[np.argmax(cut[cand_idx])])
-        iL, iR = _first_null_bounds_along_theta(cut, local_peak_idx)
+        iL, iR = _first_null_bounds_along_theta(
+            cut,
+            thetas_deg,
+            local_peak_idx,
+            null_min_depth_db=null_min_depth_db,
+            null_min_separation_deg=null_min_separation_deg,
+        )
         mask[ip, iL:iR + 1] = 1.0
         bounds.append((ip, float(thetas_deg[iL]), float(thetas_deg[iR])))
 
