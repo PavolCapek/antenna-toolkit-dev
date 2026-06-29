@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import re
 from pathlib import Path
@@ -18,14 +17,8 @@ from beamwidth_xlsx import (
     nearest_phi_index_circular,
     read_ffs_broadband,
 )
+from pipeline.progress import emit_progress
 from plot_vswr import calc_vswr, pair_to_complex, read_touchstone
-
-
-def emit_progress(stage: str, current: int, total: int, label: str) -> None:
-    print(
-        f"AT_PROGRESS {json.dumps({'stage': stage, 'current': int(current), 'total': int(total), 'label': label})}",
-        flush=True,
-    )
 
 
 def infer_polarization_label(path: Path) -> str:

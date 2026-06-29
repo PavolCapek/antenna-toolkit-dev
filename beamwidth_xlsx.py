@@ -29,22 +29,16 @@ Examples:
 from __future__ import annotations
 import argparse
 import csv
-import json
 import math
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from pipeline.progress import emit_progress
 
 Row = Tuple[float, float, complex, complex]  # (phi_deg, theta_deg, Etheta, Ephi)
 
-
-def emit_progress(stage: str, current: int, total: int, label: str) -> None:
-    print(
-        f"AT_PROGRESS {json.dumps({'stage': stage, 'current': int(current), 'total': int(total), 'label': label})}",
-        flush=True,
-    )
 
 # ---------------------------
 # Helpers

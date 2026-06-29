@@ -17,13 +17,10 @@ Author: ChatGPT
 """
 
 import argparse
-import json
 import math
 from pathlib import Path
 from typing import List, Tuple
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter, FixedFormatter, FixedLocator, NullFormatter, NullLocator
 from plot import (
     CARTESIAN_FIGURE_HEIGHT_IN,
     CARTESIAN_FIGURE_WIDTH_IN,
@@ -37,29 +34,29 @@ from plot import (
 )
 from datasheet.artifacts import build_asset_record, update_artifact_manifest
 from legend_utils import apply_legend_labels, parse_legend_labels
+from pipeline.progress import emit_progress
+from plotting.cartesian import render_cartesian_plot
+from plotting.common import (
+    apply_frequency_ticks,
+    build_step_ticks,
+    color_for_index as _color_for_index,
+    format_frequency_tick,
+    parse_color_list as _parse_color_list,
+    set_line_colors as _set_line_colors,
+    smooth_series,
+)
 
 # ------------------ global color scheme (kept from gain plot) ------------------
 DEFAULT_SOLID_COLORS = ["#2bb6f6", "#f5a623"]
 SOLID_COLORS = DEFAULT_SOLID_COLORS[:]
-
-
-def emit_progress(stage: str, current: int, total: int, label: str) -> None:
-    print(
-        f"AT_PROGRESS {json.dumps({'stage': stage, 'current': int(current), 'total': int(total), 'label': label})}",
-        flush=True,
-    )
 DASHED_COLORS = SOLID_COLORS[:]  # same hues for dashed variants
 
 def color_for_index(style: str, idx: int) -> str:
-    base = SOLID_COLORS if style == '-' else DASHED_COLORS
-    return base[idx % len(base)] if base else None
+    return _color_for_index(style, idx, SOLID_COLORS, DASHED_COLORS)
 
 
 def set_line_colors(colors: list[str]) -> None:
-    clean = [c.strip() for c in colors if c and c.strip()]
-    palette = clean or DEFAULT_SOLID_COLORS[:]
-    SOLID_COLORS[:] = palette
-    DASHED_COLORS[:] = palette[:]
+    _set_line_colors(colors, DEFAULT_SOLID_COLORS, SOLID_COLORS, DASHED_COLORS)
 
 # ------------------ parsing & math ------------------
 
@@ -84,28 +81,6 @@ def parse_freq_with_units(s: str) -> float:
         mult = 1e9; s = s[:-1]
     return float(s) * mult
 
-
-def format_frequency_tick(value: float, _pos=None) -> str:
-    if not np.isfinite(value):
-        return ""
-    text = f"{float(value):.6f}".rstrip("0").rstrip(".")
-    if "." not in text:
-        text += ".0"
-    return text
-
-
-def apply_frequency_ticks(ax, ticks: np.ndarray | None, x_log: bool) -> None:
-    if ticks is not None:
-        ticks = np.asarray(ticks, dtype=float)
-        ax.xaxis.set_major_locator(FixedLocator(ticks))
-        ax.xaxis.set_major_formatter(FixedFormatter([format_frequency_tick(v) for v in ticks]))
-    else:
-        ax.xaxis.set_major_formatter(FuncFormatter(format_frequency_tick))
-    if x_log:
-        ax.xaxis.set_minor_formatter(NullFormatter())
-        if ticks is not None:
-            ax.xaxis.set_minor_locator(NullLocator())
-        ax.get_xaxis().get_offset_text().set_visible(False)
 
 def read_touchstone(filepath: str) -> Tuple[np.ndarray, np.ndarray, str, float, int]:
     """Return (freqs_Hz, data, fmt, z0, nports) for .s1p/.s2p Touchstone files."""
@@ -185,34 +160,8 @@ def calc_vswr(gamma: np.ndarray) -> np.ndarray:
     mag = np.clip(mag, 0, 0.999999)
     return (1 + mag) / (1 - mag)
 
-def smooth_series(y: np.ndarray, window: int) -> np.ndarray:
-    """Centered moving average; window<=1 disables smoothing."""
-    if window is None or window <= 1:
-        return np.asarray(y, dtype=float)
-    import pandas as pd
-    return pd.Series(y, dtype="float64").rolling(window=window, center=True, min_periods=1).mean().to_numpy()
-
-
 def parse_color_list(raw: str | None) -> list[str]:
-    if not raw:
-        return DEFAULT_SOLID_COLORS[:]
-    return [item.strip() for item in raw.split(",") if item.strip()] or DEFAULT_SOLID_COLORS[:]
-
-
-def build_step_ticks(xmin: float, xmax: float, step: float) -> np.ndarray | None:
-    if step is None or not np.isfinite(step) or step <= 0:
-        return None
-    eps = max(abs(step), 1.0) * 1e-9
-    start = math.ceil((xmin - eps) / step) * step
-    ticks = np.arange(start, xmax + eps, step)
-    if ticks.size == 0:
-        ticks = np.array([xmin, xmax], dtype=float)
-    ticks = np.round(ticks, 10)
-    if not np.isclose(ticks[0], xmin, atol=eps, rtol=0.0):
-        ticks = np.insert(ticks, 0, round(float(xmin), 10))
-    if not np.isclose(ticks[-1], xmax, atol=eps, rtol=0.0):
-        ticks = np.append(ticks, round(float(xmax), 10))
-    return ticks
+    return _parse_color_list(raw, DEFAULT_SOLID_COLORS)
 
 # ------------------ shared plotting utility (cartesian) ------------------
 
@@ -226,60 +175,35 @@ def plot_xy(x, series_list, names, out_path, y_label,
             line_width: float = DEFAULT_PLOT_LINE_WIDTH,
             figure_width: float = CARTESIAN_FIGURE_WIDTH_IN,
             figure_height: float = CARTESIAN_FIGURE_HEIGHT_IN):
-    fig, ax = plt.subplots(figsize=(figure_width, figure_height), dpi=120)
-    ax.set_facecolor("white")
-    ax.grid(True, which="both", axis="both", color=grid_color, linewidth=grid_line_width)
-    ax.set_axisbelow(True)
-    for spine in ax.spines.values():
-        spine.set_color(grid_color)
-        spine.set_linewidth(grid_line_width)
-
-    xmin = float(x_min) if x_min is not None else float(np.nanmin(x))
-    xmax = float(x_max) if x_max is not None else float(np.nanmax(x))
-    if x_log:
-        ax.set_xscale("log")
-    ax.set_xlim(xmin, xmax)
-    ticks = None
-    if x_ticks is not None:
-        ticks = np.asarray(x_ticks, dtype=float)
-    elif x_step is not None and np.isfinite(xmin) and np.isfinite(xmax):
-        ticks = build_step_ticks(float(xmin), float(xmax), float(x_step))
-    apply_frequency_ticks(ax, ticks, x_log)
-    ax.set_xlim(xmin, xmax)
-
-    if y_min is not None and y_max is not None:
-        ax.set_ylim(y_min, y_max)
-    if y_step is not None and y_min is not None and y_max is not None:
-        ax.set_yticks(np.arange(y_min, y_max + 1e-9, y_step))
-
-    ax.set_xlabel("Frequency / GHz", color=grid_color, fontsize=font_size)
-    ax.set_ylabel(y_label, color=grid_color, fontsize=font_size)
-    ax.tick_params(colors=grid_color, labelsize=font_size, width=grid_line_width)
-
-    lines = []
-    for i, y in enumerate(series_list):
-        ysm = smooth_series(np.asarray(y, dtype=float), window=smooth_window)
-        st_in = styles[i] if styles and i < len(styles) else "-"
-        color_in = colors[i] if colors and i < len(colors) else None
-        ln, = ax.plot(x, ysm, linewidth=line_width, linestyle=st_in, solid_capstyle="round", color=color_in)
-        lines.append(ln)
-
-    legend_items = [(name, ln.get_color(), ln.get_linestyle()) for name, ln in zip(names, lines)]
-
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    plt.tight_layout()
-    fig.savefig(out_path, format="svg", bbox_inches="tight")
-    plt.close(fig)
-    legend_path = export_stacked_line_legend(
-        legend_items,
+    return render_cartesian_plot(
+        x,
+        series_list,
+        names,
         out_path,
-        ncol=1,
-        fontsize=legend_font_size,
-        linewidth=line_width,
-        row_sep=STACKED_LEGEND_ROW_SEP,
-        entry_sep=STACKED_LEGEND_ENTRY_SEP,
+        y_label,
+        export_legend=export_stacked_line_legend,
+        grid_color=grid_color,
+        styles=styles,
+        colors=colors,
+        y_min=y_min,
+        y_max=y_max,
+        y_step=y_step,
+        smooth_window=smooth_window,
+        x_step=x_step,
+        x_ticks=x_ticks,
+        x_log=x_log,
+        x_min=x_min,
+        x_max=x_max,
+        font_size=font_size,
+        legend_font_size=legend_font_size,
+        grid_line_width=grid_line_width,
+        line_width=line_width,
+        legend_line_width=line_width,
+        legend_row_sep=STACKED_LEGEND_ROW_SEP,
+        legend_entry_sep=STACKED_LEGEND_ENTRY_SEP,
+        figure_width=figure_width,
+        figure_height=figure_height,
     )
-    return out_path, str(legend_path) if legend_path is not None else None
 
 
 def interpolate_complex_trace(freqs_hz: np.ndarray, trace: np.ndarray, target_hz: float) -> complex:

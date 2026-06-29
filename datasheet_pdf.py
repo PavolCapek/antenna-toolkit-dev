@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import re
 from collections import Counter
@@ -23,6 +22,19 @@ from datasheet.models import (
     TECHNICAL_DATA_RESERVED_KEYS,
     DatasheetModel,
     TechnicalDataEntry,
+    _as_float as _model_as_float,
+    _format_beamwidth_text as _model_format_beamwidth_text,
+    _format_decimal_with_suffix as _model_format_decimal_with_suffix,
+    _format_frequency_range as _model_format_frequency_range,
+    _format_int_with_suffix as _model_format_int_with_suffix,
+    _format_single_beamwidth_text as _model_format_single_beamwidth_text,
+    _format_vswr_limit as _model_format_vswr_limit,
+    _infer_polarization_from_source_file as _model_infer_polarization_from_source_file,
+    _load_sheet as _model_load_sheet,
+    _normalize_polarization as _model_normalize_polarization,
+    _polarization_text as _model_polarization_text,
+    _round_half_up as _model_round_half_up,
+    _round_half_up_to_decimals as _model_round_half_up_to_decimals,
     build_performance_fields,
     load_technical_data_entries,
     normalize_technical_key,
@@ -31,6 +43,7 @@ from datasheet.models import (
     text_or_placeholder,
 )
 from datasheet.service import build_render_context
+from datasheet.technical_data import _format_cell as _technical_format_cell
 from datasheet.tables import (
     ResolvedDatasheetTables,
     canonical_key_for_template,
@@ -51,6 +64,7 @@ from datasheet.layouts.netqui_1pol import (
 )
 from datasheet.layouts.rfe import order_chart_slots_first_two_then_x
 from plotting.config import CARTESIAN_FIGURE_HEIGHT_IN, CARTESIAN_FIGURE_WIDTH_IN, POLAR_FIGURE_SIZE_IN
+from pipeline.progress import emit_progress
 
 fitz.TOOLS.mupdf_display_errors(False)
 fitz.TOOLS.mupdf_display_warnings(False)
@@ -91,12 +105,6 @@ PERFORMANCE_FIELD_KEYS = {
 }
 
 
-def emit_progress(stage: str, current: int, total: int, label: str) -> None:
-    print(
-        f"AT_PROGRESS {json.dumps({'stage': stage, 'current': int(current), 'total': int(total), 'label': label})}",
-        flush=True,
-    )
-
 PDF_METADATA_KEYS = (
     "title",
     "author",
@@ -113,101 +121,51 @@ PDF_PRODUCER = "Antenna Toolkit (PyMuPDF)"
 
 
 def _load_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
-    try:
-        return pd.read_excel(path, sheet_name=sheet_name)
-    except ValueError as exc:
-        raise ValueError(f"Workbook is missing required sheet '{sheet_name}'.") from exc
+    return _model_load_sheet(path, sheet_name)
 
 
 def _as_float(value: object) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(number):
-        return None
-    return number
+    return _model_as_float(value)
 
 
 def _round_half_up(value: float) -> int:
-    return int(math.floor(float(value) + 0.5))
+    return _model_round_half_up(value)
 
 
 def _round_half_up_to_decimals(value: float, decimals: int) -> float:
-    factor = 10 ** decimals
-    scaled = float(value) * factor
-    if scaled >= 0:
-        return math.floor(scaled + 0.5) / factor
-    return math.ceil(scaled - 0.5) / factor
+    return _model_round_half_up_to_decimals(value, decimals)
 
 
 def _format_int_with_suffix(value: float, suffix: str) -> str:
-    return f"{_round_half_up(value)} {suffix}".strip()
+    return _model_format_int_with_suffix(value, suffix)
 
 
 def _format_decimal_with_suffix(value: float, suffix: str, decimals: int) -> str:
-    rounded = _round_half_up_to_decimals(value, decimals)
-    return f"{rounded:.{decimals}f} {suffix}".strip()
+    return _model_format_decimal_with_suffix(value, suffix, decimals)
 
 
 def _format_frequency_range(fmin_ghz: float, fmax_ghz: float) -> str:
-    return f"{_round_half_up(fmin_ghz * 1000.0)} - {_round_half_up(fmax_ghz * 1000.0)} MHz"
+    return _model_format_frequency_range(fmin_ghz, fmax_ghz)
 
 
 def _format_beamwidth_text(horizontal: pd.Series, vertical: pd.Series, three_db_col: str, six_db_col: str) -> str:
-    return (
-        f"H {_round_half_up(float(horizontal[three_db_col]))}\N{DEGREE SIGN}, "
-        f"V {_round_half_up(float(vertical[three_db_col]))}\N{DEGREE SIGN} / "
-        f"H {_round_half_up(float(horizontal[six_db_col]))}\N{DEGREE SIGN}, "
-        f"V {_round_half_up(float(vertical[six_db_col]))}\N{DEGREE SIGN}"
-    )
+    return _model_format_beamwidth_text(horizontal, vertical, three_db_col, six_db_col)
 
 
 def _format_single_beamwidth_text(row: pd.Series, three_db_col: str, six_db_col: str) -> str:
-    return (
-        f"{_round_half_up(float(row[three_db_col]))}\N{DEGREE SIGN} / "
-        f"{_round_half_up(float(row[six_db_col]))}\N{DEGREE SIGN}"
-    )
+    return _model_format_single_beamwidth_text(row, three_db_col, six_db_col)
 
 
 def _format_vswr_limit(max_vswr: float) -> str:
-    value = _round_half_up_to_decimals(max_vswr, 1)
-    return f"<{value:.1f}"
+    return _model_format_vswr_limit(max_vswr)
 
 
 def _normalize_polarization(value: object) -> str:
-    text = str(value or "").strip().lower()
-    if text in {"horizontal", "h"}:
-        return "horizontal"
-    if text in {"vertical", "v"}:
-        return "vertical"
-    if text == "rhcp":
-        return "rhcp"
-    if text == "lhcp":
-        return "lhcp"
-    return text
+    return _model_normalize_polarization(value)
 
 
 def _infer_polarization_from_source_file(path_text: object) -> str:
-    stem = Path(str(path_text or "")).stem
-    tokens = [token.lower() for token in re.split(r"[_\-\s]+", stem) if token]
-    aliases = {
-        "horizontal": "Horizontal",
-        "vertical": "Vertical",
-        "rhcp": "RHCP",
-        "lhcp": "LHCP",
-        "hcp": "HCP",
-        "vpol": "Vertical",
-        "hpol": "Horizontal",
-    }
-    for token in reversed(tokens):
-        if token in aliases:
-            return aliases[token]
-        if token == "h":
-            return "Horizontal"
-        if token == "v":
-            return "Vertical"
-    return stem
+    return _model_infer_polarization_from_source_file(path_text)
 
 
 def _polarization_keys_from_source_files(ffs_summary: pd.DataFrame) -> pd.Series:
@@ -215,22 +173,7 @@ def _polarization_keys_from_source_files(ffs_summary: pd.DataFrame) -> pd.Series
 
 
 def _polarization_text(ffs_summary: pd.DataFrame) -> str:
-    values = {value for value in _polarization_keys_from_source_files(ffs_summary) if str(value).strip()}
-    if {"horizontal", "vertical"}.issubset(values):
-        return "Dual Linear H + V"
-    if {"rhcp", "lhcp"}.issubset(values):
-        return "Dual Circular RHCP + LHCP"
-    if "horizontal" in values:
-        return "Linear H"
-    if "vertical" in values:
-        return "Linear V"
-    if "rhcp" in values:
-        return "RHCP"
-    if "lhcp" in values:
-        return "LHCP"
-    if len(ffs_summary) == 1:
-        return "Single Polarization"
-    raise ValueError("Unable to derive polarization from the extracted workbook.")
+    return _model_polarization_text(ffs_summary)
 
 
 def build_replacements_from_workbook(extract_workbook: Path) -> dict[str, str]:
@@ -242,18 +185,7 @@ def _normalize_technical_key(value: object) -> str:
 
 
 def _format_technical_cell(value: object) -> str:
-    if value is None:
-        return ""
-    try:
-        if pd.isna(value):
-            return ""
-    except (TypeError, ValueError):
-        pass
-    if isinstance(value, float):
-        if math.isfinite(value) and value.is_integer():
-            return str(int(value))
-        return f"{value:g}"
-    return str(value).strip()
+    return _technical_format_cell(value)
 
 
 def load_technical_data_workbook(path: Path) -> list[TechnicalDataEntry]:

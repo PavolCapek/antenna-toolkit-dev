@@ -1,4 +1,3 @@
-ttkbootstrap
 numpy
 pandas
 matplotlib
