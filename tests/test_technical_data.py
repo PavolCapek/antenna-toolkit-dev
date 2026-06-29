@@ -176,6 +176,57 @@ class TechnicalDataParserTests(unittest.TestCase):
         with self.assertRaisesRegex(TechnicalDataError, "multiple product rows"):
             load_technical_data_entries(self.workbook)
 
+    def test_rfe_v2_profile_reads_wind_speed_from_wind_load_label(self) -> None:
+        pd.DataFrame(
+            [
+                ["General", None, None],
+                ["Product name", None, "20Â° Symmetrical Horn WB"],
+                ["Product ID", None, "SH20WB"],
+                ["Performance", None, None],
+                ["Polarization", None, "Dual Linear H + V"],
+                ["Wind", None, None],
+                ["Wind Load at 160km/h [N]", "Front", 83],
+                [None, "Side", 66],
+                ["Wind Survival [km/h]", None, 160],
+                ["Dimensions", None, None],
+                ["Technical Data", None, None],
+            ]
+        ).to_excel(self.workbook, sheet_name="Sheet1", index=False, header=False)
+
+        entries = load_technical_data_entries(
+            self.workbook,
+            canonical_key_factory=canonical_field_key,
+            technical_data_profile="rfe",
+        )
+        by_key = {entry.canonical_key: entry for entry in entries}
+
+        self.assertEqual(by_key["wind load"].value, "83/66 N - Front/Side at 160 km/h (100 mph)")
+
+    def test_rfe_v2_profile_defaults_wind_load_speed_to_160_kmh(self) -> None:
+        pd.DataFrame(
+            [
+                ["General", None, None],
+                ["Product name", None, "Sample Antenna"],
+                ["Product ID", None, "SAMPLE"],
+                ["Performance", None, None],
+                ["Polarization", None, "Dual Linear H + V"],
+                ["Wind", None, None],
+                ["Wind Load [N]", "Front", 83],
+                [None, "Side", 66],
+                ["Dimensions", None, None],
+                ["Technical Data", None, None],
+            ]
+        ).to_excel(self.workbook, sheet_name="Sheet1", index=False, header=False)
+
+        entries = load_technical_data_entries(
+            self.workbook,
+            canonical_key_factory=canonical_field_key,
+            technical_data_profile="rfe",
+        )
+        by_key = {entry.canonical_key: entry for entry in entries}
+
+        self.assertEqual(by_key["wind load"].value, "83/66 N - Front/Side at 160 km/h (100 mph)")
+
 
 if __name__ == "__main__":
     unittest.main()

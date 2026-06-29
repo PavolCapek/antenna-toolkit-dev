@@ -10,6 +10,7 @@ import pandas as pd
 
 
 SUPPORTED_TECHNICAL_DATA_SUFFIXES = {".xlsx", ".xlsm"}
+DEFAULT_WIND_LOAD_SPEED_KMH = 160.0
 KNOWN_SECTION_KEYS = {
     "technical",
     "technical data",
@@ -337,10 +338,23 @@ def _format_wind_load(values: dict[str, object], wind_speed: object | None) -> s
     front_side = _format_front_side(values, metric_unit="N", imperial_factor=1.0, imperial_unit="N", decimals=0)
     text = re.sub(r"\s+\([^)]*\)$", "", front_side)
     speed = _as_float(wind_speed)
+    if speed is None:
+        speed = DEFAULT_WIND_LOAD_SPEED_KMH
     if speed is not None:
         mph = round(speed * 0.6213711922 / 5.0) * 5.0
         text = f"{text} at {_format_number(speed)} km/h ({_format_number(mph)} mph)"
     return text
+
+
+def _wind_load_speed_from_label(label: str) -> float | None:
+    match = re.search(r"(\d+(?:[,.]\d+)?)\s*km\s*/?\s*h\b", label, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return _as_float(match.group(1))
+
+
+def _is_wind_load_label(label_key: str) -> bool:
+    return label_key == "wind load n" or (label_key.startswith("wind load at ") and label_key.endswith(" n"))
 
 
 def _format_adjustment(values: dict[str, object]) -> str:
@@ -394,6 +408,9 @@ def _parse_rfe_v2_rows(data: pd.DataFrame, *, canonical_key_factory) -> list[Tec
         if qualifier:
             rows_by_label.setdefault(label, {})[qualifier_key] = value
             section_by_label.setdefault(label, section)
+            embedded_wind_speed = _wind_load_speed_from_label(label)
+            if embedded_wind_speed is not None:
+                wind_speed = embedded_wind_speed
         elif value:
             simple_rows.append((section, "Antenna Name" if label_key == "product name" else label, value))
 
@@ -409,7 +426,7 @@ def _parse_rfe_v2_rows(data: pd.DataFrame, *, canonical_key_factory) -> list[Tec
             combined.append((section_for_label, "Pole Mounting Diameter", _format_pole_diameter(values)))
         elif key == "temperature":
             combined.append((section_for_label, "Temperature", _format_temperature(values)))
-        elif key == "wind load n":
+        elif _is_wind_load_label(key):
             combined.append((section_for_label, "Wind Load", _format_wind_load(values, wind_speed)))
         elif key in {"effective projected area cm2", "effective projected area cm"}:
             combined.append((section_for_label, "Effective Projected Area", _format_front_side(values, metric_unit="cm²", imperial_factor=0.15500031, imperial_unit="in²", decimals=1)))
