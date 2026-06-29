@@ -52,6 +52,28 @@ python -m pip install PySide6
 
 ## Testing
 
+Use the smallest test tier that covers the change. Avoid one broad `python -m pytest` run as the default local signal.
+
+### Test Tiers
+
+| Tier | Use When | Command |
+| --- | --- | --- |
+| Smoke | Python files changed | `python -m compileall -q <changed .py files>` |
+| Targeted | Normal development loop | `python tools/test_targeted.py` |
+| Quick broad | You want broad non-GUI coverage | `python -m pytest -m "not qt_slow" -q` |
+| GUI targeted | Studio behavior changed | Run exact node ids or small `-k` chunks from `tools/test_targeted.py` |
+| Export acceptance | Datasheet/PDF/plot-size output changed | `python -m pytest -m export_acceptance -q` |
+| Release | Pre-release confidence | Split by subsystem; use `--durations=20` on slow groups |
+
+The recommender prints commands without running them:
+
+```powershell
+python tools/test_targeted.py
+python tools/test_targeted.py studio_run.py tests/test_studio_run_workflow.py
+```
+
+Studio GUI workflow tests are marked `qt_slow` and `gui_workflow`. They are valid tests, but they should usually be run by exact node id or small `-k` chunks. Do not run Qt-heavy Studio files in parallel.
+
 For datasheet PDF export, plot sizing, and Studio size-propagation changes, use the targeted acceptance suite:
 
 ```powershell

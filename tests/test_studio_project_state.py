@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import pytest
+
 from studio_dirty_state_base import *
+
+
+pytestmark = [pytest.mark.qt_slow, pytest.mark.gui_workflow]
 
 
 class StudioProjectStateTests(StudioDirtyStateBase):
