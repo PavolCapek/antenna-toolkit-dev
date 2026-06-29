@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QCoreApplication, QTimer
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox
 
@@ -112,6 +112,22 @@ class StudioRunMixin:
             if self.busy.maximum() != 100:
                 self.busy.setRange(0, 100)
             self.busy.setValue(value)
+
+    def _show_run_start_feedback(self, label: str) -> None:
+        self._clear_live_run_progress()
+        self._reset_live_stage_progress("", label)
+        self.set_busy(True)
+        self.run_info.setText(label)
+        self.status(label)
+        QCoreApplication.processEvents()
+
+    def _clear_run_start_feedback_if_idle(self) -> None:
+        if self.proc.running_cmd or self.proc.queue or self._pending_stage_keys or self._current_stage_key:
+            return
+        self._clear_live_run_progress()
+        self.set_busy(False)
+        self.run_info.setText("Idle")
+        self.refresh_derived_paths()
 
     def on_proc_progress(self, payload: dict[str, object]) -> None:
         stage_key = str(payload.get("stage", "")).strip().lower()
@@ -612,6 +628,7 @@ class StudioRunMixin:
     def run_full(self):
         if not self._run_preflight_passes(["beam", "extract", "plot", "vswr", "datasheet"], "Full Pipeline Preflight"):
             return
+        self._show_run_start_feedback("Preparing full pipeline...")
         context = self._build_run_context()
         out = str(context.beam_output)
         ffs = self.selected_ffs()
@@ -619,6 +636,7 @@ class StudioRunMixin:
         try:
             technical_data_workbook = self.prepare_technical_data_workbook()
         except GoogleSheetDownloadError as exc:
+            self._clear_run_start_feedback_if_idle()
             self.status(str(exc))
             return
 

@@ -382,6 +382,36 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--polar-figure-size") + 1], "7.75")
         self.assertEqual(queued_args["datasheet"][queued_args["datasheet"].index("--radiation-frequencies-ghz") + 1], "4.9,6")
 
+    def test_run_full_shows_progress_before_preparing_technical_data(self) -> None:
+        ffs_path = Path(self.temp_dir.name) / "sample.ffs"
+        s2p_path = Path(self.temp_dir.name) / "sample.s2p"
+        technical_data_path = Path(self.temp_dir.name) / "technical.xlsx"
+        ffs_path.write_text("ffs", encoding="utf-8")
+        s2p_path.write_text("s2p", encoding="utf-8")
+        technical_data_path.write_text("xlsx", encoding="utf-8")
+        self.window._add_ffs_files([str(ffs_path)])
+        self.window._set_touchstone(str(s2p_path))
+        self.window._set_technical_data(str(technical_data_path))
+        self.app.processEvents()
+        observed_feedback = False
+
+        def prepare_technical_data() -> str:
+            nonlocal observed_feedback
+            observed_feedback = True
+            self.assertFalse(self.window.busy.isHidden())
+            self.assertEqual(self.window.busy.maximum(), 0)
+            self.assertEqual(self.window.run_info.text(), "Preparing full pipeline...")
+            return str(technical_data_path)
+
+        with (
+            mock.patch.object(self.window, "prepare_technical_data_workbook", side_effect=prepare_technical_data),
+            mock.patch.object(self.window, "_save_project_if_dirty"),
+            mock.patch.object(self.window, "_enqueue_stage"),
+        ):
+            self.window.run_full()
+
+        self.assertTrue(observed_feedback)
+
     @pytest.mark.export_acceptance
     def test_run_plot_passes_beamwidth_db_colors(self) -> None:
         beam_output = self.window.deduced_beam_output()
