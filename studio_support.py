@@ -450,6 +450,14 @@ class Proc:
         if self.running_cmd is None:
             self._dequeue_and_start()
 
+    def enqueue_many(self, commands: List[list[str]]):
+        if not commands:
+            return
+        was_idle = self.running_cmd is None
+        self.queue.extend(commands)
+        if was_idle:
+            self._dequeue_and_start()
+
     def _dequeue_and_start(self):
         if not self.queue:
             self.running_cmd = None

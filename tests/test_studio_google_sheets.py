@@ -129,15 +129,16 @@ class StudioGoogleSheetsTests(StudioDirtyStateBase):
         queued: list[str] = []
         queued_args: dict[str, list[str]] = {}
 
+        def enqueue_batch(stage_commands: list[tuple[str, list[str]]]) -> None:
+            for stage_key, args in stage_commands:
+                queued.append(stage_key)
+                queued_args.setdefault(stage_key, args)
+
         with (
             mock.patch.object(self.window, "_run_preflight_passes", return_value=True),
             mock.patch.object(self.window, "_save_project_if_dirty"),
             mock.patch.object(self.window, "prepare_technical_data_workbook", return_value=str(cached_xlsx)),
-            mock.patch.object(
-                self.window,
-                "_enqueue_stage",
-                side_effect=lambda stage_key, args: (queued.append(stage_key), queued_args.setdefault(stage_key, args)),
-            ),
+            mock.patch.object(self.window, "_enqueue_stage_batch", side_effect=enqueue_batch),
         ):
             self.window.run_full()
 

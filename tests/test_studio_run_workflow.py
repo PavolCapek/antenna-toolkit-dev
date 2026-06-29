@@ -355,13 +355,14 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         queued: list[str] = []
         queued_args: dict[str, list[str]] = {}
 
+        def enqueue_batch(stage_commands: list[tuple[str, list[str]]]) -> None:
+            for stage_key, args in stage_commands:
+                queued.append(stage_key)
+                queued_args.setdefault(stage_key, args)
+
         with (
             mock.patch.object(self.window, "_save_project_if_dirty"),
-            mock.patch.object(
-                self.window,
-                "_enqueue_stage",
-                side_effect=lambda stage_key, args: (queued.append(stage_key), queued_args.setdefault(stage_key, args)),
-            ),
+            mock.patch.object(self.window, "_enqueue_stage_batch", side_effect=enqueue_batch),
         ):
             self.window.run_full()
 
@@ -411,7 +412,7 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         with (
             mock.patch.object(self.window, "prepare_technical_data_workbook", side_effect=prepare_technical_data),
             mock.patch.object(self.window, "_save_project_if_dirty"),
-            mock.patch.object(self.window, "_enqueue_stage"),
+            mock.patch.object(self.window, "_enqueue_stage_batch"),
         ):
             self.window.run_full()
 
@@ -512,6 +513,24 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
 
         self.window.on_proc_step_finished(["beamwidth_xlsx.py"], 0, None)
         self.assertEqual(self.window.busy.maximum(), 0)
+
+    def test_stage_batch_sets_total_before_starting_first_process(self) -> None:
+        commands = [
+            ("beam", ["python", "beamwidth_xlsx.py"]),
+            ("extract", ["python", "extract_data_xlsx.py"]),
+            ("plot", ["python", "plot.py"]),
+        ]
+
+        with (
+            mock.patch.object(self.window.proc, "enqueue_many") as enqueue_many,
+            mock.patch.object(self.window, "refresh_derived_paths") as refresh,
+        ):
+            self.window._enqueue_stage_batch(commands)
+
+        self.assertEqual(self.window._pending_stage_keys, ["beam", "extract", "plot"])
+        self.assertEqual(self.window._live_run_total_stages, 3)
+        enqueue_many.assert_called_once_with([args for _stage_key, args in commands])
+        refresh.assert_called_once()
 
     def test_delete_all_outputs_action_only_clears_generated_artifacts(self) -> None:
         beam_output = self.window.deduced_beam_output()

@@ -249,6 +249,17 @@ class StudioRunMixin:
         self.proc.enqueue(args)
         self.refresh_derived_paths()
 
+    def _enqueue_stage_batch(self, stage_commands: list[tuple[str, list[str]]]) -> None:
+        commands = [(stage_key, args) for stage_key, args in stage_commands if args]
+        if not commands:
+            return
+        if not (self.proc.running_cmd or self.proc.queue or self._pending_stage_keys or self._current_stage_key):
+            self._clear_live_run_progress()
+        self._pending_stage_keys.extend(stage_key for stage_key, _args in commands)
+        self._live_run_total_stages += len(commands)
+        self.proc.enqueue_many([args for _stage_key, args in commands])
+        self.refresh_derived_paths()
+
     def cancel_run(self) -> None:
         if not (self.proc.running_cmd or self.proc.queue):
             return
@@ -644,12 +655,11 @@ class StudioRunMixin:
             "--smooth", str(self.beam_smooth.value()),
             "--theta-window", str(self.theta_window.value())
         ]
-        self._save_project_if_dirty()
-        self._enqueue_stage("beam", args_beam)
+        stage_commands: list[tuple[str, list[str]]] = [("beam", args_beam)]
 
         args_extract = self.build_extract_args()
         if args_extract:
-            self._enqueue_stage("extract", args_extract)
+            stage_commands.append(("extract", args_extract))
 
         settings = self.current_preset_settings()
         context = self._build_run_context(settings=settings)
@@ -658,14 +668,14 @@ class StudioRunMixin:
             script_path=SCRIPT_PLOT,
             context=context,
         )
-        self._enqueue_stage("plot", args_plot)
+        stage_commands.append(("plot", args_plot))
 
         args_vswr = build_vswr_command(
             python_executable=which_python(),
             script_path=SCRIPT_VSWR,
             context=context,
         )
-        self._enqueue_stage("vswr", args_vswr)
+        stage_commands.append(("vswr", args_vswr))
         if args_extract:
             datasheet_args = build_datasheet_command(
                 python_executable=which_python(),
@@ -677,4 +687,6 @@ class StudioRunMixin:
                 radiation_frequencies_ghz=self.radiation_frequencies_arg(),
                 context=context,
             )
-            self._enqueue_stage("datasheet", datasheet_args)
+            stage_commands.append(("datasheet", datasheet_args))
+        self._save_project_if_dirty()
+        self._enqueue_stage_batch(stage_commands)
