@@ -4267,11 +4267,10 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if self._live_run_total_stages <= 0:
             return None
         fraction = self._live_stage_progress_fraction()
-        if self._current_stage_key and fraction is None:
+        if fraction is None:
             return None
         completed = float(self._live_run_completed_stages)
-        if fraction is not None:
-            completed += fraction
+        completed += fraction
         return int(round(max(0.0, min(1.0, completed / self._live_run_total_stages)) * 100))
 
     def _sync_live_progress_bar(self) -> None:

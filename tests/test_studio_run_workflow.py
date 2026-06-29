@@ -495,6 +495,24 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertFalse(self.window.btn_cancel.isHidden())
         self.assertFalse(self.window.readiness_action.isVisible())
 
+    def test_progress_bar_is_indeterminate_until_stage_reports_numeric_progress(self) -> None:
+        with mock.patch.object(self.window.proc, "enqueue"):
+            self.window._enqueue_stage("beam", ["python", "beamwidth_xlsx.py"])
+            self.window._enqueue_stage("extract", ["python", "extract_data_xlsx.py"])
+
+        self.window._sync_live_progress_bar()
+        self.assertEqual(self.window.busy.maximum(), 0)
+
+        self.window.on_proc_step_started(["beamwidth_xlsx.py"], "python beamwidth_xlsx.py")
+        self.assertEqual(self.window.busy.maximum(), 0)
+
+        self.window.on_proc_progress({"stage": "beam", "current": 1, "total": 4, "label": "Processing sample.ffs"})
+        self.assertEqual(self.window.busy.maximum(), 100)
+        self.assertEqual(self.window.busy.value(), 12)
+
+        self.window.on_proc_step_finished(["beamwidth_xlsx.py"], 0, None)
+        self.assertEqual(self.window.busy.maximum(), 0)
+
     def test_delete_all_outputs_action_only_clears_generated_artifacts(self) -> None:
         beam_output = self.window.deduced_beam_output()
         extract_output = self.window.deduced_extract_output()
