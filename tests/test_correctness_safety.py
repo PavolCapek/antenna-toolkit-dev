@@ -20,6 +20,7 @@ from plot_vswr import TouchstoneParseError, read_touchstone
 from project_store import ProjectStore
 from studio_support import Proc
 from workbook_metadata import build_workbook_manifest, write_workbook_manifest
+from datasheet.artifacts import load_artifact_manifest, rebase_artifact_paths
 
 
 def test_frequency_filter_returns_empty_when_window_has_no_overlap() -> None:
@@ -202,6 +203,26 @@ def test_atomic_publish_validates_nested_outputs_before_replacement(tmp_path: Pa
         stage.publish(["output.txt"], validate=["nested/missing.svg"])
 
     assert existing.read_bytes() == b"known-good"
+
+
+def test_artifact_paths_are_rebased_structurally_and_legacy_staging_paths_are_repaired(tmp_path: Path) -> None:
+    stage_root = tmp_path / ".plot-staging-test"
+    final_svg = tmp_path / "polar" / "gain.svg"
+    final_svg.parent.mkdir()
+    final_svg.write_text("<svg/>", encoding="utf-8")
+    staged_svg = stage_root / "polar" / "gain.svg"
+    charts = {"gain": {"svg": str(staged_svg)}}
+
+    rebased = rebase_artifact_paths(charts, stage_root, tmp_path)
+    assert rebased["gain"]["svg"] == str(final_svg)
+
+    manifest_path = tmp_path / "sample-artifacts.json"
+    manifest_path.write_text(
+        json.dumps({"schema_version": 2, "bookstem": "sample", "charts": charts}),
+        encoding="utf-8",
+    )
+    loaded = load_artifact_manifest(manifest_path, bookstem="sample")
+    assert loaded["charts"]["gain"]["svg"] == str(final_svg.resolve())
 
 
 def test_process_failure_clears_queue_and_reports_blocked_commands() -> None:

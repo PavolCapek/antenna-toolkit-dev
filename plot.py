@@ -63,6 +63,7 @@ from datasheet.artifacts import (
     artifact_manifest_path,
     build_asset_record,
     load_artifact_manifest,
+    rebase_artifact_paths,
     save_artifact_manifest,
     update_artifact_manifest,
 )
@@ -1472,7 +1473,7 @@ def main():
     collect_staged_assets(staged_manifest.get("charts", {}))
     final_manifest_path = artifact_manifest_path(final_out_dir, bookstem)
     merged_manifest = load_artifact_manifest(final_manifest_path, bookstem=bookstem)
-    staged_charts = staged_manifest.get("charts", {})
+    staged_charts = rebase_artifact_paths(staged_manifest.get("charts", {}), stage.root, final_out_dir)
     merged_charts = merged_manifest.setdefault("charts", {})
     plot_keys = {
         "gain",
@@ -1486,8 +1487,7 @@ def main():
     }
     for key in plot_keys:
         merged_charts[key] = staged_charts.get(key)
-    merged_text = json.dumps(merged_manifest).replace(str(stage.root), str(final_out_dir))
-    save_artifact_manifest(staged_manifest_path, json.loads(merged_text))
+    save_artifact_manifest(staged_manifest_path, merged_manifest)
 
     manifest_name = staged_manifest_path.name
     required = [entry.name for entry in stage.root.iterdir() if entry.name != manifest_name]

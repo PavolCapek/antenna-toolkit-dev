@@ -7,6 +7,7 @@ from typing import Any
 
 ARTIFACT_MANIFEST_SCHEMA_VERSION = 2
 ARTIFACT_MANIFEST_SUFFIX = "-artifacts.json"
+_ASSET_PATH_KEYS = {"svg", "legend_svg"}
 
 
 def artifact_manifest_path(out_dir: str | Path, bookstem: str) -> Path:
@@ -30,6 +31,52 @@ def _empty_manifest(bookstem: str) -> dict[str, Any]:
             "polar_planes": [],
         },
     }
+
+
+def rebase_artifact_paths(value: Any, source_root: str | Path, destination_root: str | Path) -> Any:
+    """Return a copy with staged SVG paths rebased to their published directory."""
+    source = Path(source_root).resolve()
+    destination = Path(destination_root).resolve()
+    if isinstance(value, dict):
+        rebased: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in _ASSET_PATH_KEYS and isinstance(item, str):
+                asset = Path(item).resolve()
+                try:
+                    relative = asset.relative_to(source)
+                except ValueError:
+                    rebased[key] = item
+                else:
+                    rebased[key] = str(destination / relative)
+            else:
+                rebased[key] = rebase_artifact_paths(item, source, destination)
+        return rebased
+    if isinstance(value, list):
+        return [rebase_artifact_paths(item, source, destination) for item in value]
+    return value
+
+
+def _repair_missing_staging_paths(value: Any, manifest_dir: Path) -> Any:
+    if isinstance(value, dict):
+        repaired: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in _ASSET_PATH_KEYS and isinstance(item, str):
+                asset = Path(item)
+                replacement = item
+                if asset.is_absolute() and not asset.exists():
+                    for parent in asset.parents:
+                        if parent.parent == manifest_dir and parent.name.startswith(".") and "-staging-" in parent.name:
+                            candidate = manifest_dir / asset.relative_to(parent)
+                            if candidate.exists():
+                                replacement = str(candidate.resolve())
+                            break
+                repaired[key] = replacement
+            else:
+                repaired[key] = _repair_missing_staging_paths(item, manifest_dir)
+        return repaired
+    if isinstance(value, list):
+        return [_repair_missing_staging_paths(item, manifest_dir) for item in value]
+    return value
 
 
 def load_artifact_manifest(path: str | Path, *, bookstem: str | None = None) -> dict[str, Any]:
@@ -59,6 +106,7 @@ def load_artifact_manifest(path: str | Path, *, bookstem: str | None = None) -> 
         }
     payload["schema_version"] = ARTIFACT_MANIFEST_SCHEMA_VERSION
     payload["bookstem"] = str(payload.get("bookstem") or bookstem or "")
+    payload["charts"] = _repair_missing_staging_paths(payload["charts"], manifest_path.resolve().parent)
     return payload
 
 

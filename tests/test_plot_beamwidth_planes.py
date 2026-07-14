@@ -373,6 +373,7 @@ class BeamwidthPlanePlotTests(unittest.TestCase):
             np.testing.assert_allclose(by_name["input-polar-h-plane-5.0-GHz.svg"][1]["series"], v_phi0["5.0 GHz"].to_numpy())
 
             manifest = json.loads((out_dir / "input-artifacts.json").read_text(encoding="utf-8"))
+            self.assertNotIn(".plot-staging-", json.dumps(manifest))
             polar_planes = manifest["charts"]["polar_planes"]
             self.assertEqual({record["plane"] for record in polar_planes}, {"e-plane", "h-plane"})
             self.assertEqual(len(polar_planes), 4)

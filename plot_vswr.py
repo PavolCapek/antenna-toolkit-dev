@@ -17,7 +17,6 @@ Author: ChatGPT
 """
 
 import argparse
-import json
 import math
 from pathlib import Path
 from typing import List, Tuple
@@ -37,6 +36,7 @@ from datasheet.artifacts import (
     artifact_manifest_path,
     build_asset_record,
     load_artifact_manifest,
+    rebase_artifact_paths,
     save_artifact_manifest,
     update_artifact_manifest,
 )
@@ -396,9 +396,13 @@ def main():
     staged_manifest = load_artifact_manifest(staged_manifest_path, bookstem=bookstem)
     final_manifest_path = artifact_manifest_path(final_out_path.parent, bookstem)
     merged_manifest = load_artifact_manifest(final_manifest_path, bookstem=bookstem)
-    merged_manifest.setdefault("charts", {})["vswr"] = staged_manifest.get("charts", {}).get("vswr")
-    merged_text = json.dumps(merged_manifest).replace(str(stage.root), str(final_out_path.parent))
-    save_artifact_manifest(staged_manifest_path, json.loads(merged_text))
+    staged_vswr = rebase_artifact_paths(
+        staged_manifest.get("charts", {}).get("vswr"),
+        stage.root,
+        final_out_path.parent,
+    )
+    merged_manifest.setdefault("charts", {})["vswr"] = staged_vswr
+    save_artifact_manifest(staged_manifest_path, merged_manifest)
     required = [final_out_path.name]
     final_legend_path = None
     if legend_path:
