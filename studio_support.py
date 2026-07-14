@@ -588,10 +588,22 @@ class Proc:
         self._flush_progress_buffers()
         self.win.set_busy(False)
         self.win.set_progress(None)
+        finished_cmd = list(self.running_cmd or [])
         if hasattr(self.win, "on_proc_step_finished"):
             try:
-                self.win.on_proc_step_finished(list(self.running_cmd or []), int(exit_code), exit_status)
+                self.win.on_proc_step_finished(finished_cmd, int(exit_code), exit_status)
             except Exception:
                 logger.warning("Run step-finished callback failed", exc_info=True)
+        if int(exit_code) != 0:
+            skipped_commands = [list(command) for command in self.queue]
+            self.queue.clear()
+            self.running_cmd = None
+            if hasattr(self.win, "on_proc_batch_aborted"):
+                try:
+                    self.win.on_proc_batch_aborted(finished_cmd, int(exit_code), skipped_commands)
+                except Exception:
+                    logger.warning("Run batch-abort callback failed", exc_info=True)
+            self.win.on_proc_finished()
+            return
         self.win.on_proc_finished()
         self._dequeue_and_start()

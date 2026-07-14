@@ -65,6 +65,7 @@ from datasheet.layouts.netqui_1pol import (
 from datasheet.layouts.rfe import order_chart_slots_first_two_then_x
 from plotting.config import CARTESIAN_FIGURE_HEIGHT_IN, CARTESIAN_FIGURE_WIDTH_IN, POLAR_FIGURE_SIZE_IN
 from pipeline.progress import emit_progress
+from pipeline.atomic import StageWorkspace
 
 fitz.TOOLS.mupdf_display_errors(False)
 fitz.TOOLS.mupdf_display_warnings(False)
@@ -4831,6 +4832,8 @@ def build_datasheet_pdf(
     template = template.resolve()
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
+    stage = StageWorkspace(output.parent, "datasheet")
+    staged_output = stage.path(output.name)
 
     with fitz.open(template) as doc:
         context = build_render_context(
@@ -4942,7 +4945,9 @@ def build_datasheet_pdf(
         if hasattr(doc, "set_xml_metadata"):
             doc.set_xml_metadata(_build_xmp_metadata(output_metadata, now, now))
         emit_progress("datasheet", total_steps, total_steps, f"Saving {output.name}")
-        doc.save(output, garbage=3, deflate=True)
+        doc.save(staged_output, garbage=3, deflate=True)
+
+    stage.publish([output.name])
 
     return replacements
 

@@ -17,6 +17,7 @@ Author: ChatGPT
 """
 
 import argparse
+import json
 import math
 from pathlib import Path
 from typing import List, Tuple
@@ -32,24 +33,31 @@ from plot import (
     STACKED_LEGEND_ROW_SEP,
     export_stacked_line_legend,
 )
-from datasheet.artifacts import build_asset_record, update_artifact_manifest
+from datasheet.artifacts import (
+    artifact_manifest_path,
+    build_asset_record,
+    load_artifact_manifest,
+    save_artifact_manifest,
+    update_artifact_manifest,
+)
 from legend_utils import apply_legend_labels, parse_legend_labels
+from pipeline.atomic import StageWorkspace
 from pipeline.progress import emit_progress
 from plotting.cartesian import render_cartesian_plot
 from plotting.common import (
-    apply_frequency_ticks,
-    build_step_ticks,
     color_for_index as _color_for_index,
-    format_frequency_tick,
     parse_color_list as _parse_color_list,
     set_line_colors as _set_line_colors,
-    smooth_series,
 )
 
 # ------------------ global color scheme (kept from gain plot) ------------------
 DEFAULT_SOLID_COLORS = ["#2bb6f6", "#f5a623"]
 SOLID_COLORS = DEFAULT_SOLID_COLORS[:]
 DASHED_COLORS = SOLID_COLORS[:]  # same hues for dashed variants
+
+
+class TouchstoneParseError(ValueError):
+    pass
 
 def color_for_index(style: str, idx: int) -> str:
     return _color_for_index(style, idx, SOLID_COLORS, DASHED_COLORS)
@@ -84,63 +92,88 @@ def parse_freq_with_units(s: str) -> float:
 
 def read_touchstone(filepath: str) -> Tuple[np.ndarray, np.ndarray, str, float, int]:
     """Return (freqs_Hz, data, fmt, z0, nports) for .s1p/.s2p Touchstone files."""
-    freqs = []
+    freqs: list[float] = []
     rows: List[List[float]] = []
-    fmt = None
+    fmt: str | None = None
     z0 = 50.0
-    f_unit = "hz"
+    f_unit = ""
     ext = Path(filepath).suffix.lower()
     if ext == ".s1p":
-        expected_values = 2
         nports = 1
     elif ext == ".s2p":
-        expected_values = 8
         nports = 2
     else:
-        expected_values = None
-        nports = 0
+        raise TouchstoneParseError("Only .s1p and .s2p Touchstone files are supported.")
+
+    record_width = 1 + (2 * nports * nports)
+    pending: list[float] = []
+    header_seen = False
 
     with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("!"):
+        for line_number, raw in enumerate(f, start=1):
+            line = raw.split("!", 1)[0].strip()
+            if not line:
                 continue
+            if line.startswith("["):
+                raise TouchstoneParseError("Touchstone 2.0 syntax is not supported; use a v1-style .s1p or .s2p file.")
             if line.startswith("#"):
-                parts = [p for p in line.split() if p.strip()]
-                if len(parts) >= 4:
-                    f_unit = parts[1].lower()
-                    fmt = parts[3].upper()
-                if len(parts) >= 6 and parts[4].upper() == "R":
-                    try: z0 = float(parts[5])
-                    except: pass
-                continue
-            parts = line.split()
-            try:
-                freqs.append(float(parts[0]))
-                values = [float(x) for x in parts[1:]]
-                if expected_values is None:
-                    if len(values) >= 8:
-                        expected_values = 8
-                        nports = 2
-                    elif len(values) >= 2:
-                        expected_values = 2
-                        nports = 1
-                    else:
-                        continue
-                if len(values) < expected_values:
-                    continue
-                rows.append(values[:expected_values])
-            except:  # skip malformed lines
+                if pending:
+                    raise TouchstoneParseError(f"Line {line_number}: incomplete data record before option line.")
+                parts = line[1:].split()
+                if len(parts) != 5 or parts[3].upper() != "R":
+                    raise TouchstoneParseError("Option line must be '# <unit> S <MA|RI|DB> R <impedance>'.")
+                f_unit = parts[0].lower()
+                if f_unit not in {"hz", "khz", "mhz", "ghz"}:
+                    raise TouchstoneParseError(f"Unsupported Touchstone frequency unit: {parts[0]}")
+                if parts[1].upper() != "S":
+                    raise TouchstoneParseError("Only S-parameter Touchstone data is supported.")
+                fmt = parts[2].upper()
+                if fmt not in {"MA", "RI", "DB"}:
+                    raise TouchstoneParseError(f"Unsupported Touchstone data format: {parts[2]}")
+                try:
+                    z0 = float(parts[4])
+                except ValueError as exc:
+                    raise TouchstoneParseError("Reference impedance must be numeric.") from exc
+                if not math.isfinite(z0) or z0 <= 0:
+                    raise TouchstoneParseError("Reference impedance must be finite and positive.")
+                header_seen = True
                 continue
 
-    freqs = np.array(freqs, dtype=float)
-    data  = np.array(rows, dtype=float)
+            if not header_seen:
+                raise TouchstoneParseError("Touchstone option line is missing before network data.")
+            try:
+                values = [float(token) for token in line.split()]
+            except ValueError as exc:
+                raise TouchstoneParseError(f"Line {line_number}: network data must be numeric.") from exc
+            if not all(math.isfinite(value) for value in values):
+                raise TouchstoneParseError(f"Line {line_number}: network data contains a non-finite value.")
+            pending.extend(values)
+            while len(pending) >= record_width:
+                record = pending[:record_width]
+                del pending[:record_width]
+                freqs.append(record[0])
+                rows.append(record[1:])
+
+    if pending:
+        raise TouchstoneParseError(f"Incomplete Touchstone record: expected {record_width} numeric values per sample.")
+    if not header_seen or fmt is None:
+        raise TouchstoneParseError("Could not detect Touchstone option line.")
+    if not rows:
+        raise TouchstoneParseError("Touchstone file contains no network data records.")
+
+    freqs_array = np.asarray(freqs, dtype=float)
+    data = np.asarray(rows, dtype=float)
     unit_map = {"hz":1.0, "khz":1e3, "mhz":1e6, "ghz":1e9}
-    freqs_hz = freqs * unit_map.get(f_unit, 1.0)
-    if fmt is None:
-        raise ValueError("Could not detect format from header (# <unit> S <MA|RI|DB> R <Z0>)")
-    if nports not in (1, 2):
-        raise ValueError("Only .s1p and .s2p Touchstone files are supported.")
+    freqs_hz = freqs_array * unit_map[f_unit]
+    if not np.isfinite(freqs_hz).all() or np.any(freqs_hz <= 0):
+        raise TouchstoneParseError("Touchstone frequencies must be finite and positive.")
+    order = np.argsort(freqs_hz, kind="stable")
+    freqs_hz = freqs_hz[order]
+    data = data[order]
+    if np.any(np.diff(freqs_hz) == 0):
+        raise TouchstoneParseError("Touchstone file contains duplicate frequencies.")
+    if freqs_hz.shape[0] != data.shape[0]:
+        raise TouchstoneParseError("Touchstone frequency and data row counts do not match.")
     return freqs_hz, data, fmt, z0, nports
 
 def pair_to_complex(a: float, b: float, fmt: str) -> complex:
@@ -315,7 +348,10 @@ def main():
             out_path = output_path
         else:
             out_path = in_path.with_name(output_path.name)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    final_out_path = out_path.resolve()
+    final_out_path.parent.mkdir(parents=True, exist_ok=True)
+    stage = StageWorkspace(final_out_path.parent, "vswr")
+    out_path = stage.path(final_out_path.name)
 
     # Frequency range
     fmin_hz = args.fmin * 1e9 if args.fmin is not None else None
@@ -356,9 +392,27 @@ def main():
         bookstem,
         vswr=build_asset_record(out_path, legend_path=legend_path),
     )
-    print(f"Saved: {out_path}")
+    staged_manifest_path = artifact_manifest_path(out_path.parent, bookstem)
+    staged_manifest = load_artifact_manifest(staged_manifest_path, bookstem=bookstem)
+    final_manifest_path = artifact_manifest_path(final_out_path.parent, bookstem)
+    merged_manifest = load_artifact_manifest(final_manifest_path, bookstem=bookstem)
+    merged_manifest.setdefault("charts", {})["vswr"] = staged_manifest.get("charts", {}).get("vswr")
+    merged_text = json.dumps(merged_manifest).replace(str(stage.root), str(final_out_path.parent))
+    save_artifact_manifest(staged_manifest_path, json.loads(merged_text))
+    required = [final_out_path.name]
+    final_legend_path = None
     if legend_path:
-        print(f"Saved: {legend_path}")
+        final_legend_path = final_out_path.parent / Path(legend_path).name
+        required.append(Path(legend_path).name)
+    required.append(staged_manifest_path.name)
+    obsolete = []
+    expected_legend = final_out_path.with_name(f"{final_out_path.stem}-legend{final_out_path.suffix}")
+    if final_legend_path is None and expected_legend.exists():
+        obsolete.append(expected_legend.name)
+    stage.publish(required, obsolete=obsolete)
+    print(f"Saved: {final_out_path}")
+    if final_legend_path:
+        print(f"Saved: {final_legend_path}")
 
 if __name__ == "__main__":
     main()

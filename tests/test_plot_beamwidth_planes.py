@@ -106,7 +106,11 @@ class BeamwidthPlanePlotTests(unittest.TestCase):
             def fake_plot_xy(*args, **kwargs):
                 calls.append((args, kwargs))
                 out_path = Path(args[3])
-                return str(out_path), str(out_path.with_name(f"{out_path.stem}-legend{out_path.suffix}"))
+                legend_path = out_path.with_name(f"{out_path.stem}-legend{out_path.suffix}")
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text("<svg/>", encoding="utf-8")
+                legend_path.write_text("<svg/>", encoding="utf-8")
+                return str(out_path), str(legend_path)
 
             with (
                 mock.patch.object(sys, "argv", argv),
@@ -168,7 +172,11 @@ class BeamwidthPlanePlotTests(unittest.TestCase):
             def fake_plot_xy(*args, **kwargs):
                 calls.append((args, kwargs))
                 out_path = Path(args[3])
-                return str(out_path), str(out_path.with_name(f"{out_path.stem}-legend{out_path.suffix}"))
+                legend_path = out_path.with_name(f"{out_path.stem}-legend{out_path.suffix}")
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text("<svg/>", encoding="utf-8")
+                legend_path.write_text("<svg/>", encoding="utf-8")
+                return str(out_path), str(legend_path)
 
             with (
                 mock.patch.object(sys, "argv", argv),
@@ -316,6 +324,9 @@ class BeamwidthPlanePlotTests(unittest.TestCase):
                 calls.append((Path(out_path), datasets, kwargs))
                 path = Path(out_path)
                 legend = Path(kwargs.get("legend_out_path") or path.with_name(f"{path.stem}-legend{path.suffix}"))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("<svg/>", encoding="utf-8")
+                legend.write_text("<svg/>", encoding="utf-8")
                 return str(path), str(legend)
 
             with (

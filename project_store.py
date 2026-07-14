@@ -4,11 +4,13 @@ import json
 import logging
 import re
 import shutil
+import stat
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from path_utils import (
     is_url as _is_url,
@@ -20,6 +22,12 @@ PROJECTS_DIRNAME = "Projects"
 PROJECT_FILE_NAME = "project.json"
 logger = logging.getLogger(__name__)
 CURRENT_PROJECT_SCHEMA_VERSION = 7
+BUNDLE_MAX_FILES = 5_000
+BUNDLE_MAX_MEMBER_SIZE = 512 * 1024 * 1024
+BUNDLE_MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024
+BUNDLE_MAX_COMPRESSION_RATIO = 200.0
+BUNDLE_COPY_CHUNK_SIZE = 1024 * 1024
+BUNDLE_MAX_PROJECT_JSON_SIZE = 10 * 1024 * 1024
 
 
 def normalize_radiation_frequencies(payload: object) -> list[float] | None:
@@ -208,7 +216,11 @@ class ProjectStore:
             path.rename(renamed)
 
     def _bundle_member_output_path(self, target_dir: Path, member: str) -> Path:
-        relative = member.split("/", 1)[1] if "/" in member else ""
+        normalized = member.replace("\\", "/")
+        parts = normalized.split("/")
+        if any(part in {"", ".", ".."} or ":" in part for part in parts):
+            raise ValueError("Bundle contains an unsafe member path.")
+        relative = normalized.split("/", 1)[1] if "/" in normalized else ""
         if not relative:
             raise ValueError("Bundle contains an invalid member path.")
         out_path = (target_dir / Path(relative)).resolve()
@@ -264,8 +276,9 @@ class ProjectStore:
         base_slug = sanitize_project_slug(desired_name)
         slug = base_slug
         suffix = 2
-        existing = {project.slug for project in self.list_projects() if project.slug != exclude_slug}
-        while slug in existing:
+        excluded = exclude_slug.lower()
+        existing = {project.slug.lower() for project in self.list_projects() if project.slug.lower() != excluded}
+        while slug.lower() in existing:
             slug = f"{base_slug}_{suffix}"
             suffix += 1
         return slug
@@ -305,27 +318,74 @@ class ProjectStore:
         return bundle_path
 
     def import_project_bundle(self, bundle_path: Path) -> ProjectRecord:
-        with zipfile.ZipFile(bundle_path, "r") as archive:
-            members = [name for name in archive.namelist() if name and not name.endswith("/")]
-            if not members:
-                raise ValueError("Bundle is empty.")
-            root_prefix = members[0].split("/", 1)[0]
-            project_member = next((name for name in members if name.endswith(f"/{PROJECT_FILE_NAME}")), "")
-            if not project_member:
-                raise ValueError("Bundle does not contain a project.json file.")
-            payload = json.loads(archive.read(project_member).decode("utf-8"))
-            project = ProjectRecord.from_dict(payload)
-            original_slug = project.slug or sanitize_project_slug(root_prefix)
-            project.slug = self.unique_slug(project.name, exclude_slug="")
-            if not project.name:
-                project.name = project.slug
-            target_dir = project.project_dir(self.root)
-            target_dir.mkdir(parents=True, exist_ok=True)
-            for member in members:
-                out_path = self._bundle_member_output_path(target_dir, member)
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                out_path.write_bytes(archive.read(member))
-            self._rename_slugged_outputs(target_dir, original_slug, project.slug)
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+        staging_dir = self.projects_dir / f".import-{uuid4().hex}"
+        try:
+            with zipfile.ZipFile(bundle_path, "r") as archive:
+                infos = [info for info in archive.infolist() if info.filename and not info.is_dir()]
+                if not infos:
+                    raise ValueError("Bundle is empty.")
+                if len(infos) > BUNDLE_MAX_FILES:
+                    raise ValueError(f"Bundle contains more than {BUNDLE_MAX_FILES} files.")
+
+                roots = {info.filename.replace("\\", "/").split("/", 1)[0] for info in infos}
+                if len(roots) != 1:
+                    raise ValueError("Bundle must contain one consistent top-level project directory.")
+                root_prefix = next(iter(roots))
+                project_member = f"{root_prefix}/{PROJECT_FILE_NAME}"
+                if sum(info.filename.replace("\\", "/") == project_member for info in infos) != 1:
+                    raise ValueError("Bundle must contain exactly one project.json at its root.")
+
+                total_size = 0
+                for info in infos:
+                    normalized_name = info.filename.replace("\\", "/")
+                    if info.flag_bits & 0x1:
+                        raise ValueError(f"Bundle contains an encrypted member: {normalized_name}")
+                    mode = (info.external_attr >> 16) & 0xFFFF
+                    file_type = stat.S_IFMT(mode)
+                    if file_type not in {0, stat.S_IFREG}:
+                        raise ValueError(f"Bundle contains a non-regular member: {normalized_name}")
+                    if info.file_size > BUNDLE_MAX_MEMBER_SIZE:
+                        raise ValueError(f"Bundle member exceeds the size limit: {normalized_name}")
+                    total_size += int(info.file_size)
+                    if total_size > BUNDLE_MAX_TOTAL_SIZE:
+                        raise ValueError("Bundle exceeds the total uncompressed size limit.")
+                    if info.file_size > 0:
+                        ratio = info.file_size / max(1, info.compress_size)
+                        if ratio > BUNDLE_MAX_COMPRESSION_RATIO:
+                            raise ValueError(f"Bundle member has an unsafe compression ratio: {normalized_name}")
+                    self._bundle_member_output_path(staging_dir, normalized_name)
+
+                project_info = next(info for info in infos if info.filename.replace("\\", "/") == project_member)
+                if project_info.file_size > BUNDLE_MAX_PROJECT_JSON_SIZE:
+                    raise ValueError("Bundle project.json exceeds the metadata size limit.")
+                with archive.open(project_info, "r") as source:
+                    payload = json.loads(source.read(BUNDLE_MAX_PROJECT_JSON_SIZE + 1).decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("Bundle project.json root must be an object.")
+                project = ProjectRecord.from_dict(payload)
+                original_slug = project.slug or sanitize_project_slug(root_prefix)
+                project.slug = self.unique_slug(project.name, exclude_slug="")
+                if not project.name:
+                    project.name = project.slug
+
+                staging_dir.mkdir(parents=True, exist_ok=False)
+                for info in infos:
+                    normalized_name = info.filename.replace("\\", "/")
+                    out_path = self._bundle_member_output_path(staging_dir, normalized_name)
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(info, "r") as source, out_path.open("wb") as destination:
+                        shutil.copyfileobj(source, destination, length=BUNDLE_COPY_CHUNK_SIZE)
+
+            self._rename_slugged_outputs(staging_dir, original_slug, project.slug)
             project.record_activity("imported", source_slug=original_slug, bundle_name=bundle_path.name)
-            self.save_project(project)
+            (staging_dir / PROJECT_FILE_NAME).write_text(json.dumps(project.to_dict(), indent=2), encoding="utf-8")
+            target_dir = project.project_dir(self.root)
+            if target_dir.exists():
+                raise FileExistsError(f"Project '{project.name}' already exists.")
+            staging_dir.replace(target_dir)
             return project
+        except Exception:
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            raise

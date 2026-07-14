@@ -48,6 +48,7 @@ from pipeline.stages import (
     stage_stale_detail,
     stage_tool_versions,
 )
+from pipeline.versions import DATASHEET_RENDER_VERSION, PLOT_ASSET_STYLE_VERSION, VSWR_ASSET_STYLE_VERSION
 from studio_run import StudioRunMixin
 from studio_runtime import (
     GoogleSheetDownloadError,
@@ -65,8 +66,6 @@ APP_TITLE = "Antenna Toolkit Studio"
 STATE_FILE = resolve_state_file(".nova_qt_studio_state.json", THIS_DIR / ".nova_qt_studio_state.json")
 COMPACT_SCREEN_HEIGHT = 1200
 COMPACT_WINDOW_WIDTH = 1360
-PLOT_ASSET_STYLE_VERSION = 5
-DATASHEET_RENDER_VERSION = 5
 DATASHEET_TEMPLATE_DIR = THIS_DIR / "Templates"
 LEGACY_DATASHEET_TEMPLATE_ALIASES = {
     "Datasheet.pdf": "Datasheet - RFE.pdf",
@@ -3209,6 +3208,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         return stage_tool_versions(
             stage_key,
             plot_asset_style_version=PLOT_ASSET_STYLE_VERSION,
+            vswr_asset_style_version=VSWR_ASSET_STYLE_VERSION,
             datasheet_render_version=DATASHEET_RENDER_VERSION,
         )
 
@@ -3484,6 +3484,11 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
     def _needed_rerun_stage_keys(self) -> list[str]:
         failed = self._latest_failed_stage_key()
         needed = set(self._stale_stage_keys())
+        needed.update(
+            stage_key
+            for stage_key, _label in STAGE_DEFINITIONS
+            if str(self._stage_state(stage_key).get("status", "")).strip().lower() == "blocked"
+        )
         if failed and self._stage_is_applicable(failed):
             needed.add(failed)
         return [
@@ -3538,13 +3543,14 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "queued": QColor("#6b7a90"),
             "stale": QColor("#d69e2e"),
             "failed": QColor("#d64545"),
+            "blocked": QColor("#8b5cf6"),
             "cancelled": QColor("#8b94a7"),
             "muted": QColor("#66758a"),
         }
         base = semantic_colors.get(tone, semantic_colors["muted"])
         text = helper if tone == "muted" else title
-        background_alpha = 48 if tone in {"ready", "running", "stale", "failed"} else 36
-        border_alpha = 170 if tone in {"ready", "running", "stale", "failed"} else 120
+        background_alpha = 48 if tone in {"ready", "running", "stale", "failed", "blocked"} else 36
+        border_alpha = 170 if tone in {"ready", "running", "stale", "failed", "blocked"} else 120
         return (
             f"background: {self._chip_rgba(base, background_alpha)}; "
             f"border: 1px solid {self._chip_rgba(base, border_alpha)}; "
@@ -3626,8 +3632,10 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 timestamp_text = "Generated: not applicable"
                 chip_text = "Off"
                 chip_tone = "muted"
-            elif status in {"failed", "cancelled"} and (not last_success or last_finished >= last_success):
+            elif status in {"failed", "cancelled", "blocked"} and (not last_success or last_finished >= last_success):
                 text = status.capitalize()
+                if status == "blocked" and stage_state.get("blocked_by"):
+                    text += f" by {STAGE_LABELS.get(str(stage_state['blocked_by']), str(stage_state['blocked_by']).title())}"
                 timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success and any_output_exists else "Generated: not available"
                 chip_text = status.capitalize()
                 chip_tone = status
@@ -3652,6 +3660,11 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success and any_output_exists else "Generated: not available"
                 chip_text = "Cancelled"
                 chip_tone = "cancelled"
+            elif status == "blocked":
+                text = "Blocked"
+                timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success and any_output_exists else "Generated: not available"
+                chip_text = "Blocked"
+                chip_tone = "blocked"
             else:
                 text = "Waiting for the first run."
                 timestamp_text = "Generated: not yet"

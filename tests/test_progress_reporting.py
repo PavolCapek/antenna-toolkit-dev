@@ -99,7 +99,9 @@ class ProgressReportingTests(unittest.TestCase):
             buffer = io.StringIO()
             with (
                 mock.patch.object(sys, "argv", argv),
+                mock.patch.object(beamwidth_xlsx, "read_ffs_broadband", return_value={}),
                 mock.patch.object(beamwidth_xlsx, "compute_for_file", return_value=([], None, None, None, [])),
+                mock.patch("beamwidth_xlsx.StageWorkspace.publish"),
                 redirect_stdout(buffer),
             ):
                 exit_code = beamwidth_xlsx.main()
@@ -123,6 +125,7 @@ class ProgressReportingTests(unittest.TestCase):
                 mock.patch.object(extract_data_xlsx, "filter_rows_by_range", return_value=([{"freq_GHz": 5.5}], 5.5, 5.5)),
                 mock.patch.object(extract_data_xlsx, "summarize_ffs_rows", return_value={"source_file": "sample.ffs"}),
                 mock.patch.object(extract_data_xlsx, "build_workbook"),
+                mock.patch("extract_data_xlsx.StageWorkspace.publish"),
                 redirect_stdout(buffer),
             ):
                 exit_code = extract_data_xlsx.main()
@@ -234,10 +237,19 @@ class ProgressReportingTests(unittest.TestCase):
             fake_input = Path(temp_dir) / "input.xlsx"
             argv = ["plot.py", str(fake_input)]
             buffer = io.StringIO()
+
+            def fake_plot_xy(*args, **_kwargs):
+                output = Path(args[3])
+                legend = output.with_name(f"{output.stem}-legend{output.suffix}")
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text("<svg/>", encoding="utf-8")
+                legend.write_text("<svg/>", encoding="utf-8")
+                return str(output), str(legend)
+
             with (
                 mock.patch.object(sys, "argv", argv),
                 mock.patch.object(plot.pd, "ExcelFile", return_value=FakeExcel()),
-                mock.patch.object(plot, "plot_xy", side_effect=lambda *_args, **_kwargs: ("plot.svg", "legend.svg")),
+                mock.patch.object(plot, "plot_xy", side_effect=fake_plot_xy),
                 redirect_stdout(buffer),
             ):
                 plot.main()
@@ -258,6 +270,7 @@ class ProgressReportingTests(unittest.TestCase):
                 mock.patch.object(sys, "argv", argv),
                 mock.patch.object(plot_vswr, "read_touchstone", return_value=(freqs_hz, touchstone_rows, "ri", 50.0, 1)),
                 mock.patch.object(plot_vswr, "plot_xy", return_value=(Path(temp_dir) / "vswr.svg", Path(temp_dir) / "vswr-legend.svg")),
+                mock.patch("plot_vswr.StageWorkspace.publish"),
                 redirect_stdout(buffer),
             ):
                 plot_vswr.main()

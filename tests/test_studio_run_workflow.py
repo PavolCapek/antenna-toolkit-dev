@@ -70,6 +70,35 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
 
         self.assertEqual([call.args[0] for call in enqueue.call_args_list], ["beam", "plot"])
 
+    def test_failed_stage_blocks_all_queued_stages(self) -> None:
+        failed = ["python", "beamwidth_xlsx.py"]
+        skipped = [
+            ["python", "extract_data_xlsx.py"],
+            ["python", "plot.py"],
+        ]
+        self.window._pending_stage_keys = ["extract", "plot"]
+
+        self.window.on_proc_batch_aborted(failed, 7, skipped)
+
+        for stage_key in ("extract", "plot"):
+            state = self.window._stage_state(stage_key)
+            self.assertEqual(state.get("status"), "blocked")
+            self.assertEqual(state.get("blocked_by"), "beam")
+        self.assertEqual(self.window._pending_stage_keys, [])
+        history = self.window.project_run_state.get("history", [])
+        blocked = [entry for entry in history if entry.get("action") == "blocked"]
+        self.assertEqual([entry.get("stage") for entry in blocked[:2]], ["plot", "extract"])
+
+    def test_plot_only_preflight_rejects_stale_beam_workbook(self) -> None:
+        beam_output = self.window.deduced_beam_output()
+        beam_output.parent.mkdir(parents=True, exist_ok=True)
+        beam_output.write_text("stale workbook", encoding="utf-8")
+
+        with mock.patch.object(self.window, "_stage_is_stale", side_effect=lambda key: key == "beam"):
+            messages = self.window._run_preflight_messages(["plot"])
+
+        self.assertIn("Rerun Workbook before generating plots because the workbook is stale.", messages)
+
     def test_clear_generated_files_refreshes_ready_stage_pills(self) -> None:
         ffs_path = Path(self.temp_dir.name) / "sample.ffs"
         ffs_path.write_text("ffs", encoding="utf-8")
@@ -446,6 +475,7 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         queued_args: dict[str, list[str]] = {}
 
         with (
+            mock.patch.object(self.window, "_stage_is_stale", return_value=False),
             mock.patch.object(self.window, "_save_project_if_dirty"),
             mock.patch.object(
                 self.window,

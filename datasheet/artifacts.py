@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 
-ARTIFACT_MANIFEST_SCHEMA_VERSION = 1
+ARTIFACT_MANIFEST_SCHEMA_VERSION = 2
 ARTIFACT_MANIFEST_SUFFIX = "-artifacts.json"
 
 
@@ -57,7 +57,7 @@ def load_artifact_manifest(path: str | Path, *, bookstem: str | None = None) -> 
             "polar_single": list(charts.get("polar_single") or []),
             "polar_planes": list(charts.get("polar_planes") or []),
         }
-    payload["schema_version"] = int(payload.get("schema_version") or ARTIFACT_MANIFEST_SCHEMA_VERSION)
+    payload["schema_version"] = ARTIFACT_MANIFEST_SCHEMA_VERSION
     payload["bookstem"] = str(payload.get("bookstem") or bookstem or "")
     return payload
 

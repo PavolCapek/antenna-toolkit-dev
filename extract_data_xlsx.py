@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from beamwidth_xlsx import (
+    FFSParseError,
     build_mainlobe_mask,
     circular_cell_sizes,
     first_crossing_theta,
@@ -17,8 +18,11 @@ from beamwidth_xlsx import (
     nearest_phi_index_circular,
     read_ffs_broadband,
 )
+from pipeline.atomic import StageWorkspace
 from pipeline.progress import emit_progress
 from plot_vswr import calc_vswr, pair_to_complex, read_touchstone
+from pipeline.versions import BEAM_DATA_VERSION, WORKBOOK_MANIFEST_VERSION
+from workbook_metadata import read_workbook_manifest, source_fingerprint, workbook_source_entry
 
 
 def infer_polarization_label(path: Path) -> str:
@@ -84,7 +88,7 @@ def filter_rows_by_range(rows: list[dict[str, object]], fmin: float | None, fmax
 
     filtered = [row for row, keep in zip(rows, mask) if keep]
     if not filtered:
-        filtered = rows
+        return [], None, None
 
     used_freqs = np.asarray([float(row["freq_GHz"]) for row in filtered], dtype=float)
     return filtered, float(np.min(used_freqs)), float(np.max(used_freqs))
@@ -121,7 +125,7 @@ def compute_ffs_rows(ffs_path: Path, smooth: int, theta_window: float) -> list[d
         utheta = np.unique(np.round(thetas, 6))
         nphi, ntheta = len(uphi), len(utheta)
         if nphi * ntheta != arr.shape[0]:
-            continue
+            raise FFSParseError(f"{ffs_path.name}: frequency {freq_hz:g} Hz has an incomplete phi/theta grid")
 
         order = np.lexsort((thetas, phis))
         etheta = etheta[order]
@@ -130,7 +134,7 @@ def compute_ffs_rows(ffs_path: Path, smooth: int, theta_window: float) -> list[d
         power = (np.abs(etheta) ** 2 + np.abs(ephi) ** 2).reshape(nphi, ntheta)
         pmax = float(np.nanmax(power))
         if not math.isfinite(pmax) or pmax <= 0:
-            continue
+            raise FFSParseError(f"{ffs_path.name}: frequency {freq_hz:g} Hz has no positive field power")
 
         grel_db = 10.0 * np.log10(np.maximum(power, 1e-300) / pmax)
         phir = np.radians(uphi)
@@ -140,7 +144,7 @@ def compute_ffs_rows(ffs_path: Path, smooth: int, theta_window: float) -> list[d
         weights = np.outer(dphi, np.sin(thetar) * dtheta)
         prad = float(np.sum(power * weights))
         if not math.isfinite(prad) or prad <= 0:
-            continue
+            raise FFSParseError(f"{ffs_path.name}: frequency {freq_hz:g} Hz has invalid radiated power")
 
         gdir = (4.0 * math.pi) * (power / prad)
         gabs_dbi = 10.0 * np.log10(np.maximum(gdir, 1e-300))
@@ -189,16 +193,40 @@ def compute_ffs_rows(ffs_path: Path, smooth: int, theta_window: float) -> list[d
     return rows_out
 
 
-def beam_workbook_is_fresh(beam_workbook: Path, ffs_paths: list[Path]) -> bool:
+def beam_workbook_is_fresh(
+    beam_workbook: Path,
+    ffs_paths: list[Path],
+    *,
+    smooth: int,
+    theta_window: float,
+) -> bool:
     if not beam_workbook.exists():
         return False
-    try:
-        beam_mtime = beam_workbook.stat().st_mtime
-    except OSError:
+    manifest = read_workbook_manifest(beam_workbook)
+    if not isinstance(manifest, dict):
         return False
-    for ffs_path in ffs_paths:
+    if int(manifest.get("schema_version", 0) or 0) != WORKBOOK_MANIFEST_VERSION:
+        return False
+    if int(manifest.get("beam_data_version", 0) or 0) != BEAM_DATA_VERSION:
+        return False
+    settings = manifest.get("settings")
+    if not isinstance(settings, dict):
+        return False
+    if int(settings.get("smooth", -1)) != int(smooth):
+        return False
+    try:
+        if float(settings.get("theta_window")) != float(theta_window):
+            return False
+    except (TypeError, ValueError):
+        return False
+    sources = manifest.get("sources")
+    if not isinstance(sources, list) or len(sources) != len(ffs_paths):
+        return False
+    for entry, ffs_path in zip(sources, ffs_paths):
+        if not isinstance(entry, dict):
+            return False
         try:
-            if ffs_path.stat().st_mtime > beam_mtime:
+            if entry.get("fingerprint") != source_fingerprint(ffs_path):
                 return False
         except OSError:
             return False
@@ -209,11 +237,14 @@ def compute_ffs_rows_from_beam_workbook(beam_workbook: Path, ffs_path: Path) -> 
     if not beam_workbook.exists():
         return []
 
-    sheet_name = ffs_path.stem[:31]
+    manifest = read_workbook_manifest(beam_workbook)
+    source_entry = workbook_source_entry(manifest, ffs_path)
+    sheets = source_entry.get("sheets") if isinstance(source_entry, dict) else None
+    sheet_name = str(sheets.get("data")) if isinstance(sheets, dict) and sheets.get("data") else ffs_path.stem[:31]
     try:
         df = pd.read_excel(beam_workbook, sheet_name=sheet_name)
-    except Exception:
-        return []
+    except Exception as exc:
+        raise FFSParseError(f"{ffs_path.name}: beam workbook sheet '{sheet_name}' could not be read") from exc
 
     required = {
         "freq_GHz",
@@ -226,13 +257,13 @@ def compute_ffs_rows_from_beam_workbook(beam_workbook: Path, ffs_path: Path) -> 
         "front_to_back_dB",
     }
     if not required.issubset(df.columns):
-        return []
+        raise FFSParseError(f"{ffs_path.name}: beam workbook sheet '{sheet_name}' is missing required columns")
 
     polarization = infer_polarization_label(ffs_path)
     az = df[df["phi_cut_deg"] == 0].copy()
     el = df[df["phi_cut_deg"] == 90].copy()
     if az.empty and el.empty:
-        return []
+        raise FFSParseError(f"{ffs_path.name}: beam workbook sheet '{sheet_name}' has no principal-plane rows")
 
     az = az[["freq_GHz", "beamwidth_3dB_2sided_deg", "beamwidth_6dB_2sided_deg"]].rename(
         columns={
@@ -572,17 +603,44 @@ def main() -> int:
 
     ffs_summaries: list[dict[str, object]] = []
     ffs_details: list[dict[str, object]] = []
-    use_beam_workbook = bool(args.beam_workbook and args.ffs and beam_workbook_is_fresh(args.beam_workbook, args.ffs))
+    use_beam_workbook = bool(
+        args.beam_workbook
+        and args.ffs
+        and beam_workbook_is_fresh(
+            args.beam_workbook,
+            args.ffs,
+            smooth=args.smooth,
+            theta_window=args.theta_window,
+        )
+    )
     progress_total = len(args.ffs) + (1 if args.touchstone else 0) + 1
     progress_step = 0
     if use_beam_workbook:
         print(f"Reusing FFS metrics from beam workbook: {args.beam_workbook.name}")
+    errors: list[str] = []
+    seen_ffs: set[Path] = set()
     for ffs_path in args.ffs:
         progress_step += 1
         emit_progress("extract", progress_step, progress_total, f"Processing {ffs_path.name}")
         print(f"Processing FFS: {ffs_path.name}")
-        all_rows = compute_ffs_rows_from_beam_workbook(args.beam_workbook, ffs_path) if use_beam_workbook else compute_ffs_rows(ffs_path, args.smooth, args.theta_window)
+        resolved_ffs = ffs_path.resolve()
+        if resolved_ffs in seen_ffs:
+            errors.append(f"{ffs_path.name}: the same FFS input was selected more than once")
+            continue
+        seen_ffs.add(resolved_ffs)
+        try:
+            all_rows = compute_ffs_rows_from_beam_workbook(args.beam_workbook, ffs_path) if use_beam_workbook else compute_ffs_rows(ffs_path, args.smooth, args.theta_window)
+        except FFSParseError as exc:
+            errors.append(str(exc))
+            continue
         selected_rows, used_fmin, used_fmax = filter_rows_by_range(all_rows, args.ffs_fmin, args.ffs_fmax)
+        if not selected_rows:
+            errors.append(
+                f"{ffs_path.name}: no FFS samples overlap the requested frequency window "
+                f"{args.ffs_fmin if args.ffs_fmin is not None else '-inf'} to "
+                f"{args.ffs_fmax if args.ffs_fmax is not None else '+inf'} GHz"
+            )
+            continue
         if selected_rows:
             summary = summarize_ffs_rows(selected_rows)
             if summary is not None:
@@ -597,24 +655,39 @@ def main() -> int:
         progress_step += 1
         emit_progress("extract", progress_step, progress_total, f"Processing {args.touchstone.name}")
         print(f"Processing Touchstone: {args.touchstone.name}")
-        all_rows = compute_touchstone_rows(args.touchstone)
-        for port in sorted({str(row["port"]) for row in all_rows}):
-            port_rows = [row for row in all_rows if str(row["port"]) == port]
-            selected_rows, used_fmin, used_fmax = filter_rows_by_range(port_rows, args.touchstone_fmin, args.touchstone_fmax)
-            if not selected_rows:
-                continue
-            summary = summarize_touchstone_rows(selected_rows)
-            if summary is not None:
-                summary["freq_min_GHz"] = maybe_float(used_fmin, 6)
-                summary["freq_max_GHz"] = maybe_float(used_fmax, 6)
-                ts_summaries.append(summary)
-            ts_details.extend(selected_rows)
+        try:
+            all_rows = compute_touchstone_rows(args.touchstone)
+        except ValueError as exc:
+            errors.append(f"{args.touchstone.name}: {exc}")
+        else:
+            for port in sorted({str(row["port"]) for row in all_rows}):
+                port_rows = [row for row in all_rows if str(row["port"]) == port]
+                selected_rows, used_fmin, used_fmax = filter_rows_by_range(port_rows, args.touchstone_fmin, args.touchstone_fmax)
+                if not selected_rows:
+                    errors.append(
+                        f"{args.touchstone.name} {port}: no samples overlap the requested frequency window "
+                        f"{args.touchstone_fmin if args.touchstone_fmin is not None else '-inf'} to "
+                        f"{args.touchstone_fmax if args.touchstone_fmax is not None else '+inf'} GHz"
+                    )
+                    continue
+                summary = summarize_touchstone_rows(selected_rows)
+                if summary is not None:
+                    summary["freq_min_GHz"] = maybe_float(used_fmin, 6)
+                    summary["freq_max_GHz"] = maybe_float(used_fmax, 6)
+                    ts_summaries.append(summary)
+                ts_details.extend(selected_rows)
+
+    if errors:
+        detail = "\n".join(f"- {error}" for error in errors)
+        raise SystemExit(f"Extract generation failed; no output was published:\n{detail}")
 
     if not ffs_summaries and not ts_summaries:
         raise SystemExit("No usable data could be extracted from the provided inputs.")
 
     emit_progress("extract", progress_total, progress_total, f"Saving {args.output.name}")
-    build_workbook(args.output, overview_rows, ffs_summaries, ffs_details, ts_summaries, ts_details)
+    with StageWorkspace(args.output.parent, "extract") as stage:
+        build_workbook(stage.path(args.output.name), overview_rows, ffs_summaries, ffs_details, ts_summaries, ts_details)
+        stage.publish([args.output.name])
     print(f"Wrote extracted workbook: {args.output}")
     return 0
 

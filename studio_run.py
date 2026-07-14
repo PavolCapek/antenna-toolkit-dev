@@ -216,7 +216,10 @@ class StudioRunMixin:
             plot_output_exists=self._stage_output_exists("plot"),
             plot_stage_stale=self._stage_is_stale("plot"),
         )
-        return [issue.message for issue in issues]
+        messages = [issue.message for issue in issues]
+        if "plot" in stage_keys and "beam" not in stage_keys and self.deduced_beam_output().exists() and self._stage_is_stale("beam"):
+            messages.append("Rerun Workbook before generating plots because the workbook is stale.")
+        return messages
 
     def _run_preflight_passes(self, stage_keys: list[str], title: str) -> bool:
         messages = self._run_preflight_messages(stage_keys)
@@ -465,6 +468,7 @@ class StudioRunMixin:
             return
         stage_state = self._stage_state(stage_key)
         stage_state["status"] = "running"
+        stage_state.pop("blocked_by", None)
         stage_state["command"] = cmd
         stage_state["last_started_at"] = utc_now_iso()
         self.project_run_state["last_run_at"] = stage_state["last_started_at"]
@@ -498,6 +502,28 @@ class StudioRunMixin:
         else:
             stage_state["status"] = "failed"
             self._append_history("failed", stage_key, exit_code=int(exit_code))
+        self.save_active_project()
+        self.refresh_derived_paths()
+
+    def on_proc_batch_aborted(self, failed_args: list[str], exit_code: int, skipped_commands: list[list[str]]) -> None:
+        failed_stage = self._detect_stage_key(failed_args)
+        finished_at = utc_now_iso()
+        skipped_keys: list[str] = []
+        for command in skipped_commands:
+            stage_key = self._detect_stage_key(command)
+            if not stage_key:
+                continue
+            skipped_keys.append(stage_key)
+            stage_state = self._stage_state(stage_key)
+            stage_state["status"] = "blocked"
+            stage_state["blocked_by"] = failed_stage
+            stage_state["last_finished_at"] = finished_at
+            self._append_history("blocked", stage_key, blocked_by=failed_stage, exit_code=int(exit_code))
+        self._pending_stage_keys = []
+        self._current_stage_key = ""
+        if skipped_keys:
+            labels = ", ".join(STAGE_LABELS.get(key, key.title()) for key in skipped_keys)
+            self.status(f"Pipeline stopped after {STAGE_LABELS.get(failed_stage, failed_stage.title())} failed; blocked: {labels}")
         self.save_active_project()
         self.refresh_derived_paths()
 

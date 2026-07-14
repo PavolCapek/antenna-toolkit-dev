@@ -35,9 +35,20 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from pipeline.atomic import StageWorkspace
 from pipeline.progress import emit_progress
+from workbook_metadata import (
+    build_workbook_manifest,
+    stable_input_id,
+    unique_sheet_name,
+    write_workbook_manifest,
+)
 
 Row = Tuple[float, float, complex, complex]  # (phi_deg, theta_deg, Etheta, Ephi)
+
+
+class FFSParseError(ValueError):
+    pass
 
 
 # ---------------------------
@@ -261,7 +272,7 @@ def _unit_to_hz(u: Optional[str]) -> float:
     return 1.0
 
 
-def read_ffs_broadband(path: Path, freq_regex: Optional[str] = None) -> Dict[float, List[Row]]:
+def _read_ffs_broadband_unvalidated(path: Path, freq_regex: Optional[str] = None) -> Dict[float, List[Row]]:
     """Parse a CST .ffs file into {freq_Hz: [(phi, theta, Eθ, Eφ), ...]}."""
     text = Path(path).read_text(errors='ignore')
     lines = text.splitlines()
@@ -343,6 +354,41 @@ def read_ffs_broadband(path: Path, freq_regex: Optional[str] = None) -> Dict[flo
         return by_freq
 
 
+def _validate_ffs_dataset(path: Path, by_freq: Dict[float, List[Row]]) -> None:
+    if not by_freq:
+        raise FFSParseError(f"{path.name}: no far-field frequency blocks were found")
+    for frequency, rows in by_freq.items():
+        if not math.isfinite(float(frequency)) or float(frequency) <= 0:
+            raise FFSParseError(f"{path.name}: frequency values must be finite and positive")
+        if not rows:
+            raise FFSParseError(f"{path.name}: frequency {frequency:g} Hz has no field samples")
+        phis = np.asarray([row[0] for row in rows], dtype=float)
+        thetas = np.asarray([row[1] for row in rows], dtype=float)
+        fields = np.asarray(
+            [component for row in rows for component in (row[2].real, row[2].imag, row[3].real, row[3].imag)]
+        )
+        if not np.isfinite(phis).all() or not np.isfinite(thetas).all() or not np.isfinite(fields).all():
+            raise FFSParseError(f"{path.name}: frequency {frequency:g} Hz contains non-finite samples")
+        nphi = len(np.unique(np.round(phis, 6)))
+        ntheta = len(np.unique(np.round(thetas, 6)))
+        if nphi < 2 or ntheta < 2:
+            raise FFSParseError(f"{path.name}: frequency {frequency:g} Hz needs at least two phi and theta samples")
+        grid_points = set(zip(np.round(phis, 6), np.round(thetas, 6)))
+        if len(grid_points) != len(rows) or nphi * ntheta != len(grid_points):
+            raise FFSParseError(f"{path.name}: frequency {frequency:g} Hz has an incomplete phi/theta grid")
+
+
+def read_ffs_broadband(path: Path, freq_regex: Optional[str] = None) -> Dict[float, List[Row]]:
+    try:
+        by_freq = _read_ffs_broadband_unvalidated(path, freq_regex=freq_regex)
+    except OSError as exc:
+        raise FFSParseError(f"{Path(path).name}: could not read input: {exc}") from exc
+    except Exception as exc:
+        raise FFSParseError(f"{Path(path).name}: could not parse CST far-field data: {exc}") from exc
+    _validate_ffs_dataset(Path(path), by_freq)
+    return by_freq
+
+
 # ---------------------------
 # Core computation for one file (returns table rows + patterns)
 # ---------------------------
@@ -357,9 +403,6 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
     - freq_labels: list of column labels (e.g., '5.500 GHz').
     """
     by_freq = read_ffs_broadband(ffs_path)
-    if not by_freq:
-        return [], None, None, None, []
-
     thresh = {3.0: ('theta_3dB_half_deg', 'beamwidth_3dB_2sided_deg'),
               6.0: ('theta_6dB_half_deg', 'beamwidth_6dB_2sided_deg'),
               10.0: ('theta_10dB_half_deg', 'beamwidth_10dB_2sided_deg'),
@@ -378,7 +421,7 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
         rows = by_freq[freq_Hz]
         arr = np.asarray(rows, dtype=object)
         if arr.size == 0:
-            continue
+            raise FFSParseError(f"{ffs_path.name}: frequency {freq_Hz:g} Hz has no usable samples")
 
         phis = np.asarray(arr[:, 0], float)
         thetas = np.asarray(arr[:, 1], float)
@@ -393,7 +436,7 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
             utheta = np.unique(np.round(thetas, 6))
             nphi, ntheta = len(uphi), len(utheta)
             if nphi * ntheta != arr.shape[0]:
-                continue
+                raise FFSParseError(f"{ffs_path.name}: frequency {freq_Hz:g} Hz has an incomplete grid")
 
         order = np.lexsort((thetas, phis))
         Etheta = Etheta[order]
@@ -407,7 +450,7 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
 
         Pmax = float(np.nanmax(P))
         if not np.isfinite(Pmax) or Pmax <= 0:
-            continue
+            raise FFSParseError(f"{ffs_path.name}: frequency {freq_Hz:g} Hz has no positive field power")
         Grel_dB = 10.0 * np.log10(np.maximum(P, 1e-300) / Pmax)
 
         phir = np.radians(phis_grid)
@@ -417,10 +460,9 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
         weights = np.outer(dphi, np.sin(thetar) * dtheta)
         Prad = float(np.sum(P * weights))
         if not np.isfinite(Prad) or Prad <= 0:
-            Gabs_dBi = np.full_like(P, fill_value=float('nan'), dtype=float)
-        else:
-            Gdir = (4.0 * math.pi) * (P / Prad)
-            Gabs_dBi = 10.0 * np.log10(np.maximum(Gdir, 1e-300))
+            raise FFSParseError(f"{ffs_path.name}: frequency {freq_Hz:g} Hz has invalid radiated power")
+        Gdir = (4.0 * math.pi) * (P / Prad)
+        Gabs_dBi = 10.0 * np.log10(np.maximum(Gdir, 1e-300))
 
         peak_index = np.unravel_index(int(np.nanargmax(Gabs_dBi)), Gabs_dBi.shape) if np.isfinite(Gabs_dBi).any() else None
         global_max_gain_dBi = float(Gabs_dBi[peak_index]) if peak_index is not None else float('nan')
@@ -503,6 +545,8 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
     # Stack patterns (len(theta_grid) x Nfreq)
     patterns_phi0 = np.column_stack(pat0_cols) if pat0_cols else None
     patterns_phi90 = np.column_stack(pat90_cols) if pat90_cols else None
+    if not rows_out or patterns_phi0 is None or patterns_phi90 is None or not freq_labels:
+        raise FFSParseError(f"{ffs_path.name}: no usable beam or radiation-pattern results were computed")
     return rows_out, theta_grid, patterns_phi0, patterns_phi90, freq_labels
 
 
@@ -626,6 +670,34 @@ def write_ant_files(ant_dir: Path,
 # Main
 # ---------------------------
 
+
+def build_input_output_map(paths: list[Path]) -> list[dict[str, str]]:
+    used_sheets = {"summary", "_antenna_toolkit"}
+    stem_counts: dict[str, int] = {}
+    for path in paths:
+        key = (path.stem or "Data").lower()
+        stem_counts[key] = stem_counts.get(key, 0) + 1
+    mappings: list[dict[str, str]] = []
+    for path in paths:
+        stem = path.stem or "Data"
+        ant_stem = stem if stem_counts[stem.lower()] == 1 else f"{stem}-{stable_input_id(path)[:8]}"
+        mappings.append(
+            {
+                "input_id": stable_input_id(path),
+                "data": unique_sheet_name(path, used_sheets),
+                "phi0": unique_sheet_name(path, used_sheets, suffix="_phi0"),
+                "phi90": unique_sheet_name(path, used_sheets, suffix="_phi90"),
+                "ant_stem": ant_stem,
+            }
+        )
+    return mappings
+
+
+def _fail_invalid_inputs(errors: list[str]) -> None:
+    if errors:
+        detail = "\n".join(f"- {error}" for error in errors)
+        raise SystemExit(f"Workbook generation failed; no outputs were published:\n{detail}")
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Beamwidth/Directivity/Beam-efficiency to XLSX with per-file sheets, radiation diagrams, summary sheet, and .ant outputs.")
     ap.add_argument('output', type=Path, help='Output file (.xlsx preferred; if .csv, a per-input CSV is created).')
@@ -635,6 +707,24 @@ def main() -> int:
     ap.add_argument('--theta-window', type=float, default=8.0,
                     help='Theta window (deg) around global peak to search for local peaks/nulls')
     args = ap.parse_args()
+
+    input_maps = build_input_output_map(args.ffs)
+    validation_errors: list[str] = []
+    computed_results: list[tuple] = []
+    seen_paths: set[Path] = set()
+    progress_total = len(args.ffs) + 1
+    for index, fpath in enumerate(args.ffs, start=1):
+        emit_progress("beam", index, progress_total, f"Processing {fpath.name}")
+        resolved = fpath.resolve()
+        if resolved in seen_paths:
+            validation_errors.append(f"{fpath.name}: the same FFS input was selected more than once")
+            continue
+        seen_paths.add(resolved)
+        try:
+            computed_results.append(compute_for_file(fpath, args.smooth, args.theta_window))
+        except FFSParseError as exc:
+            validation_errors.append(str(exc))
+    _fail_invalid_inputs(validation_errors)
 
     header = ['freq_Hz', 'freq_GHz', 'phi_cut_deg',
               'theta_3dB_half_deg', 'beamwidth_3dB_2sided_deg',
@@ -668,16 +758,15 @@ def main() -> int:
 
         args.output.parent.mkdir(parents=True, exist_ok=True)
 
-        # Prepare ant directory (next to output XLSX)
-        ant_dir = args.output.parent / 'ant_files'
-        progress_total = len(args.ffs) + 1
+        stage = StageWorkspace(args.output.parent, "beam")
+        ant_dir = stage.path('ant_files')
+        expected_ant_files: list[Path] = []
 
-        for index, fpath in enumerate(args.ffs, start=1):
-            emit_progress("beam", index, progress_total, f"Processing {fpath.name}")
-            rows, theta_grid, pat0, pat90, labels = compute_for_file(fpath, args.smooth, args.theta_window)
+        for fpath, mapping, result in zip(args.ffs, input_maps, computed_results):
+            rows, theta_grid, pat0, pat90, labels = result
 
             # Data sheet
-            title = fpath.stem[:31] if fpath.stem else "Data"
+            title = mapping["data"]
             ws = wb.create_sheet(title=title)
             ws.append(header)
             # Group rows: phi=0 first, then phi=90
@@ -691,7 +780,7 @@ def main() -> int:
 
             # Radiation diagram sheets (if patterns exist)
             if theta_grid is not None and pat0 is not None:
-                tname0 = (f"{fpath.stem}_phi0")[:31]
+                tname0 = mapping["phi0"]
                 ws0 = wb.create_sheet(title=tname0)
                 ws0.append(["theta_deg (deg) — REL dB (0 dB=max)"] + labels)
                 for i, th in enumerate(theta_grid):
@@ -699,7 +788,7 @@ def main() -> int:
                     ws0.append(row)
 
             if theta_grid is not None and pat90 is not None:
-                tname90 = (f"{fpath.stem}_phi90")[:31]
+                tname90 = mapping["phi90"]
                 ws90 = wb.create_sheet(title=tname90)
                 ws90.append(["theta_deg (deg) — REL dB (0 dB=max)"] + labels)
                 for i, th in enumerate(theta_grid):
@@ -708,9 +797,13 @@ def main() -> int:
 
             # --- Write .ant files for this input (reusing in-memory patterns; no re-parsing) ---
             if theta_grid is not None and pat0 is not None and pat90 is not None and labels:
+                expected_ant_files.extend(
+                    Path("ant_files") / f"{mapping['ant_stem']}-{label.replace(' ', '')}.ant"
+                    for label in labels
+                )
                 write_ant_files(
                     ant_dir=ant_dir,
-                    stem=fpath.stem,
+                    stem=mapping["ant_stem"],
                     theta_grid=theta_grid,
                     patterns_phi0=pat0,
                     patterns_phi90=pat90,
@@ -723,21 +816,34 @@ def main() -> int:
         for r in summary_rows_all:
             ws_sum.append(r)
 
+        write_workbook_manifest(
+            wb,
+            build_workbook_manifest(
+                args.ffs,
+                smooth=args.smooth,
+                theta_window=args.theta_window,
+                sheet_maps=input_maps,
+            ),
+        )
+
         emit_progress("beam", progress_total, progress_total, f"Saving {args.output.name}")
-        wb.save(args.output)
+        wb.save(stage.path(args.output.name))
+        stage.publish([args.output.name, "ant_files"], validate=expected_ant_files)
         print(f"Wrote XLSX: {args.output} with {len(args.ffs)} file sheets + radiation diagrams + summary.")
-        print(f".ant files written to: {ant_dir}")
+        print(f".ant files written to: {args.output.parent / 'ant_files'}")
     else:
         # CSV fallback: data-only, one CSV per input
         base = args.output
         base.parent.mkdir(parents=True, exist_ok=True)
-        # Still create ant_files next to the provided base path for consistency
-        ant_dir = base.parent / 'ant_files'
-        progress_total = len(args.ffs) + 1
-        for index, fpath in enumerate(args.ffs, start=1):
-            emit_progress("beam", index, progress_total, f"Processing {fpath.name}")
-            rows, theta_grid, pat0, pat90, labels = compute_for_file(fpath, args.smooth, args.theta_window)
-            out_csv = base.with_name(f"{base.stem}-{fpath.stem}.csv")
+        stage = StageWorkspace(base.parent, "beam")
+        ant_dir = stage.path('ant_files')
+        expected_ant_files: list[Path] = []
+        required_outputs: list[str] = ["ant_files"]
+        for fpath, mapping, result in zip(args.ffs, input_maps, computed_results):
+            rows, theta_grid, pat0, pat90, labels = result
+            out_name = f"{base.stem}-{mapping['ant_stem']}.csv"
+            out_csv = stage.path(out_name)
+            required_outputs.append(out_name)
             with out_csv.open('w', newline='') as f:
                 w = csv.writer(f)
                 w.writerow(header)
@@ -746,20 +852,30 @@ def main() -> int:
                 phi90_rows = [r for r in rows if float(r[2]) == 90.0]
                 for r in phi0_rows + phi90_rows:
                     w.writerow(r)
-            print(f"Wrote CSV: {out_csv}")
+            print(f"Prepared CSV: {base.parent / out_name}")
 
             # Also generate .ant files even in CSV mode (placed next to base path)
             if theta_grid is not None and pat0 is not None and pat90 is not None and labels:
+                expected_ant_files.extend(
+                    Path("ant_files") / f"{mapping['ant_stem']}-{label.replace(' ', '')}.ant"
+                    for label in labels
+                )
                 write_ant_files(
                     ant_dir=ant_dir,
-                    stem=fpath.stem,
+                    stem=mapping["ant_stem"],
                     theta_grid=theta_grid,
                     patterns_phi0=pat0,
                     patterns_phi90=pat90,
                     freq_labels=labels,
                 )
+        obsolete_outputs = [
+            path.name
+            for path in base.parent.glob(f"{base.stem}-*.csv")
+            if path.name not in required_outputs
+        ]
+        stage.publish(required_outputs, obsolete=obsolete_outputs, validate=expected_ant_files)
         emit_progress("beam", progress_total, progress_total, f"Finalizing {base.name}")
-        print(f".ant files written to: {ant_dir}")
+        print(f".ant files written to: {base.parent / 'ant_files'}")
 
     return 0
 

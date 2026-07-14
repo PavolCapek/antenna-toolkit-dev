@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from datasheet.artifacts import artifact_manifest_path
+from pipeline.versions import stage_versions
 
 STAGE_SETTING_KEYS: dict[str, tuple[str, ...]] = {
     "beam": ("smooth", "theta"),
@@ -93,11 +94,19 @@ def stage_settings_snapshot(stage_key: str, values: dict[str, Any]) -> dict[str,
     return {key: values[key] for key in STAGE_SETTING_KEYS.get(stage_key, ()) if key in values}
 
 
-def stage_tool_versions(stage_key: str, *, plot_asset_style_version: int, datasheet_render_version: int) -> dict[str, int]:
-    versions: dict[str, int] = {}
-    if stage_key in {"plot", "datasheet"}:
+def stage_tool_versions(
+    stage_key: str,
+    *,
+    plot_asset_style_version: int | None = None,
+    vswr_asset_style_version: int | None = None,
+    datasheet_render_version: int | None = None,
+) -> dict[str, int]:
+    versions = stage_versions(stage_key)
+    if plot_asset_style_version is not None and stage_key in {"plot", "datasheet"}:
         versions["plot_assets"] = int(plot_asset_style_version)
-    if stage_key == "datasheet":
+    if vswr_asset_style_version is not None and stage_key in {"vswr", "datasheet"}:
+        versions["vswr_assets"] = int(vswr_asset_style_version)
+    if datasheet_render_version is not None and stage_key == "datasheet":
         versions["datasheet_render"] = int(datasheet_render_version)
     return versions
 

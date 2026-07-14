@@ -59,7 +59,14 @@ from legend_utils import (
     polarization_sort_key,
     polar_legend_label,
 )
-from datasheet.artifacts import build_asset_record, update_artifact_manifest
+from datasheet.artifacts import (
+    artifact_manifest_path,
+    build_asset_record,
+    load_artifact_manifest,
+    save_artifact_manifest,
+    update_artifact_manifest,
+)
+from pipeline.atomic import StageWorkspace
 from pipeline.progress import emit_progress
 from plotting.cartesian import render_cartesian_plot
 from plotting.common import (
@@ -89,6 +96,7 @@ from plotting.config import (
     STACKED_LEGEND_ROW_SEP,
     STACKED_LEGEND_TEXT_COLOR,
 )
+from workbook_metadata import WORKBOOK_METADATA_SHEET, read_workbook_manifest
 
 # ------------------ global color scheme ------------------
 DEFAULT_SOLID_COLORS = ["#2bb6f6", "#f5a623"]  # kept from gain plot
@@ -184,26 +192,22 @@ def format_frequency_label(txt: str) -> str:
 
 
 def apply_freq_window(x_freq: np.ndarray, series_groups: list[list[np.ndarray]], fmin: float | None, fmax: float | None):
-    """If BOTH fmin and fmax are provided and within range, mask x and aligned series.
-    Return (x_new, masked_groups, did_crop: bool).
-    """
+    """Mask frequencies to the inclusive requested bounds without fallback."""
     if x_freq is None or len(x_freq) == 0:
         return x_freq, series_groups, False
-    if fmin is None or fmax is None:
+    if fmin is None and fmax is None:
         return x_freq, series_groups, False
-    data_min = float(np.nanmin(x_freq))
-    data_max = float(np.nanmax(x_freq))
-    if not (fmin < fmax and fmin >= data_min and fmax <= data_max):
-        return x_freq, series_groups, False
-    mask = (x_freq >= fmin) & (x_freq <= fmax)
-    if not np.any(mask):
-        return x_freq, series_groups, False
+    mask = np.ones(len(x_freq), dtype=bool)
+    if fmin is not None:
+        mask &= x_freq >= float(fmin)
+    if fmax is not None:
+        mask &= x_freq <= float(fmax)
     x_new = x_freq[mask]
     masked = []
     for group in series_groups:
         masked_group = [np.asarray(s, dtype=float)[mask] if s is not None and len(s) == len(x_freq) else s for s in group]
         masked.append(masked_group)
-    return x_new, masked, True
+    return x_new, masked, not np.all(mask)
 
 
 def common_frequency_axis(freq_axes: list[np.ndarray]) -> np.ndarray | None:
@@ -719,8 +723,10 @@ def main():
     xls = pd.ExcelFile(args.input_xlsx)
     sheet_names = xls.sheet_names
     bookstem = Path(args.input_xlsx).stem
-    out_dir = Path(args.out_dir) if args.out_dir else Path(args.input_xlsx).resolve().parent
-    out_dir.mkdir(parents=True, exist_ok=True)
+    final_out_dir = (Path(args.out_dir) if args.out_dir else Path(args.input_xlsx).resolve().parent).resolve()
+    final_out_dir.mkdir(parents=True, exist_ok=True)
+    stage = StageWorkspace(final_out_dir, "plot")
+    out_dir = stage.root
     for generated_polar_dir in (out_dir / "polar_combined", out_dir / "polar_single"):
         if generated_polar_dir.exists():
             shutil.rmtree(generated_polar_dir)
@@ -735,6 +741,7 @@ def main():
         if low.endswith("_phi90"): return name[:-6]
         return name
 
+    workbook_manifest = read_workbook_manifest(args.input_xlsx)
     grouped: dict[str, dict[str, pd.DataFrame]] = {}
     for s in polar_sheets:
         base = base_of(s)
@@ -747,10 +754,33 @@ def main():
 
     def port_label_for(base: str) -> str:
         key = str(base).strip()
-        return port_labels.get(key.lower(), "") or port_labels.get(Path(key).stem.lower(), "") or port_labels.get(Path(key).stem[:31].lower(), "")
+        candidates = [key, Path(key).stem, Path(key).stem[:31]]
+        sources = workbook_manifest.get("sources") if isinstance(workbook_manifest, dict) else None
+        if isinstance(sources, list):
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                sheets = source.get("sheets")
+                if not isinstance(sheets, dict):
+                    continue
+                source_bases = {
+                    str(sheets.get("data") or ""),
+                    base_of(str(sheets.get("phi0") or "")),
+                    base_of(str(sheets.get("phi90") or "")),
+                }
+                if key not in source_bases:
+                    continue
+                fingerprint = source.get("fingerprint")
+                source_path = str(fingerprint.get("path") or "") if isinstance(fingerprint, dict) else ""
+                candidates.extend([str(source.get("input_id") or ""), source_path, Path(source_path).stem])
+                break
+        return next((port_labels[candidate.lower()] for candidate in candidates if candidate and candidate.lower() in port_labels), "")
 
     # collect summary sheets for cartesian plots
-    summary_sheets = sorted((s for s in sheet_names if s not in polar_sheets), key=polarization_sort_key)
+    summary_sheets = sorted(
+        (s for s in sheet_names if s not in polar_sheets and s != WORKBOOK_METADATA_SHEET),
+        key=polarization_sort_key,
+    )
 
     gain_series, gain_names, gain_freqs = [], [], []
     bw_series, bw_names, bw_styles, bw_freqs = [], [], [], []
@@ -1127,22 +1157,16 @@ def main():
 
     # available polar window
     numeric_freqs = [(c, parse_freq_ghz_from_text(c)) for c in all_freq_cols]
-    just_vals = [v for (_, v) in numeric_freqs if v is not None]
-    avail_min, avail_max = (min(just_vals), max(just_vals)) if just_vals else (None, None)
 
     def polar_cols_iter():
-        if args.fmin is None or args.fmax is None:
-            for c in sorted(all_freq_cols):
-                yield c
-            return
-        if avail_min is None or avail_max is None or not (args.fmin < args.fmax and args.fmin >= avail_min and args.fmax <= avail_max):
+        if args.fmin is None and args.fmax is None:
             for c in sorted(all_freq_cols):
                 yield c
             return
         for c, val in sorted(numeric_freqs, key=lambda x: (x[1] is None, x[1])):
             if val is None:
                 continue
-            if args.fmin <= val <= args.fmax:
+            if (args.fmin is None or val >= args.fmin) and (args.fmax is None or val <= args.fmax):
                 yield c
 
     def polar_style_for(phi_key: str, line_index: int) -> tuple[str | None, str]:
@@ -1411,6 +1435,9 @@ def main():
             if manifest_plane is not None:
                 manifest_polar_planes.append(manifest_plane)
 
+    if not any(out_dir.rglob("*.svg")):
+        raise SystemExit("No workbook samples overlap the requested frequency window; existing plots were preserved.")
+
     update_artifact_manifest(
         out_dir,
         bookstem,
@@ -1423,6 +1450,61 @@ def main():
         polar_single=manifest_polar_single,
         polar_planes=manifest_polar_planes,
     )
+
+    staged_manifest_path = artifact_manifest_path(out_dir, bookstem)
+    staged_manifest = load_artifact_manifest(staged_manifest_path, bookstem=bookstem)
+    staged_asset_paths: list[Path] = []
+
+    def collect_staged_assets(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in {"svg", "legend_svg"} and isinstance(value, str):
+                    try:
+                        staged_asset_paths.append(Path(value).resolve().relative_to(stage.root))
+                    except ValueError as exc:
+                        raise SystemExit(f"Plot renderer returned an output outside its staging directory: {value}") from exc
+                else:
+                    collect_staged_assets(value)
+        elif isinstance(node, list):
+            for value in node:
+                collect_staged_assets(value)
+
+    collect_staged_assets(staged_manifest.get("charts", {}))
+    final_manifest_path = artifact_manifest_path(final_out_dir, bookstem)
+    merged_manifest = load_artifact_manifest(final_manifest_path, bookstem=bookstem)
+    staged_charts = staged_manifest.get("charts", {})
+    merged_charts = merged_manifest.setdefault("charts", {})
+    plot_keys = {
+        "gain",
+        "beamwidth",
+        "beam_efficiency",
+        "beamwidth_planes",
+        "polar_combined",
+        "polar_combined_planes",
+        "polar_single",
+        "polar_planes",
+    }
+    for key in plot_keys:
+        merged_charts[key] = staged_charts.get(key)
+    merged_text = json.dumps(merged_manifest).replace(str(stage.root), str(final_out_dir))
+    save_artifact_manifest(staged_manifest_path, json.loads(merged_text))
+
+    manifest_name = staged_manifest_path.name
+    required = [entry.name for entry in stage.root.iterdir() if entry.name != manifest_name]
+    required.append(manifest_name)
+    obsolete: list[str] = []
+    required_set = set(required)
+    for pattern in (
+        f"{bookstem}-gain*.svg",
+        f"{bookstem}-beamwidth*.svg",
+        f"{bookstem}-beam-efficiency*.svg",
+        f"{bookstem}-polar*.svg",
+    ):
+        obsolete.extend(path.name for path in final_out_dir.glob(pattern) if path.name not in required_set)
+    for directory_name in ("polar_combined", "polar_single"):
+        if (final_out_dir / directory_name).exists() and directory_name not in required_set:
+            obsolete.append(directory_name)
+    stage.publish(required, obsolete=obsolete, validate=staged_asset_paths)
 
 if __name__ == "__main__":
     main()

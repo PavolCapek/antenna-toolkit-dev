@@ -76,7 +76,12 @@ class StudioPipelineTests(unittest.TestCase):
     def test_stage_tool_versions_and_stale_detail(self) -> None:
         versions = stage_tool_versions("datasheet", plot_asset_style_version=3, datasheet_render_version=2)
 
-        self.assertEqual(versions, {"plot_assets": 3, "datasheet_render": 2})
+        self.assertEqual(versions["plot_assets"], 3)
+        self.assertEqual(versions["datasheet_render"], 2)
+        self.assertIn("beam_data", versions)
+        self.assertIn("extract_data", versions)
+        self.assertIn("touchstone_parser", versions)
+        self.assertIn("vswr_assets", versions)
         self.assertEqual(stage_stale_detail("plot", {"plot_assets": 2}, {"plot_assets": 3}), "App plot styling changed. Rerun Plots only.")
         self.assertEqual(stage_stale_detail("plot", {"plot_assets": 3}, {"plot_assets": 3}), "")
 
