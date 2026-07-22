@@ -159,6 +159,7 @@ Projects\SH60WB\
   SH60WB_vswr.svg
   ant_files\
   linkCalc\
+  netsim\
   polar_combined\
   polar_single\
 ```
@@ -167,6 +168,12 @@ Projects\SH60WB\
 frequency sample. Each UTF-8 row is space-separated `phi`, `theta`, and absolute
 total-field directivity in dBi, and filenames use
 `<source-stem>-<frequencyGHz>.ffs`.
+
+`netsim\` contains one extensionless JSON antenna file per enabled far-field
+input. Each file retains its UUID across reruns and stores every source
+frequency in MHz as a 361-by-181 gain matrix (phi rows 0..360 degrees, theta
+columns 0..180 degrees). Coarser source grids are interpolated to one-degree
+spacing.
 
 ## Workbook Contents
 

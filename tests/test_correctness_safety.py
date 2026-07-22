@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import stat
 import sys
+import uuid
 import zipfile
 from pathlib import Path
 from unittest import mock
@@ -122,10 +123,13 @@ def test_invalid_ffs_raises_and_does_not_replace_existing_workbook(tmp_path: Pat
     source = tmp_path / "invalid.ffs"
     output = tmp_path / "result.xlsx"
     linkcalc_output = tmp_path / "linkCalc" / "known-good.ffs"
+    netsim_output = tmp_path / "netsim" / "known-good"
     source.write_text("not a CST far-field file", encoding="utf-8")
     output.write_bytes(b"known-good")
     linkcalc_output.parent.mkdir()
     linkcalc_output.write_bytes(b"known-good-linkcalc")
+    netsim_output.parent.mkdir()
+    netsim_output.write_bytes(b"known-good-netsim")
 
     with mock.patch.object(sys, "argv", ["beamwidth_xlsx.py", str(output), str(source)]):
         with pytest.raises(SystemExit, match="no outputs were published"):
@@ -134,6 +138,7 @@ def test_invalid_ffs_raises_and_does_not_replace_existing_workbook(tmp_path: Pat
     assert output.read_bytes() == b"known-good"
     assert not (tmp_path / "ant_files").exists()
     assert linkcalc_output.read_bytes() == b"known-good-linkcalc"
+    assert netsim_output.read_bytes() == b"known-good-netsim"
 
 
 def test_ffs_reader_rejects_empty_and_incomplete_grids(tmp_path: Path) -> None:
@@ -180,6 +185,24 @@ def test_linkcalc_gain_rows_keep_source_order_and_absolute_dbi() -> None:
         [-6.995700704721642, -0.9751007914420182, 2.546724389671606, 5.045499121837605]
     )
 
+    netsim_pattern = result[6][0]
+    netsim_data = np.asarray(netsim_pattern["data"])
+    assert netsim_pattern["frequency"] == 5000
+    assert netsim_data.shape == (361, 181)
+    assert netsim_data[0, 0] == pytest.approx(10.0 * np.log10(4.0 / 30.0))
+    assert netsim_data[180, 90] == pytest.approx(10.0 * np.log10(1.0 / 30.0))
+    assert netsim_data[90, 45] == pytest.approx(
+        np.mean(
+            [
+                10.0 * np.log10(4.0 / 30.0),
+                10.0 * np.log10(16.0 / 30.0),
+                10.0 * np.log10(9.0 / 30.0),
+                10.0 * np.log10(1.0 / 30.0),
+            ]
+        )
+    )
+    assert netsim_data[-1, :] == pytest.approx(netsim_data[0, :])
+
 
 def test_linkcalc_writer_formats_two_polarizations_and_close_frequencies(tmp_path: Path) -> None:
     rows_by_frequency = {
@@ -205,6 +228,33 @@ def test_linkcalc_writer_formats_two_polarizations_and_close_frequencies(tmp_pat
     )
 
 
+def test_netsim_writer_retains_uuid_and_writes_extensionless_json(tmp_path: Path) -> None:
+    existing_dir = tmp_path / "published"
+    staged_dir = tmp_path / "staged"
+    existing_dir.mkdir()
+    retained_id = "6ad7895d-d945-4ab6-849b-c73fc98f807f"
+    (existing_dir / "sample_H").write_text(
+        json.dumps({"id": retained_id, "name": "old", "patterns": []}),
+        encoding="utf-8",
+    )
+    patterns = [{"data": [[1.25]], "frequency": 5500}]
+
+    output = beamwidth_xlsx.write_netsim_file(
+        staged_dir, existing_dir, "sample_H", patterns
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert output.name == "sample_H"
+    assert output.suffix == ""
+    assert payload == {"id": retained_id, "name": "sample_H", "patterns": patterns}
+    assert not output.read_bytes().endswith(b"\n")
+
+    new_output = beamwidth_xlsx.write_netsim_file(
+        staged_dir, existing_dir, "sample_V", patterns
+    )
+    uuid.UUID(json.loads(new_output.read_text(encoding="utf-8"))["id"])
+
+
 @pytest.mark.filterwarnings("ignore:Mean of empty slice:RuntimeWarning")
 def test_successful_beam_publish_replaces_obsolete_linkcalc_files(tmp_path: Path) -> None:
     source = tmp_path / "sample_H.ffs"
@@ -213,6 +263,15 @@ def test_successful_beam_publish_replaces_obsolete_linkcalc_files(tmp_path: Path
     stale = tmp_path / "linkCalc" / "stale.ffs"
     stale.parent.mkdir()
     stale.write_text("obsolete", encoding="utf-8")
+    retained_id = "6ad7895d-d945-4ab6-849b-c73fc98f807f"
+    existing_netsim = tmp_path / "netsim" / "sample_H"
+    existing_netsim.parent.mkdir()
+    existing_netsim.write_text(
+        json.dumps({"id": retained_id, "name": "sample_H", "patterns": []}),
+        encoding="utf-8",
+    )
+    stale_netsim = tmp_path / "netsim" / "stale"
+    stale_netsim.write_text("obsolete", encoding="utf-8")
     source_rows = [
         (0.0, 0.0, 1 + 0j, 0j),
         (0.0, 90.0, 1 + 0j, 0j),
@@ -230,6 +289,12 @@ def test_successful_beam_publish_replaces_obsolete_linkcalc_files(tmp_path: Path
 
     assert not stale.exists()
     assert (tmp_path / "linkCalc" / "sample_H-5GHz.ffs").exists()
+    assert not stale_netsim.exists()
+    published_netsim = json.loads(existing_netsim.read_text(encoding="utf-8"))
+    assert published_netsim["id"] == retained_id
+    assert published_netsim["patterns"][0]["frequency"] == 5000
+    assert len(published_netsim["patterns"][0]["data"]) == 361
+    assert len(published_netsim["patterns"][0]["data"][0]) == 181
 
 
 def test_beam_workbook_reuse_requires_matching_manifest(tmp_path: Path) -> None:

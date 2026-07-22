@@ -571,6 +571,7 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         project_file = self.window.current_project().project_file(Path(self.temp_dir.name))
         ant_output = project_dir / "ant_files" / f"{beam_output.stem}-5_8GHz.ant"
         linkcalc_output = project_dir / "linkCalc" / f"{beam_output.stem}-5.8GHz.ffs"
+        netsim_output = project_dir / "netsim" / beam_output.stem
         polar_combined_output = project_dir / "polar_combined" / f"{beam_output.stem}-polar-5_8ghz-combined.svg"
         polar_combined_legend = project_dir / "polar_combined" / f"{beam_output.stem}-polar-5_8ghz-combined-legend.svg"
         polar_az_output = project_dir / "polar_single" / "azimuth" / f"{beam_output.stem}-polar-azimuth-5_8ghz.svg"
@@ -597,6 +598,7 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
             project_dir / f"{beam_output.stem}-beam-efficiency-legend.svg",
             ant_output,
             linkcalc_output,
+            netsim_output,
             polar_combined_output,
             polar_combined_legend,
             polar_az_output,
@@ -625,6 +627,7 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertFalse(vswr_output.exists())
         self.assertFalse(ant_output.exists())
         self.assertFalse(linkcalc_output.exists())
+        self.assertFalse(netsim_output.exists())
         self.assertFalse(polar_combined_output.exists())
         self.assertFalse(polar_combined_legend.exists())
         self.assertFalse(polar_az_output.exists())
@@ -636,6 +639,7 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertFalse(artifact_manifest.exists())
         self.assertFalse((project_dir / "ant_files").exists())
         self.assertFalse((project_dir / "linkCalc").exists())
+        self.assertFalse((project_dir / "netsim").exists())
         self.assertFalse((project_dir / "polar_combined").exists())
         self.assertFalse((project_dir / "polar_single").exists())
         self.assertTrue(project_file.exists())

@@ -24,6 +24,10 @@ Beamwidth extractor with XLSX output and per-frequency antenna exports.
   - Headerless, space-separated `phi`, `theta`, and absolute total-field directivity in dBi.
   - Files are stored in **linkCalc/** next to the XLSX output, named `<stem>-<freqGHz>.ffs`.
 
+- Generates one extensionless **NetSim antenna JSON** per input .ffs:
+  - All frequencies are stored as MHz patterns with 361 phi rows by 181 theta columns.
+  - Files are stored in **netsim/** next to the XLSX output and retain their UUID on reruns.
+
 Usage:
   python3 beamwidth_xlsx.py out.xlsx file1.ffs file2.ffs [--smooth 1 --theta-window 8]
 
@@ -33,8 +37,10 @@ Examples:
 from __future__ import annotations
 import argparse
 import csv
+import json
 import math
 import re
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -394,12 +400,63 @@ def read_ffs_broadband(path: Path, freq_regex: Optional[str] = None) -> Dict[flo
     return by_freq
 
 
+def frequency_mhz_value(frequency_hz: float) -> int | float:
+    """Convert Hz to MHz, preserving exact integer-MHz samples as integers."""
+    frequency_mhz = frequency_hz / 1e6
+    rounded = round(frequency_mhz)
+    if math.isclose(frequency_mhz, rounded, rel_tol=0.0, abs_tol=1e-9):
+        return int(rounded)
+    return float(frequency_mhz)
+
+
+def interpolate_netsim_gain_grid(
+    phis_deg: np.ndarray,
+    thetas_deg: np.ndarray,
+    gain_dbi: np.ndarray,
+) -> np.ndarray:
+    """Interpolate a gain grid to NetSim's phi 0..360 by theta 0..180 grid."""
+    phis = np.asarray(phis_deg, dtype=float)
+    thetas = np.asarray(thetas_deg, dtype=float)
+    gain = np.asarray(gain_dbi, dtype=float)
+    if gain.shape != (len(phis), len(thetas)):
+        raise ValueError("NetSim interpolation requires a phi-by-theta gain grid")
+
+    target_thetas = np.arange(181, dtype=float)
+    theta_interpolated = np.vstack(
+        [np.interp(target_thetas, thetas, gain_row) for gain_row in gain]
+    )
+
+    # Collapse the duplicate 360-degree source row onto 0 degrees and then
+    # extend both ends so interpolation across the phi seam stays periodic.
+    normalized_phis = np.mod(phis, 360.0)
+    order = np.argsort(normalized_phis, kind="stable")
+    sorted_phis = normalized_phis[order]
+    sorted_gain = theta_interpolated[order, :]
+    _rounded_unique, first_indices = np.unique(
+        np.round(sorted_phis, 9), return_index=True
+    )
+    base_phis = sorted_phis[first_indices]
+    base_gain = sorted_gain[first_indices, :]
+    extended_phis = np.concatenate(
+        ([base_phis[-1] - 360.0], base_phis, [base_phis[0] + 360.0])
+    )
+    extended_gain = np.vstack((base_gain[-1, :], base_gain, base_gain[0, :]))
+
+    target_phis = np.arange(361, dtype=float)
+    result = np.empty((361, 181), dtype=float)
+    for theta_index in range(181):
+        result[:, theta_index] = np.interp(
+            target_phis, extended_phis, extended_gain[:, theta_index]
+        )
+    return result
+
+
 # ---------------------------
 # Core computation for one file (returns table rows + patterns)
 # ---------------------------
 
 def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
-    """Return workbook patterns plus source-ordered LinkCalc gain rows.
+    """Return workbook patterns plus LinkCalc and NetSim outputs.
 
     - rows_out: list[list[object]] for the data table.
     - theta_grid: 1D array of θ (deg) from -180..180 (step=1).
@@ -407,6 +464,7 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
     - patterns_phi90: 2D array (len(theta_grid) x Nfreq) relative dB for φ≈90°.
     - freq_labels: list of column labels (e.g., '5.500 GHz').
     - linkcalc_rows: mapping of frequency Hz to source-ordered `(phi, theta, gain_dBi)` rows.
+    - netsim_patterns: frequency-MHz patterns with 361x181 interpolated gain matrices.
     """
     by_freq = read_ffs_broadband(ffs_path)
     thresh = {3.0: ('theta_3dB_half_deg', 'beamwidth_3dB_2sided_deg'),
@@ -418,6 +476,7 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
     freq_list = sorted(by_freq.keys())
     freq_labels: list[str] = []
     linkcalc_rows: dict[float, list[LinkCalcRow]] = {}
+    netsim_patterns: list[dict[str, object]] = []
 
     # Build θ grid for patterns: -180..180, 1° step
     theta_grid = np.arange(-180.0, 181.0, 1.0)
@@ -470,6 +529,17 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
             raise FFSParseError(f"{ffs_path.name}: frequency {freq_Hz:g} Hz has invalid radiated power")
         Gdir = (4.0 * math.pi) * (P / Prad)
         Gabs_dBi = 10.0 * np.log10(np.maximum(Gdir, 1e-300))
+
+        # Match NetSim's native converter: 10*log10((|Etheta|^2 + |Ephi|^2) / 30).
+        Gnetsim_dBi = 10.0 * np.log10(np.maximum(P / 30.0, 1e-300))
+        netsim_patterns.append(
+            {
+                "data": interpolate_netsim_gain_grid(
+                    phis_grid, thetas_grid, Gnetsim_dBi
+                ).tolist(),
+                "frequency": frequency_mhz_value(freq_Hz),
+            }
+        )
 
         # Gabs_dBi follows the sorted grid. Restore the source row order for
         # LinkCalc so its phi/theta traversal matches the originating block.
@@ -563,7 +633,15 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
     patterns_phi90 = np.column_stack(pat90_cols) if pat90_cols else None
     if not rows_out or patterns_phi0 is None or patterns_phi90 is None or not freq_labels:
         raise FFSParseError(f"{ffs_path.name}: no usable beam or radiation-pattern results were computed")
-    return rows_out, theta_grid, patterns_phi0, patterns_phi90, freq_labels, linkcalc_rows
+    return (
+        rows_out,
+        theta_grid,
+        patterns_phi0,
+        patterns_phi90,
+        freq_labels,
+        linkcalc_rows,
+        netsim_patterns,
+    )
 
 
 # ---------------------------
@@ -705,6 +783,38 @@ def write_linkcalc_files(
     return outputs
 
 
+def retained_netsim_id(existing_path: Path) -> str:
+    """Reuse a valid UUID from an existing NetSim file or create one."""
+    try:
+        payload = json.loads(existing_path.read_text(encoding="utf-8"))
+        candidate = str(payload.get("id", "")).strip()
+        uuid.UUID(candidate)
+        return candidate
+    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        return str(uuid.uuid4())
+
+
+def write_netsim_file(
+    netsim_dir: Path,
+    existing_netsim_dir: Path,
+    name: str,
+    patterns: list[dict[str, object]],
+) -> Path:
+    """Write one extensionless NetSim antenna JSON while retaining its UUID."""
+    netsim_dir.mkdir(parents=True, exist_ok=True)
+    out_path = netsim_dir / name
+    payload = {
+        "id": retained_netsim_id(existing_netsim_dir / name),
+        "name": name,
+        "patterns": patterns,
+    }
+    out_path.write_text(
+        json.dumps(payload, indent="\t", ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
+    return out_path
+
+
 # ---------------------------
 # Main
 # ---------------------------
@@ -738,7 +848,7 @@ def _fail_invalid_inputs(errors: list[str]) -> None:
         raise SystemExit(f"Workbook generation failed; no outputs were published:\n{detail}")
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Beamwidth/Directivity/Beam-efficiency to XLSX with per-file sheets, radiation diagrams, summary sheet, .ant outputs, and LinkCalc .ffs outputs.")
+    ap = argparse.ArgumentParser(description="Beamwidth/Directivity/Beam-efficiency to XLSX with radiation diagrams, .ant, LinkCalc, and NetSim outputs.")
     ap.add_argument('output', type=Path, help='Output file (.xlsx preferred; if .csv, a per-input CSV is created).')
     ap.add_argument('ffs', nargs='+', type=Path, help='One or more CST Farfield Source Files (.ffs)')
     ap.add_argument('--smooth', type=int, default=1,
@@ -800,11 +910,14 @@ def main() -> int:
         stage = StageWorkspace(args.output.parent, "beam")
         ant_dir = stage.path('ant_files')
         linkcalc_dir = stage.path('linkCalc')
+        netsim_dir = stage.path('netsim')
+        existing_netsim_dir = args.output.parent / "netsim"
         expected_ant_files: list[Path] = []
         expected_linkcalc_files: list[Path] = []
+        expected_netsim_files: list[Path] = []
 
         for fpath, mapping, result in zip(args.ffs, input_maps, computed_results):
-            rows, theta_grid, pat0, pat90, labels, linkcalc_rows = result
+            rows, theta_grid, pat0, pat90, labels, linkcalc_rows, netsim_patterns = result
 
             # Data sheet
             title = mapping["data"]
@@ -859,6 +972,13 @@ def main() -> int:
             expected_linkcalc_files.extend(
                 Path("linkCalc") / path.name for path in linkcalc_outputs
             )
+            netsim_output = write_netsim_file(
+                netsim_dir=netsim_dir,
+                existing_netsim_dir=existing_netsim_dir,
+                name=mapping["ant_stem"],
+                patterns=netsim_patterns,
+            )
+            expected_netsim_files.append(Path("netsim") / netsim_output.name)
 
         # Finally, write the global summary sheet (once)
         ws_sum = wb.create_sheet(title="summary")
@@ -879,12 +999,13 @@ def main() -> int:
         emit_progress("beam", progress_total, progress_total, f"Saving {args.output.name}")
         wb.save(stage.path(args.output.name))
         stage.publish(
-            [args.output.name, "ant_files", "linkCalc"],
-            validate=expected_ant_files + expected_linkcalc_files,
+            [args.output.name, "ant_files", "linkCalc", "netsim"],
+            validate=expected_ant_files + expected_linkcalc_files + expected_netsim_files,
         )
         print(f"Wrote XLSX: {args.output} with {len(args.ffs)} file sheets + radiation diagrams + summary.")
         print(f".ant files written to: {args.output.parent / 'ant_files'}")
         print(f"LinkCalc .ffs files written to: {args.output.parent / 'linkCalc'}")
+        print(f"NetSim antenna files written to: {args.output.parent / 'netsim'}")
     else:
         # CSV fallback: data-only, one CSV per input
         base = args.output
@@ -892,11 +1013,14 @@ def main() -> int:
         stage = StageWorkspace(base.parent, "beam")
         ant_dir = stage.path('ant_files')
         linkcalc_dir = stage.path('linkCalc')
+        netsim_dir = stage.path('netsim')
+        existing_netsim_dir = base.parent / "netsim"
         expected_ant_files: list[Path] = []
         expected_linkcalc_files: list[Path] = []
-        required_outputs: list[str] = ["ant_files", "linkCalc"]
+        expected_netsim_files: list[Path] = []
+        required_outputs: list[str] = ["ant_files", "linkCalc", "netsim"]
         for fpath, mapping, result in zip(args.ffs, input_maps, computed_results):
-            rows, theta_grid, pat0, pat90, labels, linkcalc_rows = result
+            rows, theta_grid, pat0, pat90, labels, linkcalc_rows, netsim_patterns = result
             out_name = f"{base.stem}-{mapping['ant_stem']}.csv"
             out_csv = stage.path(out_name)
             required_outputs.append(out_name)
@@ -932,6 +1056,13 @@ def main() -> int:
             expected_linkcalc_files.extend(
                 Path("linkCalc") / path.name for path in linkcalc_outputs
             )
+            netsim_output = write_netsim_file(
+                netsim_dir=netsim_dir,
+                existing_netsim_dir=existing_netsim_dir,
+                name=mapping["ant_stem"],
+                patterns=netsim_patterns,
+            )
+            expected_netsim_files.append(Path("netsim") / netsim_output.name)
         obsolete_outputs = [
             path.name
             for path in base.parent.glob(f"{base.stem}-*.csv")
@@ -940,11 +1071,12 @@ def main() -> int:
         stage.publish(
             required_outputs,
             obsolete=obsolete_outputs,
-            validate=expected_ant_files + expected_linkcalc_files,
+            validate=expected_ant_files + expected_linkcalc_files + expected_netsim_files,
         )
         emit_progress("beam", progress_total, progress_total, f"Finalizing {base.name}")
         print(f".ant files written to: {base.parent / 'ant_files'}")
         print(f"LinkCalc .ffs files written to: {base.parent / 'linkCalc'}")
+        print(f"NetSim antenna files written to: {base.parent / 'netsim'}")
 
     return 0
 
