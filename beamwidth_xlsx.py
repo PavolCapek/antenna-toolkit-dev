@@ -21,7 +21,7 @@ Beamwidth extractor with XLSX output and per-frequency antenna exports.
   • Files are stored in **ant_files/** next to the XLSX output, named `<stem>-<freqGHz>.ant`.
 
 - Generates simplified **LinkCalc .ffs files** for each frequency in each input .ffs:
-  - Headerless, tab-separated `phi`, `theta`, and absolute total-field directivity in dBi.
+  - Headerless, space-separated `phi`, `theta`, and absolute total-field directivity in dBi.
   - Files are stored in **linkCalc/** next to the XLSX output, named `<stem>-<freqGHz>.ffs`.
 
 Usage:
@@ -693,16 +693,14 @@ def write_linkcalc_files(
     stem: str,
     rows_by_frequency: dict[float, list[LinkCalcRow]],
 ) -> list[Path]:
-    """Write one headerless phi/theta/gain TSV .ffs per frequency."""
+    """Write one headerless, space-separated phi/theta/gain .ffs per frequency."""
     linkcalc_dir.mkdir(parents=True, exist_ok=True)
     outputs: list[Path] = []
     for frequency_hz in sorted(rows_by_frequency):
         out_path = linkcalc_dir / f"{stem}-{frequency_ghz_token(frequency_hz)}.ffs"
         with out_path.open('w', encoding='utf-8', newline='\n') as handle:
-            for index, (phi, theta, gain_dbi) in enumerate(rows_by_frequency[frequency_hz]):
-                if index:
-                    handle.write("\n")
-                handle.write(f"{phi:.12g}\t{theta:.12g}\t{gain_dbi:.9f}")
+            for phi, theta, gain_dbi in rows_by_frequency[frequency_hz]:
+                handle.write(f"{phi:.12g} {theta:.12g} {gain_dbi:.9f}\n")
         outputs.append(out_path)
     return outputs
 

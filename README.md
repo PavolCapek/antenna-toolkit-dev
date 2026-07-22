@@ -164,7 +164,7 @@ Projects\SH60WB\
 ```
 
 `linkCalc\` contains one headerless `.ffs` file per enabled far-field input and
-frequency sample. Each UTF-8 row is tab-separated `phi`, `theta`, and absolute
+frequency sample. Each UTF-8 row is space-separated `phi`, `theta`, and absolute
 total-field directivity in dBi, and filenames use
 `<source-stem>-<frequencyGHz>.ffs`.
 
