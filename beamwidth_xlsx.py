@@ -700,7 +700,7 @@ def write_linkcalc_files(
         out_path = linkcalc_dir / f"{stem}-{frequency_ghz_token(frequency_hz)}.ffs"
         with out_path.open('w', encoding='utf-8', newline='\n') as handle:
             for phi, theta, gain_dbi in rows_by_frequency[frequency_hz]:
-                handle.write(f"{phi:.12g} {theta:.12g} {gain_dbi:.9f}\n")
+                handle.write(f"{phi:.12g} {theta:.12g} {gain_dbi:.4f}\n")
         outputs.append(out_path)
     return outputs
 

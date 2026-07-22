@@ -197,11 +197,11 @@ def test_linkcalc_writer_formats_two_polarizations_and_close_frequencies(tmp_pat
         "sample_V-5.000000001GHz.ffs",
     }
     assert (tmp_path / "sample_H-5GHz.ffs").read_text(encoding="utf-8") == (
-        "180.123456789 90 1.234567891\n"
-        "0 0 -2.000000000\n"
+        "180.123456789 90 1.2346\n"
+        "0 0 -2.0000\n"
     )
     assert (tmp_path / "sample_H-5.000000001GHz.ffs").read_text(encoding="utf-8") == (
-        "45 30 3.000000000\n"
+        "45 30 3.0000\n"
     )
 
 
