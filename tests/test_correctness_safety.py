@@ -240,7 +240,7 @@ def test_netsim_writer_retains_uuid_and_writes_extensionless_json(tmp_path: Path
     patterns = [{"data": [[1.25]], "frequency": 5500}]
 
     output = beamwidth_xlsx.write_netsim_file(
-        staged_dir, existing_dir, "sample_H", patterns
+        staged_dir, [existing_dir], "sample_H", patterns
     )
     payload = json.loads(output.read_text(encoding="utf-8"))
 
@@ -250,7 +250,7 @@ def test_netsim_writer_retains_uuid_and_writes_extensionless_json(tmp_path: Path
     assert not output.read_bytes().endswith(b"\n")
 
     new_output = beamwidth_xlsx.write_netsim_file(
-        staged_dir, existing_dir, "sample_V", patterns
+        staged_dir, [existing_dir], "sample_V", patterns
     )
     uuid.UUID(json.loads(new_output.read_text(encoding="utf-8"))["id"])
 
@@ -288,9 +288,13 @@ def test_successful_beam_publish_replaces_obsolete_linkcalc_files(tmp_path: Path
         assert beamwidth_xlsx.main() == 0
 
     assert not stale.exists()
-    assert (tmp_path / "linkCalc" / "sample_H-5GHz.ffs").exists()
+    radiation_dir = tmp_path / beamwidth_xlsx.RADIATION_PATTERN_FILES_DIR
+    assert (radiation_dir / "linkCalc" / "sample_H-5GHz.ffs").exists()
     assert not stale_netsim.exists()
-    published_netsim = json.loads(existing_netsim.read_text(encoding="utf-8"))
+    assert not existing_netsim.exists()
+    published_netsim = json.loads(
+        (radiation_dir / "netsim" / "sample_H").read_text(encoding="utf-8")
+    )
     assert published_netsim["id"] == retained_id
     assert published_netsim["patterns"][0]["frequency"] == 5000
     assert len(published_netsim["patterns"][0]["data"]) == 361

@@ -569,9 +569,13 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         vswr_output = self.window.deduced_vswr_output()
         project_dir = self.window.project_results_dir()
         project_file = self.window.current_project().project_file(Path(self.temp_dir.name))
-        ant_output = project_dir / "ant_files" / f"{beam_output.stem}-5_8GHz.ant"
-        linkcalc_output = project_dir / "linkCalc" / f"{beam_output.stem}-5.8GHz.ffs"
-        netsim_output = project_dir / "netsim" / beam_output.stem
+        radiation_dir = project_dir / "radiaiton pattern files"
+        ant_output = radiation_dir / "ant_files" / f"{beam_output.stem}-5_8GHz.ant"
+        linkcalc_output = radiation_dir / "linkCalc" / f"{beam_output.stem}-5.8GHz.ffs"
+        netsim_output = radiation_dir / "netsim" / beam_output.stem
+        legacy_ant_output = project_dir / "ant_files" / "legacy.ant"
+        legacy_linkcalc_output = project_dir / "linkCalc" / "legacy.ffs"
+        legacy_netsim_output = project_dir / "netsim" / "legacy"
         polar_combined_output = project_dir / "polar_combined" / f"{beam_output.stem}-polar-5_8ghz-combined.svg"
         polar_combined_legend = project_dir / "polar_combined" / f"{beam_output.stem}-polar-5_8ghz-combined-legend.svg"
         polar_az_output = project_dir / "polar_single" / "azimuth" / f"{beam_output.stem}-polar-azimuth-5_8ghz.svg"
@@ -599,6 +603,9 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
             ant_output,
             linkcalc_output,
             netsim_output,
+            legacy_ant_output,
+            legacy_linkcalc_output,
+            legacy_netsim_output,
             polar_combined_output,
             polar_combined_legend,
             polar_az_output,
@@ -637,6 +644,7 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertFalse(beamwidth_e_plane_output.exists())
         self.assertFalse(beamwidth_e_plane_legend.exists())
         self.assertFalse(artifact_manifest.exists())
+        self.assertFalse(radiation_dir.exists())
         self.assertFalse((project_dir / "ant_files").exists())
         self.assertFalse((project_dir / "linkCalc").exists())
         self.assertFalse((project_dir / "netsim").exists())

@@ -18,15 +18,15 @@ Beamwidth extractor with XLSX output and per-frequency antenna exports.
     with a contiguous 1° step sequence: **+90, +89, …, -180, +179, …, +91** (360 total samples).
     (This satisfies the requirement that elevation description starts at +90° and wraps through ±180°.)
   • Values written are **relative gain in dB** (0 dB = cut maximum at that frequency).
-  • Files are stored in **ant_files/** next to the XLSX output, named `<stem>-<freqGHz>.ant`.
+  • Files are stored in **radiaiton pattern files/ant_files/**, named `<stem>-<freqGHz>.ant`.
 
 - Generates simplified **LinkCalc .ffs files** for each frequency in each input .ffs:
   - Headerless, space-separated `phi`, `theta`, and absolute total-field directivity in dBi.
-  - Files are stored in **linkCalc/** next to the XLSX output, named `<stem>-<freqGHz>.ffs`.
+  - Files are stored in **radiaiton pattern files/linkCalc/**, named `<stem>-<freqGHz>.ffs`.
 
 - Generates one extensionless **NetSim antenna JSON** per input .ffs:
   - All frequencies are stored as MHz patterns with 361 phi rows by 181 theta columns.
-  - Files are stored in **netsim/** next to the XLSX output and retain their UUID on reruns.
+  - Files are stored in **radiaiton pattern files/netsim/** and retain their UUID on reruns.
 
 Usage:
   python3 beamwidth_xlsx.py out.xlsx file1.ffs file2.ffs [--smooth 1 --theta-window 8]
@@ -47,6 +47,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from pipeline.atomic import StageWorkspace
 from pipeline.progress import emit_progress
+from pipeline.stages import RADIATION_PATTERN_FILES_DIR
 from workbook_metadata import (
     build_workbook_manifest,
     stable_input_id,
@@ -783,20 +784,22 @@ def write_linkcalc_files(
     return outputs
 
 
-def retained_netsim_id(existing_path: Path) -> str:
-    """Reuse a valid UUID from an existing NetSim file or create one."""
-    try:
-        payload = json.loads(existing_path.read_text(encoding="utf-8"))
-        candidate = str(payload.get("id", "")).strip()
-        uuid.UUID(candidate)
-        return candidate
-    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
-        return str(uuid.uuid4())
+def retained_netsim_id(existing_paths: list[Path]) -> str:
+    """Reuse a valid UUID from current or legacy NetSim files, or create one."""
+    for existing_path in existing_paths:
+        try:
+            payload = json.loads(existing_path.read_text(encoding="utf-8"))
+            candidate = str(payload.get("id", "")).strip()
+            uuid.UUID(candidate)
+            return candidate
+        except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+            continue
+    return str(uuid.uuid4())
 
 
 def write_netsim_file(
     netsim_dir: Path,
-    existing_netsim_dir: Path,
+    existing_netsim_dirs: list[Path],
     name: str,
     patterns: list[dict[str, object]],
 ) -> Path:
@@ -804,7 +807,7 @@ def write_netsim_file(
     netsim_dir.mkdir(parents=True, exist_ok=True)
     out_path = netsim_dir / name
     payload = {
-        "id": retained_netsim_id(existing_netsim_dir / name),
+        "id": retained_netsim_id([directory / name for directory in existing_netsim_dirs]),
         "name": name,
         "patterns": patterns,
     }
@@ -908,10 +911,14 @@ def main() -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
 
         stage = StageWorkspace(args.output.parent, "beam")
-        ant_dir = stage.path('ant_files')
-        linkcalc_dir = stage.path('linkCalc')
-        netsim_dir = stage.path('netsim')
-        existing_netsim_dir = args.output.parent / "netsim"
+        radiation_dir = stage.path(RADIATION_PATTERN_FILES_DIR)
+        ant_dir = radiation_dir / "ant_files"
+        linkcalc_dir = radiation_dir / "linkCalc"
+        netsim_dir = radiation_dir / "netsim"
+        existing_netsim_dirs = [
+            args.output.parent / RADIATION_PATTERN_FILES_DIR / "netsim",
+            args.output.parent / "netsim",
+        ]
         expected_ant_files: list[Path] = []
         expected_linkcalc_files: list[Path] = []
         expected_netsim_files: list[Path] = []
@@ -952,7 +959,9 @@ def main() -> int:
             # --- Write .ant files for this input (reusing in-memory patterns; no re-parsing) ---
             if theta_grid is not None and pat0 is not None and pat90 is not None and labels:
                 expected_ant_files.extend(
-                    Path("ant_files") / f"{mapping['ant_stem']}-{label.replace(' ', '')}.ant"
+                    Path(RADIATION_PATTERN_FILES_DIR)
+                    / "ant_files"
+                    / f"{mapping['ant_stem']}-{label.replace(' ', '')}.ant"
                     for label in labels
                 )
                 write_ant_files(
@@ -970,15 +979,18 @@ def main() -> int:
                 rows_by_frequency=linkcalc_rows,
             )
             expected_linkcalc_files.extend(
-                Path("linkCalc") / path.name for path in linkcalc_outputs
+                Path(RADIATION_PATTERN_FILES_DIR) / "linkCalc" / path.name
+                for path in linkcalc_outputs
             )
             netsim_output = write_netsim_file(
                 netsim_dir=netsim_dir,
-                existing_netsim_dir=existing_netsim_dir,
+                existing_netsim_dirs=existing_netsim_dirs,
                 name=mapping["ant_stem"],
                 patterns=netsim_patterns,
             )
-            expected_netsim_files.append(Path("netsim") / netsim_output.name)
+            expected_netsim_files.append(
+                Path(RADIATION_PATTERN_FILES_DIR) / "netsim" / netsim_output.name
+            )
 
         # Finally, write the global summary sheet (once)
         ws_sum = wb.create_sheet(title="summary")
@@ -999,26 +1011,32 @@ def main() -> int:
         emit_progress("beam", progress_total, progress_total, f"Saving {args.output.name}")
         wb.save(stage.path(args.output.name))
         stage.publish(
-            [args.output.name, "ant_files", "linkCalc", "netsim"],
+            [args.output.name, RADIATION_PATTERN_FILES_DIR],
+            obsolete=["ant_files", "linkCalc", "netsim"],
             validate=expected_ant_files + expected_linkcalc_files + expected_netsim_files,
         )
         print(f"Wrote XLSX: {args.output} with {len(args.ffs)} file sheets + radiation diagrams + summary.")
-        print(f".ant files written to: {args.output.parent / 'ant_files'}")
-        print(f"LinkCalc .ffs files written to: {args.output.parent / 'linkCalc'}")
-        print(f"NetSim antenna files written to: {args.output.parent / 'netsim'}")
+        published_radiation_dir = args.output.parent / RADIATION_PATTERN_FILES_DIR
+        print(f".ant files written to: {published_radiation_dir / 'ant_files'}")
+        print(f"LinkCalc .ffs files written to: {published_radiation_dir / 'linkCalc'}")
+        print(f"NetSim antenna files written to: {published_radiation_dir / 'netsim'}")
     else:
         # CSV fallback: data-only, one CSV per input
         base = args.output
         base.parent.mkdir(parents=True, exist_ok=True)
         stage = StageWorkspace(base.parent, "beam")
-        ant_dir = stage.path('ant_files')
-        linkcalc_dir = stage.path('linkCalc')
-        netsim_dir = stage.path('netsim')
-        existing_netsim_dir = base.parent / "netsim"
+        radiation_dir = stage.path(RADIATION_PATTERN_FILES_DIR)
+        ant_dir = radiation_dir / "ant_files"
+        linkcalc_dir = radiation_dir / "linkCalc"
+        netsim_dir = radiation_dir / "netsim"
+        existing_netsim_dirs = [
+            base.parent / RADIATION_PATTERN_FILES_DIR / "netsim",
+            base.parent / "netsim",
+        ]
         expected_ant_files: list[Path] = []
         expected_linkcalc_files: list[Path] = []
         expected_netsim_files: list[Path] = []
-        required_outputs: list[str] = ["ant_files", "linkCalc", "netsim"]
+        required_outputs: list[str] = [RADIATION_PATTERN_FILES_DIR]
         for fpath, mapping, result in zip(args.ffs, input_maps, computed_results):
             rows, theta_grid, pat0, pat90, labels, linkcalc_rows, netsim_patterns = result
             out_name = f"{base.stem}-{mapping['ant_stem']}.csv"
@@ -1037,7 +1055,9 @@ def main() -> int:
             # Also generate .ant files even in CSV mode (placed next to base path)
             if theta_grid is not None and pat0 is not None and pat90 is not None and labels:
                 expected_ant_files.extend(
-                    Path("ant_files") / f"{mapping['ant_stem']}-{label.replace(' ', '')}.ant"
+                    Path(RADIATION_PATTERN_FILES_DIR)
+                    / "ant_files"
+                    / f"{mapping['ant_stem']}-{label.replace(' ', '')}.ant"
                     for label in labels
                 )
                 write_ant_files(
@@ -1054,15 +1074,18 @@ def main() -> int:
                 rows_by_frequency=linkcalc_rows,
             )
             expected_linkcalc_files.extend(
-                Path("linkCalc") / path.name for path in linkcalc_outputs
+                Path(RADIATION_PATTERN_FILES_DIR) / "linkCalc" / path.name
+                for path in linkcalc_outputs
             )
             netsim_output = write_netsim_file(
                 netsim_dir=netsim_dir,
-                existing_netsim_dir=existing_netsim_dir,
+                existing_netsim_dirs=existing_netsim_dirs,
                 name=mapping["ant_stem"],
                 patterns=netsim_patterns,
             )
-            expected_netsim_files.append(Path("netsim") / netsim_output.name)
+            expected_netsim_files.append(
+                Path(RADIATION_PATTERN_FILES_DIR) / "netsim" / netsim_output.name
+            )
         obsolete_outputs = [
             path.name
             for path in base.parent.glob(f"{base.stem}-*.csv")
@@ -1070,13 +1093,14 @@ def main() -> int:
         ]
         stage.publish(
             required_outputs,
-            obsolete=obsolete_outputs,
+            obsolete=obsolete_outputs + ["ant_files", "linkCalc", "netsim"],
             validate=expected_ant_files + expected_linkcalc_files + expected_netsim_files,
         )
         emit_progress("beam", progress_total, progress_total, f"Finalizing {base.name}")
-        print(f".ant files written to: {base.parent / 'ant_files'}")
-        print(f"LinkCalc .ffs files written to: {base.parent / 'linkCalc'}")
-        print(f"NetSim antenna files written to: {base.parent / 'netsim'}")
+        published_radiation_dir = base.parent / RADIATION_PATTERN_FILES_DIR
+        print(f".ant files written to: {published_radiation_dir / 'ant_files'}")
+        print(f"LinkCalc .ffs files written to: {published_radiation_dir / 'linkCalc'}")
+        print(f"NetSim antenna files written to: {published_radiation_dir / 'netsim'}")
 
     return 0
 

@@ -66,7 +66,12 @@ class StudioPipelineTests(unittest.TestCase):
 
         self.assertEqual(
             stage_generated_directories("beam", project_dir=project_dir),
-            [project_dir / "ant_files", project_dir / "linkCalc", project_dir / "netsim"],
+            [
+                project_dir / "radiaiton pattern files",
+                project_dir / "ant_files",
+                project_dir / "linkCalc",
+                project_dir / "netsim",
+            ],
         )
         self.assertEqual(
             stage_generated_directories("plot", project_dir=project_dir),

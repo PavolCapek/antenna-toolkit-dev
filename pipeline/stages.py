@@ -6,6 +6,8 @@ from typing import Any
 from datasheet.artifacts import artifact_manifest_path
 from pipeline.versions import stage_versions
 
+RADIATION_PATTERN_FILES_DIR = "radiaiton pattern files"
+
 STAGE_SETTING_KEYS: dict[str, tuple[str, ...]] = {
     "beam": ("smooth", "theta"),
     "extract": ("smooth", "theta", "shared_fmin", "shared_fmax"),
@@ -122,8 +124,9 @@ def stage_output_files(
 ) -> list[Path]:
     if stage_key == "beam":
         files = [beam_output]
+        radiation_dir = project_dir / RADIATION_PATTERN_FILES_DIR
         for folder_name in ("ant_files", "linkCalc", "netsim"):
-            folder = project_dir / folder_name
+            folder = radiation_dir / folder_name
             if folder.exists():
                 files.extend(path for path in folder.rglob("*") if path.is_file())
         return files
@@ -159,6 +162,7 @@ def stage_output_files(
 def stage_generated_directories(stage_key: str, *, project_dir: Path) -> list[Path]:
     if stage_key == "beam":
         return [
+            project_dir / RADIATION_PATTERN_FILES_DIR,
             project_dir / "ant_files",
             project_dir / "linkCalc",
             project_dir / "netsim",

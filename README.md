@@ -157,23 +157,24 @@ Projects\SH60WB\
   SH60WB_beamwidth.svg
   SH60WB_beam_efficiency.svg
   SH60WB_vswr.svg
-  ant_files\
-  linkCalc\
-  netsim\
+  radiaiton pattern files\
+    ant_files\
+    linkCalc\
+    netsim\
   polar_combined\
   polar_single\
 ```
 
-`linkCalc\` contains one headerless `.ffs` file per enabled far-field input and
-frequency sample. Each UTF-8 row is space-separated `phi`, `theta`, and absolute
-total-field directivity in dBi, and filenames use
+`radiaiton pattern files\linkCalc\` contains one headerless `.ffs` file per
+enabled far-field input and frequency sample. Each UTF-8 row is space-separated
+`phi`, `theta`, and absolute total-field directivity in dBi, and filenames use
 `<source-stem>-<frequencyGHz>.ffs`.
 
-`netsim\` contains one extensionless JSON antenna file per enabled far-field
-input. Each file retains its UUID across reruns and stores every source
-frequency in MHz as a 361-by-181 gain matrix (phi rows 0..360 degrees, theta
-columns 0..180 degrees). Coarser source grids are interpolated to one-degree
-spacing.
+`radiaiton pattern files\netsim\` contains one extensionless JSON antenna file
+per enabled far-field input. Each file retains its UUID across reruns and stores
+every source frequency in MHz as a 361-by-181 gain matrix (phi rows 0..360
+degrees, theta columns 0..180 degrees). Coarser source grids are interpolated
+to one-degree spacing.
 
 ## Workbook Contents
 
