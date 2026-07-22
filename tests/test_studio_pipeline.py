@@ -64,7 +64,10 @@ class StudioPipelineTests(unittest.TestCase):
     def test_stage_generated_directories_and_applicability(self) -> None:
         project_dir = Path("project")
 
-        self.assertEqual(stage_generated_directories("beam", project_dir=project_dir), [project_dir / "ant_files"])
+        self.assertEqual(
+            stage_generated_directories("beam", project_dir=project_dir),
+            [project_dir / "ant_files", project_dir / "linkCalc"],
+        )
         self.assertEqual(
             stage_generated_directories("plot", project_dir=project_dir),
             [project_dir / "polar_combined", project_dir / "polar_single"],

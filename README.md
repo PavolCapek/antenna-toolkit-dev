@@ -158,9 +158,15 @@ Projects\SH60WB\
   SH60WB_beam_efficiency.svg
   SH60WB_vswr.svg
   ant_files\
+  linkCalc\
   polar_combined\
   polar_single\
 ```
+
+`linkCalc\` contains one headerless `.ffs` file per enabled far-field input and
+frequency sample. Each UTF-8 row is tab-separated `phi`, `theta`, and absolute
+total-field directivity in dBi, and filenames use
+`<source-stem>-<frequencyGHz>.ffs`.
 
 ## Workbook Contents
 

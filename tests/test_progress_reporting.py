@@ -100,7 +100,7 @@ class ProgressReportingTests(unittest.TestCase):
             with (
                 mock.patch.object(sys, "argv", argv),
                 mock.patch.object(beamwidth_xlsx, "read_ffs_broadband", return_value={}),
-                mock.patch.object(beamwidth_xlsx, "compute_for_file", return_value=([], None, None, None, [])),
+                mock.patch.object(beamwidth_xlsx, "compute_for_file", return_value=([], None, None, None, [], {})),
                 mock.patch("beamwidth_xlsx.StageWorkspace.publish"),
                 redirect_stdout(buffer),
             ):

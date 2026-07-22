@@ -122,9 +122,10 @@ def stage_output_files(
 ) -> list[Path]:
     if stage_key == "beam":
         files = [beam_output]
-        ant_dir = project_dir / "ant_files"
-        if ant_dir.exists():
-            files.extend(path for path in ant_dir.rglob("*") if path.is_file())
+        for folder_name in ("ant_files", "linkCalc"):
+            folder = project_dir / folder_name
+            if folder.exists():
+                files.extend(path for path in folder.rglob("*") if path.is_file())
         return files
     if stage_key == "extract":
         return [extract_output]
@@ -157,7 +158,7 @@ def stage_output_files(
 
 def stage_generated_directories(stage_key: str, *, project_dir: Path) -> list[Path]:
     if stage_key == "beam":
-        return [project_dir / "ant_files"]
+        return [project_dir / "ant_files", project_dir / "linkCalc"]
     if stage_key == "plot":
         return [project_dir / "polar_combined", project_dir / "polar_single"]
     return []

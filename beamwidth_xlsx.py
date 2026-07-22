@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Beamwidth extractor with XLSX output, principal-cut radiation diagrams, and .ant writer (V3, 720 lines per file).
+Beamwidth extractor with XLSX output and per-frequency antenna exports.
 
 - Accepts one or more CST Farfield Source Files (.ffs).
 - Computes: beamwidths at 3/6/10/12 dB, absolute gain (dBi via directivity),
@@ -19,6 +19,10 @@ Beamwidth extractor with XLSX output, principal-cut radiation diagrams, and .ant
     (This satisfies the requirement that elevation description starts at +90° and wraps through ±180°.)
   • Values written are **relative gain in dB** (0 dB = cut maximum at that frequency).
   • Files are stored in **ant_files/** next to the XLSX output, named `<stem>-<freqGHz>.ant`.
+
+- Generates simplified **LinkCalc .ffs files** for each frequency in each input .ffs:
+  - Headerless, tab-separated `phi`, `theta`, and absolute total-field directivity in dBi.
+  - Files are stored in **linkCalc/** next to the XLSX output, named `<stem>-<freqGHz>.ffs`.
 
 Usage:
   python3 beamwidth_xlsx.py out.xlsx file1.ffs file2.ffs [--smooth 1 --theta-window 8]
@@ -45,6 +49,7 @@ from workbook_metadata import (
 )
 
 Row = Tuple[float, float, complex, complex]  # (phi_deg, theta_deg, Etheta, Ephi)
+LinkCalcRow = Tuple[float, float, float]  # (phi_deg, theta_deg, gain_dBi)
 
 
 class FFSParseError(ValueError):
@@ -394,13 +399,14 @@ def read_ffs_broadband(path: Path, freq_regex: Optional[str] = None) -> Dict[flo
 # ---------------------------
 
 def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
-    """Return (rows_out, theta_grid, patterns_phi0, patterns_phi90, freq_labels).
+    """Return workbook patterns plus source-ordered LinkCalc gain rows.
 
     - rows_out: list[list[object]] for the data table.
     - theta_grid: 1D array of θ (deg) from -180..180 (step=1).
     - patterns_phi0: 2D array (len(theta_grid) x Nfreq) relative dB for φ≈0°.
     - patterns_phi90: 2D array (len(theta_grid) x Nfreq) relative dB for φ≈90°.
     - freq_labels: list of column labels (e.g., '5.500 GHz').
+    - linkcalc_rows: mapping of frequency Hz to source-ordered `(phi, theta, gain_dBi)` rows.
     """
     by_freq = read_ffs_broadband(ffs_path)
     thresh = {3.0: ('theta_3dB_half_deg', 'beamwidth_3dB_2sided_deg'),
@@ -411,6 +417,7 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
     rows_out: list[list[object]] = []
     freq_list = sorted(by_freq.keys())
     freq_labels: list[str] = []
+    linkcalc_rows: dict[float, list[LinkCalcRow]] = {}
 
     # Build θ grid for patterns: -180..180, 1° step
     theta_grid = np.arange(-180.0, 181.0, 1.0)
@@ -463,6 +470,15 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
             raise FFSParseError(f"{ffs_path.name}: frequency {freq_Hz:g} Hz has invalid radiated power")
         Gdir = (4.0 * math.pi) * (P / Prad)
         Gabs_dBi = 10.0 * np.log10(np.maximum(Gdir, 1e-300))
+
+        # Gabs_dBi follows the sorted grid. Restore the source row order for
+        # LinkCalc so its phi/theta traversal matches the originating block.
+        gain_source_order = np.empty(arr.shape[0], dtype=float)
+        gain_source_order[order] = Gabs_dBi.reshape(-1)
+        linkcalc_rows[freq_Hz] = [
+            (float(phi), float(theta), float(gain))
+            for phi, theta, gain in zip(phis, thetas, gain_source_order)
+        ]
 
         peak_index = np.unravel_index(int(np.nanargmax(Gabs_dBi)), Gabs_dBi.shape) if np.isfinite(Gabs_dBi).any() else None
         global_max_gain_dBi = float(Gabs_dBi[peak_index]) if peak_index is not None else float('nan')
@@ -547,7 +563,7 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
     patterns_phi90 = np.column_stack(pat90_cols) if pat90_cols else None
     if not rows_out or patterns_phi0 is None or patterns_phi90 is None or not freq_labels:
         raise FFSParseError(f"{ffs_path.name}: no usable beam or radiation-pattern results were computed")
-    return rows_out, theta_grid, patterns_phi0, patterns_phi90, freq_labels
+    return rows_out, theta_grid, patterns_phi0, patterns_phi90, freq_labels, linkcalc_rows
 
 
 # ---------------------------
@@ -666,6 +682,29 @@ def write_ant_files(ant_dir: Path,
                 f.write(f"{el_col[idx]:.3f}\n")
 
 
+def frequency_ghz_token(frequency_hz: float) -> str:
+    """Return a GHz filename token with up to one-hertz precision."""
+    value = f"{frequency_hz / 1e9:.9f}".rstrip('0').rstrip('.')
+    return f"{value}GHz"
+
+
+def write_linkcalc_files(
+    linkcalc_dir: Path,
+    stem: str,
+    rows_by_frequency: dict[float, list[LinkCalcRow]],
+) -> list[Path]:
+    """Write one headerless phi/theta/gain TSV .ffs per frequency."""
+    linkcalc_dir.mkdir(parents=True, exist_ok=True)
+    outputs: list[Path] = []
+    for frequency_hz in sorted(rows_by_frequency):
+        out_path = linkcalc_dir / f"{stem}-{frequency_ghz_token(frequency_hz)}.ffs"
+        with out_path.open('w', encoding='utf-8', newline='\n') as handle:
+            for phi, theta, gain_dbi in rows_by_frequency[frequency_hz]:
+                handle.write(f"{phi:.12g}\t{theta:.12g}\t{gain_dbi:.9f}\n")
+        outputs.append(out_path)
+    return outputs
+
+
 # ---------------------------
 # Main
 # ---------------------------
@@ -699,7 +738,7 @@ def _fail_invalid_inputs(errors: list[str]) -> None:
         raise SystemExit(f"Workbook generation failed; no outputs were published:\n{detail}")
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Beamwidth/Directivity/Beam-efficiency to XLSX with per-file sheets, radiation diagrams, summary sheet, and .ant outputs.")
+    ap = argparse.ArgumentParser(description="Beamwidth/Directivity/Beam-efficiency to XLSX with per-file sheets, radiation diagrams, summary sheet, .ant outputs, and LinkCalc .ffs outputs.")
     ap.add_argument('output', type=Path, help='Output file (.xlsx preferred; if .csv, a per-input CSV is created).')
     ap.add_argument('ffs', nargs='+', type=Path, help='One or more CST Farfield Source Files (.ffs)')
     ap.add_argument('--smooth', type=int, default=1,
@@ -760,10 +799,12 @@ def main() -> int:
 
         stage = StageWorkspace(args.output.parent, "beam")
         ant_dir = stage.path('ant_files')
+        linkcalc_dir = stage.path('linkCalc')
         expected_ant_files: list[Path] = []
+        expected_linkcalc_files: list[Path] = []
 
         for fpath, mapping, result in zip(args.ffs, input_maps, computed_results):
-            rows, theta_grid, pat0, pat90, labels = result
+            rows, theta_grid, pat0, pat90, labels, linkcalc_rows = result
 
             # Data sheet
             title = mapping["data"]
@@ -810,6 +851,15 @@ def main() -> int:
                     freq_labels=labels,
                 )
 
+            linkcalc_outputs = write_linkcalc_files(
+                linkcalc_dir=linkcalc_dir,
+                stem=mapping["ant_stem"],
+                rows_by_frequency=linkcalc_rows,
+            )
+            expected_linkcalc_files.extend(
+                Path("linkCalc") / path.name for path in linkcalc_outputs
+            )
+
         # Finally, write the global summary sheet (once)
         ws_sum = wb.create_sheet(title="summary")
         ws_sum.append(summary_header)
@@ -828,19 +878,25 @@ def main() -> int:
 
         emit_progress("beam", progress_total, progress_total, f"Saving {args.output.name}")
         wb.save(stage.path(args.output.name))
-        stage.publish([args.output.name, "ant_files"], validate=expected_ant_files)
+        stage.publish(
+            [args.output.name, "ant_files", "linkCalc"],
+            validate=expected_ant_files + expected_linkcalc_files,
+        )
         print(f"Wrote XLSX: {args.output} with {len(args.ffs)} file sheets + radiation diagrams + summary.")
         print(f".ant files written to: {args.output.parent / 'ant_files'}")
+        print(f"LinkCalc .ffs files written to: {args.output.parent / 'linkCalc'}")
     else:
         # CSV fallback: data-only, one CSV per input
         base = args.output
         base.parent.mkdir(parents=True, exist_ok=True)
         stage = StageWorkspace(base.parent, "beam")
         ant_dir = stage.path('ant_files')
+        linkcalc_dir = stage.path('linkCalc')
         expected_ant_files: list[Path] = []
-        required_outputs: list[str] = ["ant_files"]
+        expected_linkcalc_files: list[Path] = []
+        required_outputs: list[str] = ["ant_files", "linkCalc"]
         for fpath, mapping, result in zip(args.ffs, input_maps, computed_results):
-            rows, theta_grid, pat0, pat90, labels = result
+            rows, theta_grid, pat0, pat90, labels, linkcalc_rows = result
             out_name = f"{base.stem}-{mapping['ant_stem']}.csv"
             out_csv = stage.path(out_name)
             required_outputs.append(out_name)
@@ -868,14 +924,27 @@ def main() -> int:
                     patterns_phi90=pat90,
                     freq_labels=labels,
                 )
+            linkcalc_outputs = write_linkcalc_files(
+                linkcalc_dir=linkcalc_dir,
+                stem=mapping["ant_stem"],
+                rows_by_frequency=linkcalc_rows,
+            )
+            expected_linkcalc_files.extend(
+                Path("linkCalc") / path.name for path in linkcalc_outputs
+            )
         obsolete_outputs = [
             path.name
             for path in base.parent.glob(f"{base.stem}-*.csv")
             if path.name not in required_outputs
         ]
-        stage.publish(required_outputs, obsolete=obsolete_outputs, validate=expected_ant_files)
+        stage.publish(
+            required_outputs,
+            obsolete=obsolete_outputs,
+            validate=expected_ant_files + expected_linkcalc_files,
+        )
         emit_progress("beam", progress_total, progress_total, f"Finalizing {base.name}")
         print(f".ant files written to: {base.parent / 'ant_files'}")
+        print(f"LinkCalc .ffs files written to: {base.parent / 'linkCalc'}")
 
     return 0
 

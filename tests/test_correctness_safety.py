@@ -121,8 +121,11 @@ def test_touchstone_rejects_unsupported_or_malformed_data(tmp_path: Path, conten
 def test_invalid_ffs_raises_and_does_not_replace_existing_workbook(tmp_path: Path) -> None:
     source = tmp_path / "invalid.ffs"
     output = tmp_path / "result.xlsx"
+    linkcalc_output = tmp_path / "linkCalc" / "known-good.ffs"
     source.write_text("not a CST far-field file", encoding="utf-8")
     output.write_bytes(b"known-good")
+    linkcalc_output.parent.mkdir()
+    linkcalc_output.write_bytes(b"known-good-linkcalc")
 
     with mock.patch.object(sys, "argv", ["beamwidth_xlsx.py", str(output), str(source)]):
         with pytest.raises(SystemExit, match="no outputs were published"):
@@ -130,6 +133,7 @@ def test_invalid_ffs_raises_and_does_not_replace_existing_workbook(tmp_path: Pat
 
     assert output.read_bytes() == b"known-good"
     assert not (tmp_path / "ant_files").exists()
+    assert linkcalc_output.read_bytes() == b"known-good-linkcalc"
 
 
 def test_ffs_reader_rejects_empty_and_incomplete_grids(tmp_path: Path) -> None:
@@ -152,6 +156,80 @@ def test_collision_mapping_preserves_normal_names_and_disambiguates_conflicts(tm
     assert mappings[2]["phi0"].endswith("_phi0")
     assert mappings[2]["phi90"].endswith("_phi90")
     assert all(len(mapping[key]) <= 31 for mapping in mappings for key in ("data", "phi0", "phi90"))
+
+
+def test_linkcalc_gain_rows_keep_source_order_and_absolute_dbi() -> None:
+    source_rows = [
+        (180.0, 90.0, 1 + 0j, 0j),
+        (0.0, 0.0, 2 + 0j, 0j),
+        (180.0, 0.0, 3 + 0j, 0j),
+        (0.0, 90.0, 4 + 0j, 0j),
+    ]
+
+    with mock.patch.object(beamwidth_xlsx, "read_ffs_broadband", return_value={5e9: source_rows}):
+        result = beamwidth_xlsx.compute_for_file(Path("sample_H.ffs"), smooth=1, theta_window=8.0)
+
+    rows = result[5][5e9]
+    assert [(phi, theta) for phi, theta, _gain in rows] == [
+        (180.0, 90.0),
+        (0.0, 0.0),
+        (180.0, 0.0),
+        (0.0, 90.0),
+    ]
+    assert [gain for _phi, _theta, gain in rows] == pytest.approx(
+        [-6.995700704721642, -0.9751007914420182, 2.546724389671606, 5.045499121837605]
+    )
+
+
+def test_linkcalc_writer_formats_two_polarizations_and_close_frequencies(tmp_path: Path) -> None:
+    rows_by_frequency = {
+        5_000_000_000.0: [(180.1234567890123, 90.0, 1.2345678912), (0.0, 0.0, -2.0)],
+        5_000_000_001.0: [(45.0, 30.0, 3.0)],
+    }
+
+    horizontal = beamwidth_xlsx.write_linkcalc_files(tmp_path, "sample_H", rows_by_frequency)
+    vertical = beamwidth_xlsx.write_linkcalc_files(tmp_path, "sample_V", rows_by_frequency)
+
+    assert {path.name for path in horizontal + vertical} == {
+        "sample_H-5GHz.ffs",
+        "sample_H-5.000000001GHz.ffs",
+        "sample_V-5GHz.ffs",
+        "sample_V-5.000000001GHz.ffs",
+    }
+    assert (tmp_path / "sample_H-5GHz.ffs").read_text(encoding="utf-8") == (
+        "180.123456789\t90\t1.234567891\n"
+        "0\t0\t-2.000000000\n"
+    )
+    assert (tmp_path / "sample_H-5.000000001GHz.ffs").read_text(encoding="utf-8") == (
+        "45\t30\t3.000000000\n"
+    )
+
+
+@pytest.mark.filterwarnings("ignore:Mean of empty slice:RuntimeWarning")
+def test_successful_beam_publish_replaces_obsolete_linkcalc_files(tmp_path: Path) -> None:
+    source = tmp_path / "sample_H.ffs"
+    output = tmp_path / "result.xlsx"
+    source.write_text("source", encoding="utf-8")
+    stale = tmp_path / "linkCalc" / "stale.ffs"
+    stale.parent.mkdir()
+    stale.write_text("obsolete", encoding="utf-8")
+    source_rows = [
+        (0.0, 0.0, 1 + 0j, 0j),
+        (0.0, 90.0, 1 + 0j, 0j),
+        (180.0, 0.0, 1 + 0j, 0j),
+        (180.0, 90.0, 1 + 0j, 0j),
+    ]
+    with mock.patch.object(beamwidth_xlsx, "read_ffs_broadband", return_value={5e9: source_rows}):
+        computed = beamwidth_xlsx.compute_for_file(source, smooth=1, theta_window=8.0)
+
+    with (
+        mock.patch.object(sys, "argv", ["beamwidth_xlsx.py", str(output), str(source)]),
+        mock.patch.object(beamwidth_xlsx, "compute_for_file", return_value=computed),
+    ):
+        assert beamwidth_xlsx.main() == 0
+
+    assert not stale.exists()
+    assert (tmp_path / "linkCalc" / "sample_H-5GHz.ffs").exists()
 
 
 def test_beam_workbook_reuse_requires_matching_manifest(tmp_path: Path) -> None:
