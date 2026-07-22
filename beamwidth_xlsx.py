@@ -699,8 +699,10 @@ def write_linkcalc_files(
     for frequency_hz in sorted(rows_by_frequency):
         out_path = linkcalc_dir / f"{stem}-{frequency_ghz_token(frequency_hz)}.ffs"
         with out_path.open('w', encoding='utf-8', newline='\n') as handle:
-            for phi, theta, gain_dbi in rows_by_frequency[frequency_hz]:
-                handle.write(f"{phi:.12g}\t{theta:.12g}\t{gain_dbi:.9f}\n")
+            for index, (phi, theta, gain_dbi) in enumerate(rows_by_frequency[frequency_hz]):
+                if index:
+                    handle.write("\n")
+                handle.write(f"{phi:.12g}\t{theta:.12g}\t{gain_dbi:.9f}")
         outputs.append(out_path)
     return outputs
 
