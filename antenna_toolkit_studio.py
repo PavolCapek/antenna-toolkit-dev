@@ -1729,6 +1729,15 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.vswr_ymax = TrimmedDoubleSpinBox(); self.vswr_ymax.setRange(0.0, 1000.0); self.vswr_ymax.setDecimals(6); self.vswr_ymax.setValue(float(self.store.get("vswr_ymax", 10.0))); self.vswr_ymax.valueChanged.connect(lambda v: self.store.set("vswr_ymax", float(v)))
         self.vswr_ystep = TrimmedDoubleSpinBox(); self.vswr_ystep.setRange(0.01, 100.0); self.vswr_ystep.setDecimals(6); self.vswr_ystep.setValue(float(self.store.get("vswr_ystep", 1.0))); self.vswr_ystep.valueChanged.connect(lambda v: self.store.set("vswr_ystep", float(v)))
         self.vswr_smooth = NoWheelSpinBox(); self.vswr_smooth.setRange(1, 99); self.vswr_smooth.setValue(int(self.store.get("vswr_smooth", 5))); self.vswr_smooth.valueChanged.connect(lambda v: self.store.set("vswr_smooth", int(v)))
+        self.compliance_omit_angle_range = QLineEdit(str(self.store.get("compliance_omit_angle_range", "180-180")))
+        self.compliance_omit_angle_range.setPlaceholderText("e.g. 179-180; blank disables")
+        self.compliance_omit_angle_range.setToolTip(
+            "Inclusive angle range from boresight omitted from ETSI/FCC pattern comparisons. "
+            "Enter MIN-MAX, a single angle, or leave blank to evaluate every sample."
+        )
+        self.compliance_omit_angle_range.textChanged.connect(
+            lambda value: self.store.set("compliance_omit_angle_range", value)
+        )
         workbook_card = Card("Beam, workbook, and VSWR smoothing", "Processing")
         workbook_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         workbook_card.setMinimumWidth(320)
@@ -1743,6 +1752,23 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         add_form_row(workbook_form, "Plot smooth", StepperField(self.plot_smooth), "Smoothing window applied to the workbook-based line plots.")
         add_form_row(workbook_form, "VSWR smooth", StepperField(self.vswr_smooth), "Smoothing window applied to the VSWR traces.")
         workbook_card.body.addLayout(workbook_form)
+
+        compliance_card = Card("Standards compliance", "ETSI / FCC")
+        compliance_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        compliance_card.setMinimumWidth(320)
+        compliance_form = QFormLayout()
+        compliance_form.setContentsMargins(0, 0, 0, 0)
+        compliance_form.setHorizontalSpacing(10)
+        compliance_form.setVerticalSpacing(8)
+        compliance_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        compliance_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(
+            compliance_form,
+            "Omit angle range",
+            self.compliance_omit_angle_range,
+            "Inclusive boresight-angle range omitted from ETSI and FCC pattern comparisons, for example 179-180. Leave blank to omit nothing.",
+        )
+        compliance_card.body.addLayout(compliance_form)
 
         frequency_card = Card("Shared frequency window", "Frequency")
         frequency_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -1954,6 +1980,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         processing_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         processing_panel.set_cards([
             workbook_card,
+            compliance_card,
             frequency_card,
             gain_range_card,
             beamwidth_range_card,
@@ -2927,6 +2954,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self.vswr_ymax.valueChanged,
             self.vswr_ystep.valueChanged,
             self.vswr_smooth.valueChanged,
+            self.compliance_omit_angle_range.textChanged,
             self.plot_grid.colorChanged,
             self.cartesian_grid_line_width.valueChanged,
             self.polar_grid_line_width.valueChanged,
@@ -4684,6 +4712,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "vswr_ymax": float(self.vswr_ymax.value()),
             "vswr_ystep": float(self.vswr_ystep.value()),
             "vswr_smooth": int(self.vswr_smooth.value()),
+            "compliance_omit_angle_range": self.compliance_omit_angle_range.text().strip(),
             "grid_color": self.plot_grid.color(),
             "cartesian_grid_line_width": float(self.cartesian_grid_line_width.value()),
             "polar_grid_line_width": float(self.polar_grid_line_width.value()),
@@ -4761,6 +4790,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if "vswr_ymax" in values: self.vswr_ymax.setValue(float(values["vswr_ymax"]))
         if "vswr_ystep" in values: self.vswr_ystep.setValue(float(values["vswr_ystep"]))
         if "vswr_smooth" in values: self.vswr_smooth.setValue(int(values["vswr_smooth"]))
+        if "compliance_omit_angle_range" in values: self.compliance_omit_angle_range.setText(str(values["compliance_omit_angle_range"]))
         if "grid_color" in values: self.plot_grid.set_color(str(values["grid_color"]))
         cartesian_grid_line_width = value_or_legacy("cartesian_grid_line_width", "plot_grid_line_width")
         if cartesian_grid_line_width is not None: self.cartesian_grid_line_width.setValue(float(cartesian_grid_line_width))

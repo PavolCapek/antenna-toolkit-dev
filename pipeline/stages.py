@@ -10,7 +10,7 @@ RADIATION_PATTERN_FILES_DIR = "radiaiton pattern files"
 
 STAGE_SETTING_KEYS: dict[str, tuple[str, ...]] = {
     "beam": ("smooth", "theta"),
-    "compliance": (),
+    "compliance": ("compliance_omit_angle_range",),
     "extract": ("smooth", "theta", "shared_fmin", "shared_fmax"),
     "datasheet": (
         "smooth",

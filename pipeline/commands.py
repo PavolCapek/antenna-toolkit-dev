@@ -20,10 +20,13 @@ def build_compliance_command(
     if context is not None:
         output_path = context.compliance_output
         port_labels_json = context.polar_port_labels_json
+        settings = context.settings
     if output_path is None:
         raise ValueError("build_compliance_command requires output_path")
     args = [python_executable, "-u", script_path, str(output_path), *(str(path) for path in ffs_paths)]
     _append_if_text(args, "--port-labels-json", port_labels_json)
+    if settings is not None:
+        _append_if_text(args, "--omit-angle-range", settings.compliance_omit_angle_range)
     return args
 
 

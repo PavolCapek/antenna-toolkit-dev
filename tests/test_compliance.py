@@ -4,6 +4,7 @@ import math
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from compliance.engine import (
     Pattern,
@@ -11,6 +12,7 @@ from compliance.engine import (
     _build_rollup,
     analyze_pattern,
     mask_limits,
+    parse_omitted_angle_range,
     pattern_from_rows,
 )
 from compliance.standards import etsi_profiles_for_frequency, fcc_profiles_for_frequency
@@ -48,6 +50,53 @@ def test_standard_profiles_are_frequency_specific() -> None:
     assert [profile.class_name for profile in etsi_profiles_for_frequency(4.7)] == ["1", "2", "3", "4"]
     assert [profile.standard for profile in fcc_profiles_for_frequency(6000)] == ["A", "B1", "B2"]
     assert not fcc_profiles_for_frequency(4700)
+
+
+def test_omitted_angle_range_parser_accepts_range_single_angle_and_blank() -> None:
+    assert parse_omitted_angle_range("179-180") == (179.0, 180.0)
+    assert parse_omitted_angle_range("180") == (180.0, 180.0)
+    assert parse_omitted_angle_range("") is None
+    with pytest.raises(ValueError, match="0 <= minimum"):
+        parse_omitted_angle_range("181-181")
+
+
+def test_omitted_angle_range_removes_backlobe_sample_from_etsi_and_fcc_checks() -> None:
+    phis = np.asarray([0.0, 90.0, 180.0, 270.0])
+    thetas = np.arange(0.0, 181.0, 1.0)
+    co = np.full((len(phis), len(thetas)), -40.0)
+    co[:, 0] = 40.0
+    co[:, -1] = -8.15
+    pattern = Pattern(
+        frequency_hz=6e9,
+        phis_deg=phis,
+        thetas_deg=thetas,
+        total_directivity_dbi=co.copy(),
+        co_directivity_dbi=co,
+        cross_directivity_dbi=np.full_like(co, -80.0),
+        polarization="H",
+        polarization_basis="test",
+    )
+
+    _, strict_etsi, strict_fcc = analyze_pattern(Path("demo_H.ffs"), "H", pattern)
+    _, screened_etsi, screened_fcc = analyze_pattern(
+        Path("demo_H.ffs"),
+        "H",
+        pattern,
+        omitted_angle_range=(180.0, 180.0),
+    )
+
+    strict_class2 = next(row for row in strict_etsi if row["rpe_class"] == "2")
+    screened_class2 = next(row for row in screened_etsi if row["rpe_class"] == "2")
+    assert strict_class2["status"] == "FAIL"
+    assert strict_class2["limiting_angle_deg"] == 180.0
+    assert screened_class2["status"] == "PASS"
+    assert screened_class2["note"] == ""
+
+    strict_standard_a = next(row for row in strict_fcc if row["standard"] == "A")
+    screened_standard_a = next(row for row in screened_fcc if row["standard"] == "A")
+    assert strict_standard_a["status"] == "FAIL"
+    assert strict_standard_a["limiting_angle_deg"] == 180.0
+    assert screened_standard_a["status"] == "PASS"
 
 
 def test_pattern_uses_ludwig_three_components_and_directivity() -> None:

@@ -399,6 +399,10 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertEqual(queued, ["beam", "compliance", "extract", "plot", "vswr", "datasheet"])
         self.assertTrue(any(Path(arg).name == "compliance_report.py" for arg in queued_args["compliance"]))
         self.assertIn("--port-labels-json", queued_args["compliance"])
+        self.assertEqual(
+            queued_args["compliance"][queued_args["compliance"].index("--omit-angle-range") + 1],
+            "180-180",
+        )
         self.assertNotIn("--fmin", queued_args["compliance"])
         self.assertNotIn("--fmax", queued_args["compliance"])
         self.assertIn("--beamwidth-db-colors", queued_args["plot"])

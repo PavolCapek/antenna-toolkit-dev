@@ -71,6 +71,7 @@ class PresetSettings:
     vswr_ymax: float = 10.0
     vswr_ystep: float = 1.0
     vswr_smooth: int = 5
+    compliance_omit_angle_range: str = "180-180"
     grid_color: str = DEFAULT_GRID_COLOR
     cartesian_grid_line_width: float = 0.9
     polar_grid_line_width: float = 0.9
@@ -132,6 +133,11 @@ class PresetSettings:
             vswr_ymax=_float_value(source, "vswr_ymax", defaults.vswr_ymax),
             vswr_ystep=_float_value(source, "vswr_ystep", defaults.vswr_ystep),
             vswr_smooth=_int_value(source, "vswr_smooth", defaults.vswr_smooth),
+            compliance_omit_angle_range=_str_value(
+                source,
+                "compliance_omit_angle_range",
+                defaults.compliance_omit_angle_range,
+            ),
             grid_color=_str_value(source, "grid_color", defaults.grid_color),
             cartesian_grid_line_width=_legacy_float(source, "cartesian_grid_line_width", "plot_grid_line_width", default_map["cartesian_grid_line_width"]),
             polar_grid_line_width=_legacy_float(source, "polar_grid_line_width", "plot_grid_line_width", default_map["polar_grid_line_width"]),

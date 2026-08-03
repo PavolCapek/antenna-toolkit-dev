@@ -26,6 +26,7 @@ class StudioPipelineTests(unittest.TestCase):
             "polar_figure_size": 7.5,
             "polar_line_width": 3,
             "vswr_ymax": 4,
+            "compliance_omit_angle_range": "180-180",
             "unrelated": "ignored",
         }
 
@@ -35,7 +36,10 @@ class StudioPipelineTests(unittest.TestCase):
         self.assertIn("polar_figure_size", stage_settings_snapshot("datasheet", values))
         self.assertNotIn("unrelated", stage_settings_snapshot("plot", values))
         self.assertIn("vswr_ymax", stage_settings_snapshot("vswr", values))
-        self.assertEqual(stage_settings_snapshot("compliance", values), {})
+        self.assertEqual(
+            stage_settings_snapshot("compliance", values),
+            {"compliance_omit_angle_range": "180-180"},
+        )
 
     def test_stage_output_files_include_generated_plot_assets_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -97,7 +101,7 @@ class StudioPipelineTests(unittest.TestCase):
         )
 
         self.assertEqual(files, [compliance_output])
-        self.assertEqual(stage_tool_versions("compliance")["compliance_rules"], 3)
+        self.assertEqual(stage_tool_versions("compliance")["compliance_rules"], 4)
 
     def test_stage_tool_versions_and_stale_detail(self) -> None:
         versions = stage_tool_versions("datasheet", plot_asset_style_version=3, datasheet_render_version=2)

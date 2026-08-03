@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -38,6 +39,36 @@ class Pattern:
     @property
     def max_directivity_dbi(self) -> float:
         return float(np.nanmax(self.total_directivity_dbi))
+
+
+OmittedAngleRange = tuple[float, float] | None
+
+
+def parse_omitted_angle_range(value: str) -> OmittedAngleRange:
+    """Parse an inclusive 0..180 degree range, or return None for blank text."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    number = r"(?:\d+(?:\.\d*)?|\.\d+)"
+    match = re.fullmatch(rf"({number})\s*(?:-|:|,)\s*({number})", text)
+    if match is None:
+        single = re.fullmatch(rf"({number})", text)
+        if single is None:
+            raise ValueError("omitted angle range must look like 179-180, or be a single angle such as 180")
+        low = high = float(single.group(1))
+    else:
+        low, high = (float(match.group(1)), float(match.group(2)))
+    if not (0.0 <= low <= high <= 180.0):
+        raise ValueError("omitted angle range must satisfy 0 <= minimum <= maximum <= 180 degrees")
+    return low, high
+
+
+def _included_angle_mask(angles_deg: np.ndarray, omitted_angle_range: OmittedAngleRange) -> np.ndarray:
+    if omitted_angle_range is None:
+        return np.ones_like(angles_deg, dtype=bool)
+    low, high = omitted_angle_range
+    omitted = (angles_deg >= low - 1e-9) & (angles_deg <= high + 1e-9)
+    return ~omitted
 
 
 def _grid_from_rows(rows) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -164,8 +195,14 @@ def mask_limits(points: tuple[tuple[float, float], ...], angles_deg: np.ndarray)
     return limits, valid
 
 
-def _mask_result(actual: np.ndarray, angles: np.ndarray, points: tuple[tuple[float, float], ...]) -> dict[str, float | bool | None]:
+def _mask_result(
+    actual: np.ndarray,
+    angles: np.ndarray,
+    points: tuple[tuple[float, float], ...],
+    omitted_angle_range: OmittedAngleRange = None,
+) -> dict[str, float | bool | None]:
     limits, valid = mask_limits(points, angles)
+    valid &= _included_angle_mask(angles, omitted_angle_range)
     if not np.any(valid):
         return {"passed": False, "margin_db": None, "angle_deg": None, "actual_dbi": None, "limit_dbi": None}
     margins = limits[valid] - actual[valid]
@@ -202,7 +239,11 @@ def plane_beamwidth(pattern: Pattern, target_phi: float) -> float:
     return left + right if math.isfinite(left) and math.isfinite(right) else float("nan")
 
 
-def _etsi_profile_result(pattern: Pattern, profile: ETSIRPEProfile) -> dict[str, object]:
+def _etsi_profile_result(
+    pattern: Pattern,
+    profile: ETSIRPEProfile,
+    omitted_angle_range: OmittedAngleRange = None,
+) -> dict[str, object]:
     co_points = profile.co_points
     if profile.polarization_restriction and pattern.polarization != profile.polarization_restriction:
         return {
@@ -221,12 +262,12 @@ def _etsi_profile_result(pattern: Pattern, profile: ETSIRPEProfile) -> dict[str,
 
     co_az = _plane_envelope(pattern.co_directivity_dbi, pattern.phis_deg, 0.0)
     cross_az = _plane_envelope(pattern.cross_directivity_dbi, pattern.phis_deg, 0.0)
-    co = _mask_result(co_az, pattern.thetas_deg, co_points)
-    cross = _mask_result(cross_az, pattern.thetas_deg, profile.cross_points)
+    co = _mask_result(co_az, pattern.thetas_deg, co_points, omitted_angle_range)
+    cross = _mask_result(cross_az, pattern.thetas_deg, profile.cross_points, omitted_angle_range)
     elevation = None
     if profile.elevation_points:
         co_el = _plane_envelope(pattern.co_directivity_dbi, pattern.phis_deg, 90.0)
-        elevation = _mask_result(co_el, pattern.thetas_deg, profile.elevation_points)
+        elevation = _mask_result(co_el, pattern.thetas_deg, profile.elevation_points, omitted_angle_range)
     passed = bool(co["passed"] and cross["passed"] and (elevation is None or elevation["passed"]))
     components = [("co-polar azimuth", co), ("cross-polar azimuth", cross)]
     if elevation is not None:
@@ -337,12 +378,19 @@ def _etsi_xpd_result(pattern: Pattern) -> dict[str, object]:
     }
 
 
-def _suppression_result(angles: np.ndarray, actual_dbi: np.ndarray, requirements: tuple[float | None, ...], peak_dbi: float) -> dict[str, object]:
+def _suppression_result(
+    angles: np.ndarray,
+    actual_dbi: np.ndarray,
+    requirements: tuple[float | None, ...],
+    peak_dbi: float,
+    omitted_angle_range: OmittedAngleRange = None,
+) -> dict[str, object]:
     margins: list[tuple[float, float, float, float]] = []
+    included = _included_angle_mask(angles, omitted_angle_range)
     for (low, high), minimum in zip(FCC_ANGLE_BINS, requirements):
         if minimum is None:
             continue
-        selected = (angles >= low) & (angles <= high)
+        selected = (angles >= low) & (angles <= high) & included
         if not np.any(selected):
             return {"passed": False, "margin_db": None, "angle_deg": None, "reason": f"No samples in {low:g}-{high:g} degrees"}
         indices = np.flatnonzero(selected)
@@ -362,7 +410,11 @@ def _suppression_result(angles: np.ndarray, actual_dbi: np.ndarray, requirements
     }
 
 
-def _fcc_profile_result(pattern: Pattern, profile: FCCProfile) -> dict[str, object]:
+def _fcc_profile_result(
+    pattern: Pattern,
+    profile: FCCProfile,
+    omitted_angle_range: OmittedAngleRange = None,
+) -> dict[str, object]:
     az_bw = plane_beamwidth(pattern, 0.0)
     el_bw = plane_beamwidth(pattern, 90.0)
     beam_pass = None
@@ -381,10 +433,14 @@ def _fcc_profile_result(pattern: Pattern, profile: FCCProfile) -> dict[str, obje
     co_az = _plane_envelope(pattern.co_directivity_dbi, pattern.phis_deg, 0.0)
     cross_az = _plane_envelope(pattern.cross_directivity_dbi, pattern.phis_deg, 0.0)
     co_peak = float(np.nanmax(pattern.co_directivity_dbi))
-    co_suppression = _suppression_result(pattern.thetas_deg, co_az, profile.suppression_db, co_peak)
+    co_suppression = _suppression_result(
+        pattern.thetas_deg, co_az, profile.suppression_db, co_peak, omitted_angle_range
+    )
     cross_suppression = None
     if profile.cross_suppression_db:
-        cross_suppression = _suppression_result(pattern.thetas_deg, cross_az, profile.cross_suppression_db, co_peak)
+        cross_suppression = _suppression_result(
+            pattern.thetas_deg, cross_az, profile.cross_suppression_db, co_peak, omitted_angle_range
+        )
 
     xpd_pass = True
     minimum_xpd = None
@@ -564,7 +620,13 @@ def _fcc_profile_result(pattern: Pattern, profile: FCCProfile) -> dict[str, obje
     }
 
 
-def analyze_pattern(path: Path, port_label: str, pattern: Pattern) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
+def analyze_pattern(
+    path: Path,
+    port_label: str,
+    pattern: Pattern,
+    *,
+    omitted_angle_range: OmittedAngleRange = None,
+) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
     frequency_ghz = pattern.frequency_hz / 1e9
     common = {
         "source_file": path.name,
@@ -581,7 +643,7 @@ def analyze_pattern(path: Path, port_label: str, pattern: Pattern) -> tuple[dict
     etsi_range = "Not applicable"
     for profile in etsi_profiles_for_frequency(frequency_ghz):
         etsi_range = profile.range_key
-        result = _etsi_profile_result(pattern, profile)
+        result = _etsi_profile_result(pattern, profile, omitted_angle_range)
         row = {**common, "etsi_range": profile.range_key, "rpe_class": profile.class_name, **result}
         etsi_details.append(row)
         if result.get("status") == "PASS":
@@ -593,7 +655,7 @@ def analyze_pattern(path: Path, port_label: str, pattern: Pattern) -> tuple[dict
     fcc_band = "Not applicable"
     for profile in fcc_profiles_for_frequency(pattern.frequency_hz / 1e6):
         fcc_band = f"{profile.frequency_min_mhz:g}-{profile.frequency_max_mhz:g} MHz"
-        result = _fcc_profile_result(pattern, profile)
+        result = _fcc_profile_result(pattern, profile, omitted_angle_range)
         row = {**common, "fcc_band": fcc_band, "standard": profile.standard, "regulatory_note": profile.note, **result}
         fcc_details.append(row)
         if result["status"] == "PASS":
@@ -627,6 +689,7 @@ def analyze_files(
     port_labels: dict[str, str] | None = None,
     fmin_ghz: float = 0.0,
     fmax_ghz: float = 0.0,
+    omitted_angle_range: OmittedAngleRange = None,
 ) -> dict[str, list[dict[str, object]]]:
     labels = {str(key).lower(): str(value).strip() for key, value in (port_labels or {}).items()}
     summary_rows: list[dict[str, object]] = []
@@ -642,7 +705,12 @@ def analyze_files(
             if fmax_ghz > 0 and frequency_ghz > fmax_ghz:
                 continue
             pattern = pattern_from_rows(path, frequency_hz, rows, label)
-            summary, etsi, fcc = analyze_pattern(path, label, pattern)
+            summary, etsi, fcc = analyze_pattern(
+                path,
+                label,
+                pattern,
+                omitted_angle_range=omitted_angle_range,
+            )
             summary_rows.append(summary)
             etsi_rows.extend(etsi)
             fcc_rows.extend(fcc)

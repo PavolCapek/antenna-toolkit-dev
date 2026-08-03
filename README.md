@@ -223,6 +223,9 @@ python compliance_report.py "Projects\SH60WB\SH60WB-compliance.xlsx" "Input data
 ```
 
 The CLI still accepts `--fmin` and `--fmax` when an explicitly filtered report is needed.
+Use `--omit-angle-range 179-180` to omit an inclusive boresight-angle range
+from ETSI RPE and FCC suppression comparisons; pass a single angle such as
+`--omit-angle-range 180` to omit only that sample.
 
 Generate plots from workbook:
 

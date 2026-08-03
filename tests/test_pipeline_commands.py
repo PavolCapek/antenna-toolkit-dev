@@ -167,6 +167,7 @@ class PipelineCommandTests(unittest.TestCase):
         settings = PresetSettings(
             plot_line_1="#101010",
             plot_line_2="#202020",
+            compliance_omit_angle_range="178-180",
         )
         context = RunContext(
             project_slug="demo",
@@ -222,6 +223,10 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertIn(str(context.compliance_output), compliance_command)
         self.assertIn("one.ffs", compliance_command)
         self.assertIn("--port-labels-json", compliance_command)
+        self.assertEqual(
+            compliance_command[compliance_command.index("--omit-angle-range") + 1],
+            "178-180",
+        )
         self.assertNotIn("--fmin", compliance_command)
         self.assertNotIn("--fmax", compliance_command)
 

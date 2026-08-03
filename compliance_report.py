@@ -7,7 +7,7 @@ import math
 from datetime import datetime, timezone
 from pathlib import Path
 
-from compliance.engine import analyze_files
+from compliance.engine import analyze_files, parse_omitted_angle_range
 from compliance.standards import (
     ETSI_EDITION,
     ETSI_SOURCE_URL,
@@ -169,6 +169,13 @@ def main() -> int:
     parser.add_argument("--port-labels-json", default="", help="Optional filename-to-port-label JSON object")
     parser.add_argument("--fmin", type=float, default=0.0, help="Minimum frequency in GHz")
     parser.add_argument("--fmax", type=float, default=0.0, help="Maximum frequency in GHz")
+    parser.add_argument(
+        "--omit-angle-range",
+        type=parse_omitted_angle_range,
+        default=None,
+        metavar="MIN-MAX",
+        help="Inclusive boresight-angle range omitted from ETSI/FCC pattern comparisons",
+    )
     args = parser.parse_args()
     if args.fmin > 0 and args.fmax > 0 and args.fmax <= args.fmin:
         parser.error("--fmax must be greater than --fmin")
@@ -181,6 +188,7 @@ def main() -> int:
         port_labels=_port_labels(args.port_labels_json),
         fmin_ghz=args.fmin,
         fmax_ghz=args.fmax,
+        omitted_angle_range=args.omit_angle_range,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with StageWorkspace(args.output.parent, "compliance") as stage:
