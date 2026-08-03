@@ -119,14 +119,22 @@ def write_workbook(output: Path, results: dict[str, list[dict[str, object]]], *,
     _write_table_sheet(workbook, "FCC Details", results["fcc"])
 
     methodology = workbook.create_sheet("Methodology")
+    if fmin_ghz > 0 and fmax_ghz > 0:
+        frequency_window = f"{fmin_ghz:g} to {fmax_ghz:g} GHz"
+    elif fmin_ghz > 0:
+        frequency_window = f"{fmin_ghz:g} GHz and above"
+    elif fmax_ghz > 0:
+        frequency_window = f"Up to {fmax_ghz:g} GHz"
+    else:
+        frequency_window = "All input frequencies"
     methodology_rows = [
         ("Generated UTC", datetime.now(timezone.utc).replace(microsecond=0).isoformat()),
         ("ETSI rules", ETSI_EDITION),
         ("ETSI source", ETSI_SOURCE_URL),
         ("FCC rules", FCC_EDITION),
         ("FCC source", FCC_SOURCE_URL),
-        ("Frequency window", f"{fmin_ghz:g} to {fmax_ghz:g} GHz" if fmin_ghz > 0 and fmax_ghz > 0 else "All input frequencies"),
-        ("Sample coverage", "Every available input frequency sample is listed. Frequencies outside ETSI or FCC bands are retained as Not applicable."),
+        ("Frequency window", frequency_window),
+        ("Sample coverage", "Every available input frequency sample inside the selected frequency window is listed. Frequencies outside ETSI or FCC bands are retained as Not applicable."),
         ("Gain convention", "Directivity is used wherever ETSI or FCC refers to antenna gain, by explicit project decision."),
         ("Polarization convention", "Ludwig-3 linear co/cross components; H or V comes from the port label/filename, otherwise the main-beam field is used."),
         ("Plane convention", "CST phi=0/180 is azimuth and phi=90/270 is elevation. Opposite sides are evaluated independently."),

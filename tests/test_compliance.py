@@ -10,6 +10,7 @@ from compliance.engine import (
     Pattern,
     _build_per_frequency_results,
     _build_rollup,
+    analyze_files,
     analyze_pattern,
     mask_limits,
     parse_omitted_angle_range,
@@ -117,6 +118,22 @@ def test_pattern_analysis_reports_etsi_and_fcc_results() -> None:
     assert len(etsi_rows) == 4
     assert [row["standard"] for row in fcc_rows] == ["A", "B1", "B2"]
     assert all(row["beam_or_gain_pass"] for row in fcc_rows)
+
+
+def test_file_analysis_filters_every_available_sample_to_compliance_frequency_window(monkeypatch) -> None:
+    rows = _synthetic_h_rows()
+    monkeypatch.setattr(
+        "compliance.engine.read_ffs_broadband",
+        lambda _path: {4e9: rows, 6e9: rows, 8e9: rows},
+    )
+
+    results = analyze_files(
+        [Path("demo_H.ffs")],
+        fmin_ghz=5.0,
+        fmax_ghz=7.0,
+    )
+
+    assert [row["frequency_ghz"] for row in results["summary"]] == [6.0]
 
 
 def test_each_failed_etsi_class_has_a_plain_language_note() -> None:
@@ -278,6 +295,7 @@ def test_compliance_workbook_contains_traceable_sheets(tmp_path: Path) -> None:
     ]
     methodology = dict(workbook["Methodology"].iter_rows(values_only=True))
     assert "Directivity is used" in methodology["Gain convention"]
+    assert methodology["Frequency window"] == "5.9 to 6.1 GHz"
     headers = [cell.value for cell in workbook["ETSI RPE Details"][1]]
     note_column = headers.index("Note") + 1
     assert "ETSI Class 3 fails because" in workbook["ETSI RPE Details"].cell(2, note_column).value

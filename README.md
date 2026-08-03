@@ -194,7 +194,9 @@ Numeric cells are written as real numbers, not strings.
 ## Standards Compliance
 
 The Compliance stage evaluates every enabled `.ffs` file and every frequency
-sample available in each file. Its workbook contains:
+sample available in each file. The Standards compliance controls on the
+Processing tab can limit the calculation to an independent minimum and maximum
+frequency in GHz. Its workbook contains:
 
 - a per-frequency summary with the best ETSI RPE class, ETSI XPD category, and FCC performance standard passed
 - a unified per-frequency results sheet with one row per applicable class, category, or standard, including exact limiting values and plain-language failure reasons

@@ -26,6 +26,8 @@ class StudioPipelineTests(unittest.TestCase):
             "polar_figure_size": 7.5,
             "polar_line_width": 3,
             "vswr_ymax": 4,
+            "compliance_fmin": 4.9,
+            "compliance_fmax": 6.1,
             "compliance_omit_angle_range": "180-180",
             "unrelated": "ignored",
         }
@@ -38,7 +40,11 @@ class StudioPipelineTests(unittest.TestCase):
         self.assertIn("vswr_ymax", stage_settings_snapshot("vswr", values))
         self.assertEqual(
             stage_settings_snapshot("compliance", values),
-            {"compliance_omit_angle_range": "180-180"},
+            {
+                "compliance_fmin": 4.9,
+                "compliance_fmax": 6.1,
+                "compliance_omit_angle_range": "180-180",
+            },
         )
 
     def test_stage_output_files_include_generated_plot_assets_and_manifest(self) -> None:

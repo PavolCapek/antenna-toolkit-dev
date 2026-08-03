@@ -1729,6 +1729,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.vswr_ymax = TrimmedDoubleSpinBox(); self.vswr_ymax.setRange(0.0, 1000.0); self.vswr_ymax.setDecimals(6); self.vswr_ymax.setValue(float(self.store.get("vswr_ymax", 10.0))); self.vswr_ymax.valueChanged.connect(lambda v: self.store.set("vswr_ymax", float(v)))
         self.vswr_ystep = TrimmedDoubleSpinBox(); self.vswr_ystep.setRange(0.01, 100.0); self.vswr_ystep.setDecimals(6); self.vswr_ystep.setValue(float(self.store.get("vswr_ystep", 1.0))); self.vswr_ystep.valueChanged.connect(lambda v: self.store.set("vswr_ystep", float(v)))
         self.vswr_smooth = NoWheelSpinBox(); self.vswr_smooth.setRange(1, 99); self.vswr_smooth.setValue(int(self.store.get("vswr_smooth", 5))); self.vswr_smooth.valueChanged.connect(lambda v: self.store.set("vswr_smooth", int(v)))
+        self.compliance_fmin = TrimmedDoubleSpinBox(); self.compliance_fmin.setRange(0.0, 1000.0); self.compliance_fmin.setDecimals(6); self.compliance_fmin.setSingleStep(0.1); self.compliance_fmin.setValue(float(self.store.get("compliance_fmin", 0.0))); self.compliance_fmin.valueChanged.connect(lambda v: self.store.set("compliance_fmin", float(v)))
+        self.compliance_fmax = TrimmedDoubleSpinBox(); self.compliance_fmax.setRange(0.0, 1000.0); self.compliance_fmax.setDecimals(6); self.compliance_fmax.setSingleStep(0.1); self.compliance_fmax.setValue(float(self.store.get("compliance_fmax", 0.0))); self.compliance_fmax.valueChanged.connect(lambda v: self.store.set("compliance_fmax", float(v)))
         self.compliance_omit_angle_range = QLineEdit(str(self.store.get("compliance_omit_angle_range", "180-180")))
         self.compliance_omit_angle_range.setPlaceholderText("e.g. 179-180; blank disables")
         self.compliance_omit_angle_range.setToolTip(
@@ -1762,6 +1764,18 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         compliance_form.setVerticalSpacing(8)
         compliance_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         compliance_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add_form_row(
+            compliance_form,
+            "Frequency min",
+            StepperField(self.compliance_fmin),
+            "Minimum frequency included in the compliance calculation, in GHz. Use 0 for no lower bound.",
+        )
+        add_form_row(
+            compliance_form,
+            "Frequency max",
+            StepperField(self.compliance_fmax),
+            "Maximum frequency included in the compliance calculation, in GHz. Use 0 for no upper bound.",
+        )
         add_form_row(
             compliance_form,
             "Omit angle range",
@@ -2200,6 +2214,9 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.vswr_ymax.setValue(10.0)
         self.vswr_ystep.setValue(1.0)
         self.vswr_smooth.setValue(5)
+        self.compliance_fmin.setValue(0.0)
+        self.compliance_fmax.setValue(0.0)
+        self.compliance_omit_angle_range.setText("180-180")
         self.plot_grid.set_color(DEFAULT_GRID_COLOR, persist=False)
         self.cartesian_grid_line_width.setValue(0.9)
         self.polar_grid_line_width.setValue(0.9)
@@ -2341,6 +2358,9 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "vswr_ymax": "VSWR Y maximum",
             "vswr_ystep": "VSWR Y step",
             "vswr_smooth": "VSWR smoothing",
+            "compliance_fmin": "Compliance frequency minimum",
+            "compliance_fmax": "Compliance frequency maximum",
+            "compliance_omit_angle_range": "Compliance omitted angle range",
             "grid_color": "Grid color",
             "cartesian_grid_line_width": "Cartesian grid width",
             "polar_grid_line_width": "Polar grid width",
@@ -2954,6 +2974,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self.vswr_ymax.valueChanged,
             self.vswr_ystep.valueChanged,
             self.vswr_smooth.valueChanged,
+            self.compliance_fmin.valueChanged,
+            self.compliance_fmax.valueChanged,
             self.compliance_omit_angle_range.textChanged,
             self.plot_grid.colorChanged,
             self.cartesian_grid_line_width.valueChanged,
@@ -3470,6 +3492,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         fmax = float(self.shared_fmax.value())
         if fmin > 0 and fmax <= fmin:
             messages.append("Shared frequency window is invalid: max must be greater than min.")
+        if not self._compliance_frequency_window_is_valid():
+            messages.append("Compliance frequency window is invalid: max must be greater than min.")
         return messages
 
     def _last_success_timestamp(self) -> str:
@@ -4712,6 +4736,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "vswr_ymax": float(self.vswr_ymax.value()),
             "vswr_ystep": float(self.vswr_ystep.value()),
             "vswr_smooth": int(self.vswr_smooth.value()),
+            "compliance_fmin": float(self.compliance_fmin.value()),
+            "compliance_fmax": float(self.compliance_fmax.value()),
             "compliance_omit_angle_range": self.compliance_omit_angle_range.text().strip(),
             "grid_color": self.plot_grid.color(),
             "cartesian_grid_line_width": float(self.cartesian_grid_line_width.value()),
@@ -4790,6 +4816,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if "vswr_ymax" in values: self.vswr_ymax.setValue(float(values["vswr_ymax"]))
         if "vswr_ystep" in values: self.vswr_ystep.setValue(float(values["vswr_ystep"]))
         if "vswr_smooth" in values: self.vswr_smooth.setValue(int(values["vswr_smooth"]))
+        if "compliance_fmin" in values: self.compliance_fmin.setValue(float(values["compliance_fmin"]))
+        if "compliance_fmax" in values: self.compliance_fmax.setValue(float(values["compliance_fmax"]))
         if "compliance_omit_angle_range" in values: self.compliance_omit_angle_range.setText(str(values["compliance_omit_angle_range"]))
         if "grid_color" in values: self.plot_grid.set_color(str(values["grid_color"]))
         cartesian_grid_line_width = value_or_legacy("cartesian_grid_line_width", "plot_grid_line_width")

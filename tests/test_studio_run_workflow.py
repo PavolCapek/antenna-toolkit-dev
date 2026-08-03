@@ -369,6 +369,8 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.window._set_touchstone(str(s2p_path))
         self.window._set_technical_data(str(technical_data_path))
         self.window.pdf_metadata_author.setText("Pipeline Author")
+        self.window.compliance_fmin.setValue(4.9)
+        self.window.compliance_fmax.setValue(6.1)
         self.window.cartesian_figure_width.setValue(9.75)
         self.window.cartesian_figure_height.setValue(4.5)
         self.window.polar_figure_size.setValue(7.75)
@@ -403,8 +405,14 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
             queued_args["compliance"][queued_args["compliance"].index("--omit-angle-range") + 1],
             "180-180",
         )
-        self.assertNotIn("--fmin", queued_args["compliance"])
-        self.assertNotIn("--fmax", queued_args["compliance"])
+        self.assertEqual(
+            queued_args["compliance"][queued_args["compliance"].index("--fmin") + 1],
+            "4.9",
+        )
+        self.assertEqual(
+            queued_args["compliance"][queued_args["compliance"].index("--fmax") + 1],
+            "6.1",
+        )
         self.assertIn("--beamwidth-db-colors", queued_args["plot"])
         self.assertEqual(queued_args["plot"][queued_args["plot"].index("--cartesian-figure-width") + 1], "9.75")
         self.assertEqual(queued_args["plot"][queued_args["plot"].index("--cartesian-figure-height") + 1], "4.5")

@@ -167,6 +167,8 @@ class PipelineCommandTests(unittest.TestCase):
         settings = PresetSettings(
             plot_line_1="#101010",
             plot_line_2="#202020",
+            compliance_fmin=4.9,
+            compliance_fmax=6.1,
             compliance_omit_angle_range="178-180",
         )
         context = RunContext(
@@ -227,8 +229,8 @@ class PipelineCommandTests(unittest.TestCase):
             compliance_command[compliance_command.index("--omit-angle-range") + 1],
             "178-180",
         )
-        self.assertNotIn("--fmin", compliance_command)
-        self.assertNotIn("--fmax", compliance_command)
+        self.assertEqual(compliance_command[compliance_command.index("--fmin") + 1], "4.9")
+        self.assertEqual(compliance_command[compliance_command.index("--fmax") + 1], "6.1")
 
 
 if __name__ == "__main__":

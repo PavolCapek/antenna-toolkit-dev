@@ -182,6 +182,11 @@ class StudioRunMixin:
         fmax = float(self.shared_fmax.value())
         return fmin <= 0 or fmax > fmin
 
+    def _compliance_frequency_window_is_valid(self) -> bool:
+        fmin = float(self.compliance_fmin.value())
+        fmax = float(self.compliance_fmax.value())
+        return fmin <= 0 or fmax <= 0 or fmax > fmin
+
     def _missing_enabled_ffs(self) -> list[str]:
         return [path for path in self.selected_ffs() if not Path(path).exists()]
 
@@ -212,6 +217,7 @@ class StudioRunMixin:
             template_exists=template_path.exists(),
             template_display=display_workspace_path(template_path),
             frequency_window_valid=self._frequency_window_is_valid(),
+            compliance_frequency_window_valid=self._compliance_frequency_window_is_valid(),
             beam_output_exists=self.deduced_beam_output().exists(),
             extract_output_exists=self.deduced_extract_output().exists(),
             extract_stage_stale=self._stage_is_stale("extract"),

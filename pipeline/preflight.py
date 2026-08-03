@@ -28,6 +28,7 @@ def collect_preflight_issues(
     template_exists: bool,
     template_display: str,
     frequency_window_valid: bool,
+    compliance_frequency_window_valid: bool,
     beam_output_exists: bool,
     extract_output_exists: bool,
     extract_stage_stale: bool,
@@ -109,6 +110,14 @@ def collect_preflight_issues(
 
     if needs_frequency and not frequency_window_valid:
         issues.append(PreflightIssue("invalid_frequency_window", "Set a valid shared frequency window or clear it."))
+
+    if "compliance" in requested and not compliance_frequency_window_valid:
+        issues.append(
+            PreflightIssue(
+                "invalid_compliance_frequency_window",
+                "Set a valid compliance frequency window or clear one of its bounds.",
+            )
+        )
 
     if "plot" in requested and not beam_output_exists and "beam" not in requested:
         issues.append(PreflightIssue("missing_beam_output", "Generate the workbook before running Plots."))

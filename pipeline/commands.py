@@ -26,6 +26,8 @@ def build_compliance_command(
     args = [python_executable, "-u", script_path, str(output_path), *(str(path) for path in ffs_paths)]
     _append_if_text(args, "--port-labels-json", port_labels_json)
     if settings is not None:
+        _append_if_nonzero(args, "--fmin", settings.compliance_fmin)
+        _append_if_nonzero(args, "--fmax", settings.compliance_fmax)
         _append_if_text(args, "--omit-angle-range", settings.compliance_omit_angle_range)
     return args
 

@@ -25,6 +25,7 @@ class PipelinePreflightTests(unittest.TestCase):
             template_exists=False,
             template_display="",
             frequency_window_valid=False,
+            compliance_frequency_window_valid=True,
             beam_output_exists=False,
             extract_output_exists=False,
             extract_stage_stale=False,
@@ -53,6 +54,7 @@ class PipelinePreflightTests(unittest.TestCase):
             template_exists=False,
             template_display="Templates/default.pdf",
             frequency_window_valid=True,
+            compliance_frequency_window_valid=True,
             beam_output_exists=False,
             extract_output_exists=False,
             extract_stage_stale=False,
@@ -80,6 +82,7 @@ class PipelinePreflightTests(unittest.TestCase):
             template_exists=False,
             template_display="Templates/missing.pdf",
             frequency_window_valid=True,
+            compliance_frequency_window_valid=True,
             beam_output_exists=True,
             extract_output_exists=True,
             extract_stage_stale=True,
@@ -91,6 +94,38 @@ class PipelinePreflightTests(unittest.TestCase):
         self.assertIn("Select an available datasheet export style: Templates/missing.pdf", messages)
         self.assertIn("Rerun Extract before generating the datasheet.", messages)
         self.assertIn("Rerun Plots before generating the datasheet.", messages)
+
+    def test_invalid_compliance_frequency_window_blocks_compliance(self) -> None:
+        issues = collect_preflight_issues(
+            stage_keys=["compliance"],
+            has_active_project=True,
+            enabled_ffs=["Input data/a.ffs"],
+            missing_ffs_display=[],
+            touchstone_selected=False,
+            touchstone_ready=False,
+            touchstone_display="",
+            technical_data="",
+            technical_data_is_url=False,
+            technical_data_is_google_sheet=False,
+            google_sheet_has_id=False,
+            google_sheets_auth_configured=False,
+            technical_data_exists=False,
+            technical_data_display="",
+            template_exists=False,
+            template_display="",
+            frequency_window_valid=True,
+            compliance_frequency_window_valid=False,
+            beam_output_exists=False,
+            extract_output_exists=False,
+            extract_stage_stale=False,
+            plot_output_exists=False,
+            plot_stage_stale=False,
+        )
+
+        self.assertEqual(
+            [issue.message for issue in issues],
+            ["Set a valid compliance frequency window or clear one of its bounds."],
+        )
 
 
 if __name__ == "__main__":
