@@ -31,7 +31,7 @@ def _write_table_sheet(workbook, title: str, rows: list[dict[str, object]]) -> N
     if not rows:
         worksheet.append(["No applicable requirements or results"])
         return
-    headers = list(rows[0])
+    headers = [header for header in rows[0] if not header.startswith("_")]
     display_tokens = {
         "db": "dB",
         "dbi": "dBi",
@@ -81,6 +81,12 @@ def _write_table_sheet(workbook, title: str, rows: list[dict[str, object]]) -> N
         worksheet.column_dimensions[worksheet.cell(1, index).column_letter].width = width
         column_cells = worksheet.iter_cols(min_col=index, max_col=index, min_row=2)
         cells = next(column_cells)
+        if header == "note":
+            worksheet.column_dimensions[worksheet.cell(1, index).column_letter].width = 60
+            for cell in cells:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+                if cell.value:
+                    worksheet.row_dimensions[cell.row].height = 48
         if header == "frequencies_checked":
             for cell in cells:
                 cell.number_format = "0"

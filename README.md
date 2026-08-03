@@ -198,7 +198,7 @@ the shared frequency window. Its workbook contains:
 
 - a per-frequency summary with the best ETSI RPE class, ETSI XPD category, and FCC performance standard passed
 - an antenna rollup showing which classifications pass at every checked frequency in each applicable band
-- a row for every applicable ETSI RPE class with co-/cross-polar pass state, limiting angle, and margin
+- a row for every applicable ETSI RPE class with co-/cross-polar pass state, limiting angle, margin, and a plain-language explanation for failures
 - a row for every applicable FCC A/B/B1/B2 or band requirement with beamwidth, directivity, suppression, and XPD evidence
 - a methodology sheet identifying the rule editions, source links, coordinate convention, and limitations
 

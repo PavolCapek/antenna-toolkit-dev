@@ -207,12 +207,17 @@ def _etsi_profile_result(pattern: Pattern, profile: ETSIRPEProfile) -> dict[str,
     if profile.polarization_restriction and pattern.polarization != profile.polarization_restriction:
         return {
             "status": "NOT APPLICABLE",
+            "note": f"ETSI Class {profile.class_name} is not applicable because it is restricted to {profile.polarization_restriction} polarization.",
             "reason": f"Class is restricted to {profile.polarization_restriction} polarization",
         }
     if profile.co_h_points or profile.co_v_points:
         co_points = profile.co_h_points if pattern.polarization == "H" else profile.co_v_points
     if not co_points:
-        return {"status": "INDETERMINATE", "reason": "Polarization-specific co-polar mask could not be selected"}
+        return {
+            "status": "INDETERMINATE",
+            "note": f"ETSI Class {profile.class_name} could not be evaluated because its polarization-specific co-polar mask could not be selected.",
+            "reason": "Polarization-specific co-polar mask could not be selected",
+        }
 
     co_az = _plane_envelope(pattern.co_directivity_dbi, pattern.phis_deg, 0.0)
     cross_az = _plane_envelope(pattern.cross_directivity_dbi, pattern.phis_deg, 0.0)
@@ -228,8 +233,24 @@ def _etsi_profile_result(pattern: Pattern, profile: ETSIRPEProfile) -> dict[str,
         components.append(("co-polar elevation", elevation))
     finite_components = [item for item in components if item[1]["margin_db"] is not None]
     limiting_name, limiting = min(finite_components, key=lambda item: float(item[1]["margin_db"]))
+    failed_components = [item for item in components if not item[1]["passed"]]
+    failure_details: list[str] = []
+    for component_name, component in failed_components:
+        if component["margin_db"] is None:
+            failure_details.append(f"the {component_name} mask could not be evaluated from the available angular samples")
+            continue
+        shortfall = -float(component["margin_db"])
+        failure_details.append(
+            f"the {component_name} pattern is {shortfall:.2f} dB above the allowed limit at "
+            f"{float(component['angle_deg']):.2f} degrees "
+            f"(measured {float(component['actual_dbi']):.2f} dBi; limit {float(component['limit_dbi']):.2f} dBi)"
+        )
+    note = ""
+    if failed_components:
+        note = f"ETSI Class {profile.class_name} fails because " + "; and ".join(failure_details) + "."
     return {
         "status": "PASS" if passed else "FAIL",
+        "note": note,
         "co_pass": bool(co["passed"]),
         "cross_pass": bool(cross["passed"]),
         "elevation_pass": None if elevation is None else bool(elevation["passed"]),
@@ -261,6 +282,7 @@ def _etsi_xpd_result(pattern: Pattern) -> dict[str, object]:
     measured = _xpd_values(pattern)
     passed: list[str] = []
     details: list[str] = []
+    category_results: dict[str, dict[str, object]] = {}
     for index, (minimum, actual) in enumerate(zip(requirements, measured), start=1):
         if minimum is None:
             continue
@@ -268,6 +290,23 @@ def _etsi_xpd_result(pattern: Pattern) -> dict[str, object]:
         details.append(f"Category {index}: {actual:.2f} dB vs {minimum:.2f} dB")
         if ok:
             passed.append(str(index))
+        margin = actual - minimum if math.isfinite(actual) else float("nan")
+        note = ""
+        if not ok:
+            if math.isfinite(actual):
+                note = (
+                    f"ETSI XPD Category {index} fails because the minimum measured cross-polar discrimination is "
+                    f"{actual:.2f} dB, which is {-margin:.2f} dB below the required {minimum:.2f} dB."
+                )
+            else:
+                note = f"ETSI XPD Category {index} fails because no valid cross-polar discrimination value could be calculated."
+        category_results[str(index)] = {
+            "status": "PASS" if ok else "FAIL",
+            "measured_db": actual,
+            "required_db": minimum,
+            "margin_db": margin,
+            "note": note,
+        }
     return {
         "best_category": passed[-1] if passed else "None",
         "passed_categories": ", ".join(passed),
@@ -275,6 +314,7 @@ def _etsi_xpd_result(pattern: Pattern) -> dict[str, object]:
         "category2_xpd_db": measured[1],
         "category3_xpd_db": measured[2],
         "detail": "; ".join(details) if details else "No XPD category is defined for this frequency",
+        "category_results": category_results,
     }
 
 
@@ -404,6 +444,7 @@ def analyze_pattern(path: Path, port_label: str, pattern: Pattern) -> tuple[dict
         "etsi_best_xpd_category": xpd["best_category"],
         "etsi_passed_xpd_categories": xpd["passed_categories"],
         "etsi_xpd_detail": xpd["detail"],
+        "_etsi_xpd_categories": xpd["category_results"],
         "fcc_band": fcc_band,
         "fcc_best_standard": fcc_best,
         "fcc_passed_standards": ", ".join(fcc_passed),
@@ -461,13 +502,28 @@ def _build_rollup(
     for key, rows in etsi_groups.items():
         statuses = [str(row.get("status", "")) for row in rows]
         margins = [float(row["margin_db"]) for row in rows if row.get("margin_db") is not None]
+        status = "PASS" if statuses and all(value == "PASS" for value in statuses) else (
+            "NOT APPLICABLE" if statuses and all(value == "NOT APPLICABLE" for value in statuses) else "FAIL"
+        )
+        note = ""
+        if status == "FAIL":
+            failed_rows = [row for row in rows if row.get("status") == "FAIL"]
+            if failed_rows:
+                worst = min(
+                    failed_rows,
+                    key=lambda row: float(row["margin_db"]) if row.get("margin_db") is not None else -math.inf,
+                )
+                note = f"At {float(worst['frequency_ghz']):.3f} GHz, {str(worst.get('note', '')).strip()}"
+        elif status == "NOT APPLICABLE":
+            note = str(rows[0].get("note", ""))
         rollup.append(
             {
                 **dict(zip(base_keys, key[: len(base_keys)])),
                 "family": "ETSI RPE",
                 "band": key[-2],
                 "classification": f"Class {key[-1]}",
-                "status": "PASS" if statuses and all(status == "PASS" for status in statuses) else ("NOT APPLICABLE" if statuses and all(status == "NOT APPLICABLE" for status in statuses) else "FAIL"),
+                "status": status,
+                "note": note,
                 "frequencies_checked": len(rows),
                 "frequency_min_ghz": min(float(row["frequency_ghz"]) for row in rows),
                 "frequency_max_ghz": max(float(row["frequency_ghz"]) for row in rows),
@@ -484,14 +540,32 @@ def _build_rollup(
     for key, rows in summary_groups.items():
         applicable_categories = {
             category
-            for category in ("1", "2", "3")
-            if any(f"Category {category}:" in str(row.get("etsi_xpd_detail", "")) for row in rows)
+            for row in rows
+            for category in dict(row.get("_etsi_xpd_categories", {}))
         }
         for category in sorted(applicable_categories):
-            passed = all(
-                category in {item.strip() for item in str(row.get("etsi_passed_xpd_categories", "")).split(",") if item.strip()}
+            category_rows = [
+                (row, dict(row.get("_etsi_xpd_categories", {}))[category])
                 for row in rows
-            )
+                if category in dict(row.get("_etsi_xpd_categories", {}))
+            ]
+            passed = bool(category_rows) and all(result.get("status") == "PASS" for _, result in category_rows)
+            margins = [
+                float(result["margin_db"])
+                for _, result in category_rows
+                if result.get("margin_db") is not None and math.isfinite(float(result["margin_db"]))
+            ]
+            note = ""
+            if not passed:
+                failed = [(row, result) for row, result in category_rows if result.get("status") == "FAIL"]
+                if failed:
+                    worst_row, worst_result = min(
+                        failed,
+                        key=lambda item: float(item[1]["margin_db"])
+                        if item[1].get("margin_db") is not None and math.isfinite(float(item[1]["margin_db"]))
+                        else -math.inf,
+                    )
+                    note = f"At {float(worst_row['frequency_ghz']):.3f} GHz, {str(worst_result.get('note', '')).strip()}"
             rollup.append(
                 {
                     **dict(zip(base_keys, key[: len(base_keys)])),
@@ -499,10 +573,11 @@ def _build_rollup(
                     "band": key[-1],
                     "classification": f"Category {category}",
                     "status": "PASS" if passed else "FAIL",
+                    "note": note,
                     "frequencies_checked": len(rows),
                     "frequency_min_ghz": min(float(row["frequency_ghz"]) for row in rows),
                     "frequency_max_ghz": max(float(row["frequency_ghz"]) for row in rows),
-                    "worst_margin_db": None,
+                    "worst_margin_db": min(margins) if margins else None,
                 }
             )
 
