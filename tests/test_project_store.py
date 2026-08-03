@@ -115,6 +115,7 @@ class ProjectStoreTests(unittest.TestCase):
         self.assertEqual(project.project_file(self.root), self.root / "Projects" / "dish_c" / PROJECT_FILE_NAME)
         self.assertEqual(project.workbook_path(self.root), self.root / "Projects" / "dish_c" / "dish_c.xlsx")
         self.assertEqual(project.extract_path(self.root), self.root / "Projects" / "dish_c" / "dish_c-extracted-data.xlsx")
+        self.assertEqual(project.compliance_path(self.root), self.root / "Projects" / "dish_c" / "dish_c-compliance.xlsx")
         self.assertEqual(project.datasheet_path(self.root), self.root / "Projects" / "dish_c" / "dish_c-datasheet.pdf")
         self.assertEqual(project.vswr_path(self.root), self.root / "Projects" / "dish_c" / "dish_c-vswr.svg")
 

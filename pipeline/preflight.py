@@ -38,8 +38,8 @@ def collect_preflight_issues(
         return [PreflightIssue("missing_project", "Create or select a project first.")]
 
     requested = set(stage_keys)
-    needs_ffs = bool(requested & {"beam", "extract", "plot", "datasheet"})
-    needs_frequency = bool(requested & {"extract", "plot", "vswr", "datasheet"})
+    needs_ffs = bool(requested & {"beam", "compliance", "extract", "plot", "datasheet"})
+    needs_frequency = bool(requested & {"compliance", "extract", "plot", "vswr", "datasheet"})
     needs_touchstone = bool(requested & {"vswr", "datasheet"})
     needs_technical_data = "datasheet" in requested
     needs_template = "datasheet" in requested

@@ -22,6 +22,7 @@ from path_utils import (
 
 THIS_DIR = Path(__file__).resolve().parent
 SCRIPT_BEAM = str(THIS_DIR / "beamwidth_xlsx.py")
+SCRIPT_COMPLIANCE = str(THIS_DIR / "compliance_report.py")
 SCRIPT_EXTRACT = str(THIS_DIR / "extract_data_xlsx.py")
 SCRIPT_DATASHEET = str(THIS_DIR / "datasheet_pdf.py")
 SCRIPT_PLOT = str(THIS_DIR / "plot.py")

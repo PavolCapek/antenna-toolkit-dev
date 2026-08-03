@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.commands import build_datasheet_command, build_plot_command, build_vswr_command
+from pipeline.commands import build_compliance_command, build_datasheet_command, build_plot_command, build_vswr_command
 from pipeline.run_context import RunContext
 from pipeline.settings import PresetSettings
 
@@ -176,6 +176,7 @@ class PipelineCommandTests(unittest.TestCase):
             datasheet_output=Path("project/demo-datasheet.pdf"),
             vswr_output=Path("project/demo-vswr.svg"),
             settings=settings,
+            compliance_output=Path("project/demo-compliance.xlsx"),
             polar_port_labels_json='{"one.ffs":"P1"}',
             touchstone_path="Input data/demo.s2p",
         )
@@ -211,6 +212,16 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertNotIn("--datasheet-type", datasheet_command)
         self.assertNotIn("--datasheet-layout", datasheet_command)
         self.assertNotIn("--datasheet-asset-ids", datasheet_command)
+
+        compliance_command = build_compliance_command(
+            python_executable="python",
+            script_path="compliance_report.py",
+            ffs_paths=["one.ffs", "two.ffs"],
+            context=context,
+        )
+        self.assertIn(str(context.compliance_output), compliance_command)
+        self.assertIn("one.ffs", compliance_command)
+        self.assertIn("--port-labels-json", compliance_command)
 
 
 if __name__ == "__main__":

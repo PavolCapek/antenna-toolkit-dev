@@ -80,6 +80,23 @@ class StudioPipelineTests(unittest.TestCase):
         self.assertTrue(stage_is_applicable("datasheet", has_enabled_ffs=True, has_touchstone=True, has_technical_data=True))
         self.assertFalse(stage_is_applicable("datasheet", has_enabled_ffs=True, has_touchstone=False, has_technical_data=True))
         self.assertTrue(stage_is_applicable("vswr", has_enabled_ffs=False, has_touchstone=True, has_technical_data=False))
+        self.assertTrue(stage_is_applicable("compliance", has_enabled_ffs=True, has_touchstone=False, has_technical_data=False))
+
+    def test_compliance_stage_has_output_and_version(self) -> None:
+        project_dir = Path("project")
+        compliance_output = project_dir / "demo-compliance.xlsx"
+        files = stage_output_files(
+            "compliance",
+            project_dir=project_dir,
+            beam_output=project_dir / "demo.xlsx",
+            extract_output=project_dir / "extract.xlsx",
+            datasheet_output=project_dir / "datasheet.pdf",
+            vswr_output=project_dir / "vswr.svg",
+            compliance_output=compliance_output,
+        )
+
+        self.assertEqual(files, [compliance_output])
+        self.assertIn("compliance_rules", stage_tool_versions("compliance"))
 
     def test_stage_tool_versions_and_stale_detail(self) -> None:
         versions = stage_tool_versions("datasheet", plot_asset_style_version=3, datasheet_render_version=2)

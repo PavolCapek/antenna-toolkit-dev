@@ -3220,7 +3220,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         tool_versions = self._stage_tool_versions(stage_key)
         if tool_versions:
             snapshot["tool_versions"] = tool_versions
-        if stage_key in {"beam", "extract", "plot", "datasheet"}:
+        if stage_key in {"beam", "compliance", "extract", "plot", "datasheet"}:
             snapshot["ffs_items"] = [
                 {
                     "path": serialize_workspace_path(THIS_DIR, str(item["path"])),
@@ -3258,6 +3258,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             extract_output=self.deduced_extract_output(),
             datasheet_output=self.deduced_datasheet_output(),
             vswr_output=self.deduced_vswr_output(),
+            compliance_output=self.deduced_compliance_output(),
         )
         self._cache_set(cache_key, list(files))
         return files
@@ -4142,6 +4143,10 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
     def deduced_extract_output(self) -> Path:
         project = self.current_project()
         return project.extract_path(THIS_DIR) if project else (self.project_results_dir() / "project-extracted-data.xlsx")
+
+    def deduced_compliance_output(self) -> Path:
+        project = self.current_project()
+        return project.compliance_path(THIS_DIR) if project else (self.project_results_dir() / "project-compliance.xlsx")
 
     def deduced_datasheet_output(self) -> Path:
         project = self.current_project()

@@ -190,6 +190,9 @@ class ProjectRecord:
     def extract_path(self, root: Path) -> Path:
         return self.project_dir(root) / f"{self.slug}-extracted-data.xlsx"
 
+    def compliance_path(self, root: Path) -> Path:
+        return self.project_dir(root) / f"{self.slug}-compliance.xlsx"
+
     def datasheet_path(self, root: Path) -> Path:
         return self.project_dir(root) / f"{self.slug}-datasheet.pdf"
 

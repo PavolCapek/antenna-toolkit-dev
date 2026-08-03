@@ -298,10 +298,11 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertFalse(self.window.readiness_action.isVisible())
 
     def test_pipeline_stage_list_gates_actions_by_output_state(self) -> None:
-        self.assertEqual(set(self.window.stage_open_buttons.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
-        self.assertEqual(set(self.window.stage_timestamp_labels.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
-        self.assertEqual(set(self.window.stage_chip_labels.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
-        self.assertEqual(set(self.window.stage_more_buttons.keys()), {"beam", "extract", "datasheet", "plot", "vswr"})
+        expected_stages = {"beam", "compliance", "extract", "datasheet", "plot", "vswr"}
+        self.assertEqual(set(self.window.stage_open_buttons.keys()), expected_stages)
+        self.assertEqual(set(self.window.stage_timestamp_labels.keys()), expected_stages)
+        self.assertEqual(set(self.window.stage_chip_labels.keys()), expected_stages)
+        self.assertEqual(set(self.window.stage_more_buttons.keys()), expected_stages)
 
         with (
             mock.patch.object(self.window, "_stage_output_exists", return_value=False),
@@ -395,7 +396,9 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         ):
             self.window.run_full()
 
-        self.assertEqual(queued, ["beam", "extract", "plot", "vswr", "datasheet"])
+        self.assertEqual(queued, ["beam", "compliance", "extract", "plot", "vswr", "datasheet"])
+        self.assertTrue(any(Path(arg).name == "compliance_report.py" for arg in queued_args["compliance"]))
+        self.assertIn("--port-labels-json", queued_args["compliance"])
         self.assertIn("--beamwidth-db-colors", queued_args["plot"])
         self.assertEqual(queued_args["plot"][queued_args["plot"].index("--cartesian-figure-width") + 1], "9.75")
         self.assertEqual(queued_args["plot"][queued_args["plot"].index("--cartesian-figure-height") + 1], "4.5")

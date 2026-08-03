@@ -15,5 +15,6 @@ class RunContext:
     datasheet_output: Path
     vswr_output: Path
     settings: PresetSettings
+    compliance_output: Path | None = None
     polar_port_labels_json: str = ""
     touchstone_path: str = ""

@@ -9,6 +9,7 @@ from studio_support import is_url
 
 STAGE_DEFINITIONS = [
     ("beam", "Workbook"),
+    ("compliance", "Compliance"),
     ("extract", "Extract"),
     ("plot", "Plots"),
     ("vswr", "VSWR"),

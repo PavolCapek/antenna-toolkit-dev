@@ -8,6 +8,7 @@ Windows desktop tool for processing CST Studio Suite exports:
 It generates:
 
 - beamwidth and gain workbook `.xlsx`
+- ETSI EN 302 217 / FCC Part 101 compliance workbook `.xlsx`
 - extracted metrics workbook `.xlsx`
 - datasheet `.pdf`
 - Cartesian SVG plots
@@ -25,6 +26,8 @@ It generates:
   Persistent project storage and project-scoped output paths
 - [beamwidth_xlsx.py](/C:/Users/capek/OneDrive/Documents/Git/antenna-toolkit-dev/beamwidth_xlsx.py)
   Reads `.ffs` files and generates the workbook and `.ant` files
+- [compliance_report.py](/C:/Users/capek/OneDrive/Documents/Git/antenna-toolkit-dev/compliance_report.py)
+  Checks co-/cross-polar directivity against ETSI EN 302 217-4 V2.2.1 and FCC Part 101 antenna requirements
 - [plot.py](/C:/Users/capek/OneDrive/Documents/Git/antenna-toolkit-dev/plot.py)
   Generates gain, beamwidth, beam efficiency, and polar plots from the workbook
 - [plot_vswr.py](/C:/Users/capek/OneDrive/Documents/Git/antenna-toolkit-dev/plot_vswr.py)
@@ -151,6 +154,7 @@ For a project named `SH60WB`, output is written to:
 Projects\SH60WB\
   project.json
   SH60WB.xlsx
+  SH60WB-compliance.xlsx
   SH60WB_extracted_data.xlsx
   SH60WB_datasheet.pdf
   SH60WB_gain.svg
@@ -187,12 +191,34 @@ The generated `.xlsx` contains:
 
 Numeric cells are written as real numbers, not strings.
 
+## Standards Compliance
+
+The Compliance stage evaluates every enabled `.ffs` file and every frequency in
+the shared frequency window. Its workbook contains:
+
+- a per-frequency summary with the best ETSI RPE class, ETSI XPD category, and FCC performance standard passed
+- an antenna rollup showing which classifications pass at every checked frequency in each applicable band
+- a row for every applicable ETSI RPE class with co-/cross-polar pass state, limiting angle, and margin
+- a row for every applicable FCC A/B/B1/B2 or band requirement with beamwidth, directivity, suppression, and XPD evidence
+- a methodology sheet identifying the rule editions, source links, coordinate convention, and limitations
+
+The checker uses Ludwig-3 co-/cross-polar components and treats directivity as
+gain for all standards comparisons. This is an engineering pre-compliance
+assessment from simulation or supplied pattern data, not an accredited
+measurement report or regulatory certification.
+
 ## Command-Line Usage
 
 Generate workbook from `.ffs`:
 
 ```powershell
 python beamwidth_xlsx.py "Projects\SH60WB\SH60WB.xlsx" "Input data\SH60WB_Horizontal.ffs" "Input data\SH60WB_Vertical.ffs" --smooth 5 --theta-window 8
+```
+
+Generate the ETSI/FCC compliance workbook:
+
+```powershell
+python compliance_report.py "Projects\SH60WB\SH60WB-compliance.xlsx" "Input data\SH60WB_Horizontal.ffs" "Input data\SH60WB_Vertical.ffs" --fmin 4.8 --fmax 6.2
 ```
 
 Generate plots from workbook:

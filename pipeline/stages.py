@@ -10,6 +10,7 @@ RADIATION_PATTERN_FILES_DIR = "radiaiton pattern files"
 
 STAGE_SETTING_KEYS: dict[str, tuple[str, ...]] = {
     "beam": ("smooth", "theta"),
+    "compliance": ("shared_fmin", "shared_fmax"),
     "extract": ("smooth", "theta", "shared_fmin", "shared_fmax"),
     "datasheet": (
         "smooth",
@@ -121,6 +122,7 @@ def stage_output_files(
     extract_output: Path,
     datasheet_output: Path,
     vswr_output: Path,
+    compliance_output: Path | None = None,
 ) -> list[Path]:
     if stage_key == "beam":
         files = [beam_output]
@@ -132,6 +134,8 @@ def stage_output_files(
         return files
     if stage_key == "extract":
         return [extract_output]
+    if stage_key == "compliance":
+        return [compliance_output or project_dir / f"{beam_output.stem}-compliance.xlsx"]
     if stage_key == "datasheet":
         return [datasheet_output]
     if stage_key == "vswr":
@@ -179,7 +183,7 @@ def stage_is_applicable(
     has_touchstone: bool,
     has_technical_data: bool,
 ) -> bool:
-    if stage_key == "beam":
+    if stage_key in {"beam", "compliance"}:
         return has_enabled_ffs
     if stage_key == "extract":
         return has_enabled_ffs or has_touchstone

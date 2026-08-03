@@ -8,10 +8,13 @@ PLOT_ASSET_STYLE_VERSION = 6
 VSWR_ASSET_STYLE_VERSION = 1
 DATASHEET_RENDER_VERSION = 6
 WORKBOOK_MANIFEST_VERSION = 1
+COMPLIANCE_RULES_VERSION = 1
 
 
 def stage_versions(stage_key: str) -> dict[str, int]:
     versions: dict[str, int] = {}
+    if stage_key == "compliance":
+        versions["compliance_rules"] = COMPLIANCE_RULES_VERSION
     if stage_key in {"beam", "extract", "plot", "datasheet"}:
         versions["beam_data"] = BEAM_DATA_VERSION
     if stage_key in {"extract", "datasheet"}:

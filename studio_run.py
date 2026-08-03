@@ -7,7 +7,7 @@ from PySide6.QtCore import QCoreApplication, QTimer
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox
 
-from pipeline.commands import build_datasheet_command, build_plot_command, build_vswr_command
+from pipeline.commands import build_compliance_command, build_datasheet_command, build_plot_command, build_vswr_command
 from pipeline.preflight import collect_preflight_issues
 from pipeline.run_context import RunContext
 from project_store import utc_now_iso
@@ -19,6 +19,7 @@ from studio_runtime import (
 )
 from studio_support import (
     SCRIPT_BEAM,
+    SCRIPT_COMPLIANCE,
     SCRIPT_DATASHEET,
     SCRIPT_EXTRACT,
     SCRIPT_PLOT,
@@ -93,6 +94,7 @@ class StudioRunMixin:
             datasheet_output=self.deduced_datasheet_output(),
             vswr_output=self.deduced_vswr_output(),
             settings=active_settings,
+            compliance_output=self.deduced_compliance_output(),
             polar_port_labels_json=self.polar_port_labels_json(),
             touchstone_path=str(touchstone_path if touchstone_path is not None else (self.selected_s2p() or "")),
         )
@@ -234,6 +236,7 @@ class StudioRunMixin:
         names = {Path(str(arg)).name.lower() for arg in args}
         mapping = {
             Path(SCRIPT_BEAM).name.lower(): "beam",
+            Path(SCRIPT_COMPLIANCE).name.lower(): "compliance",
             Path(SCRIPT_EXTRACT).name.lower(): "extract",
             Path(SCRIPT_DATASHEET).name.lower(): "datasheet",
             Path(SCRIPT_PLOT).name.lower(): "plot",
@@ -303,6 +306,7 @@ class StudioRunMixin:
     def rerun_stage(self, stage_key: str) -> None:
         callbacks = {
             "beam": self.run_beam,
+            "compliance": self.run_compliance,
             "extract": self.run_extract,
             "datasheet": self.run_datasheet,
             "plot": self.run_plot,
@@ -331,6 +335,13 @@ class StudioRunMixin:
                     "--smooth", str(self.beam_smooth.value()),
                     "--theta-window", str(self.theta_window.value()),
                 ]
+            elif stage_key == "compliance":
+                args = build_compliance_command(
+                    python_executable=which_python(),
+                    script_path=SCRIPT_COMPLIANCE,
+                    ffs_paths=self.selected_ffs(),
+                    context=context,
+                )
             elif stage_key == "extract":
                 args = self.build_extract_args()
                 if not args:
@@ -573,6 +584,19 @@ class StudioRunMixin:
         self._save_project_if_dirty()
         self._enqueue_stage("beam", args)
 
+    def run_compliance(self):
+        if not self._run_preflight_passes(["compliance"], "Compliance Preflight"):
+            return
+        context = self._build_run_context()
+        args = build_compliance_command(
+            python_executable=which_python(),
+            script_path=SCRIPT_COMPLIANCE,
+            ffs_paths=self.selected_ffs(),
+            context=context,
+        )
+        self._save_project_if_dirty()
+        self._enqueue_stage("compliance", args)
+
     def build_extract_args(self) -> list[str] | None:
         if not self.active_project_slug:
             return None
@@ -663,7 +687,7 @@ class StudioRunMixin:
         self._enqueue_stage("vswr", args)
 
     def run_full(self):
-        if not self._run_preflight_passes(["beam", "extract", "plot", "vswr", "datasheet"], "Full Pipeline Preflight"):
+        if not self._run_preflight_passes(["beam", "compliance", "extract", "plot", "vswr", "datasheet"], "Full Pipeline Preflight"):
             return
         self._show_run_start_feedback("Preparing full pipeline...")
         context = self._build_run_context()
@@ -682,6 +706,18 @@ class StudioRunMixin:
             "--theta-window", str(self.theta_window.value())
         ]
         stage_commands: list[tuple[str, list[str]]] = [("beam", args_beam)]
+
+        stage_commands.append(
+            (
+                "compliance",
+                build_compliance_command(
+                    python_executable=which_python(),
+                    script_path=SCRIPT_COMPLIANCE,
+                    ffs_paths=ffs,
+                    context=context,
+                ),
+            )
+        )
 
         args_extract = self.build_extract_args()
         if args_extract:
