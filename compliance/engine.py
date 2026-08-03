@@ -262,30 +262,45 @@ def _etsi_profile_result(pattern: Pattern, profile: ETSIRPEProfile) -> dict[str,
     }
 
 
-def _xpd_values(pattern: Pattern) -> tuple[float, float, float]:
-    co_az = _plane_envelope(pattern.co_directivity_dbi, pattern.phis_deg, 0.0)
-    cross_az = _plane_envelope(pattern.cross_directivity_dbi, pattern.phis_deg, 0.0)
+def _minimum_xpd_measurement(pattern: Pattern, valid: np.ndarray) -> dict[str, float | None]:
+    xpd = pattern.co_directivity_dbi - pattern.cross_directivity_dbi
+    usable = np.broadcast_to(valid, xpd.shape) & np.isfinite(xpd)
+    if not np.any(usable):
+        return {"measured_db": float("nan"), "phi_deg": None, "theta_deg": None}
+    masked = np.where(usable, xpd, np.nan)
+    phi_index, theta_index = np.unravel_index(int(np.nanargmin(masked)), masked.shape)
+    return {
+        "measured_db": float(masked[phi_index, theta_index]),
+        "phi_deg": float(pattern.phis_deg[phi_index]),
+        "theta_deg": float(pattern.thetas_deg[theta_index]),
+    }
+
+
+def _xpd_measurements(pattern: Pattern) -> tuple[dict[str, float | None], ...]:
     peak = float(np.nanmax(pattern.co_directivity_dbi))
-    one_db_az = co_az >= peak - 1.0
-    category1 = float(np.nanmin(co_az[one_db_az] - cross_az[one_db_az])) if np.any(one_db_az) else float("nan")
+    category1_mask = np.zeros_like(pattern.co_directivity_dbi, dtype=bool)
+    for target_phi in (0.0, 180.0):
+        phi_index = _nearest_phi_index(pattern.phis_deg, target_phi)
+        category1_mask[phi_index, :] = pattern.co_directivity_dbi[phi_index, :] >= peak - 1.0
 
     one_db_3d = pattern.co_directivity_dbi >= peak - 1.0
-    category2 = float(np.nanmin(pattern.co_directivity_dbi[one_db_3d] - pattern.cross_directivity_dbi[one_db_3d])) if np.any(one_db_3d) else float("nan")
-
     extended = one_db_3d | (pattern.thetas_deg[None, :] <= 3.0)
-    category3 = float(np.nanmin(pattern.co_directivity_dbi[extended] - pattern.cross_directivity_dbi[extended])) if np.any(extended) else float("nan")
-    return category1, category2, category3
+    return tuple(
+        _minimum_xpd_measurement(pattern, mask)
+        for mask in (category1_mask, one_db_3d, extended)
+    )
 
 
 def _etsi_xpd_result(pattern: Pattern) -> dict[str, object]:
     requirements = etsi_xpd_requirements(pattern.frequency_hz / 1e9)
-    measured = _xpd_values(pattern)
+    measurements = _xpd_measurements(pattern)
     passed: list[str] = []
     details: list[str] = []
     category_results: dict[str, dict[str, object]] = {}
-    for index, (minimum, actual) in enumerate(zip(requirements, measured), start=1):
+    for index, (minimum, measurement) in enumerate(zip(requirements, measurements), start=1):
         if minimum is None:
             continue
+        actual = float(measurement["measured_db"])
         ok = math.isfinite(actual) and actual >= minimum
         details.append(f"Category {index}: {actual:.2f} dB vs {minimum:.2f} dB")
         if ok:
@@ -296,7 +311,9 @@ def _etsi_xpd_result(pattern: Pattern) -> dict[str, object]:
             if math.isfinite(actual):
                 note = (
                     f"ETSI XPD Category {index} fails because the minimum measured cross-polar discrimination is "
-                    f"{actual:.2f} dB, which is {-margin:.2f} dB below the required {minimum:.2f} dB."
+                    f"{actual:.2f} dB at phi {float(measurement['phi_deg']):.2f} degrees, "
+                    f"theta {float(measurement['theta_deg']):.2f} degrees, which is {-margin:.2f} dB below "
+                    f"the required {minimum:.2f} dB."
                 )
             else:
                 note = f"ETSI XPD Category {index} fails because no valid cross-polar discrimination value could be calculated."
@@ -305,14 +322,16 @@ def _etsi_xpd_result(pattern: Pattern) -> dict[str, object]:
             "measured_db": actual,
             "required_db": minimum,
             "margin_db": margin,
+            "phi_deg": measurement["phi_deg"],
+            "theta_deg": measurement["theta_deg"],
             "note": note,
         }
     return {
         "best_category": passed[-1] if passed else "None",
         "passed_categories": ", ".join(passed),
-        "category1_xpd_db": measured[0],
-        "category2_xpd_db": measured[1],
-        "category3_xpd_db": measured[2],
+        "category1_xpd_db": measurements[0]["measured_db"],
+        "category2_xpd_db": measurements[1]["measured_db"],
+        "category3_xpd_db": measurements[2]["measured_db"],
         "detail": "; ".join(details) if details else "No XPD category is defined for this frequency",
         "category_results": category_results,
     }
@@ -346,15 +365,18 @@ def _suppression_result(angles: np.ndarray, actual_dbi: np.ndarray, requirements
 def _fcc_profile_result(pattern: Pattern, profile: FCCProfile) -> dict[str, object]:
     az_bw = plane_beamwidth(pattern, 0.0)
     el_bw = plane_beamwidth(pattern, 90.0)
-    beam_pass = (
-        profile.max_beamwidth_deg is not None
-        and math.isfinite(az_bw)
-        and math.isfinite(el_bw)
-        and az_bw <= profile.max_beamwidth_deg
-        and el_bw <= profile.max_beamwidth_deg
-    )
-    gain_pass = profile.min_gain_dbi is not None and pattern.max_directivity_dbi >= profile.min_gain_dbi
-    beam_or_gain = bool(beam_pass or gain_pass)
+    beam_pass = None
+    if profile.max_beamwidth_deg is not None:
+        beam_pass = bool(
+            math.isfinite(az_bw)
+            and math.isfinite(el_bw)
+            and az_bw <= profile.max_beamwidth_deg
+            and el_bw <= profile.max_beamwidth_deg
+        )
+    gain_pass = None
+    if profile.min_gain_dbi is not None:
+        gain_pass = pattern.max_directivity_dbi >= profile.min_gain_dbi
+    beam_or_gain = bool(beam_pass is True or gain_pass is True)
 
     co_az = _plane_envelope(pattern.co_directivity_dbi, pattern.phis_deg, 0.0)
     cross_az = _plane_envelope(pattern.cross_directivity_dbi, pattern.phis_deg, 0.0)
@@ -366,16 +388,148 @@ def _fcc_profile_result(pattern: Pattern, profile: FCCProfile) -> dict[str, obje
 
     xpd_pass = True
     minimum_xpd = None
+    xpd_phi = None
+    xpd_theta = None
     if profile.xpd_min_db is not None:
-        near = pattern.thetas_deg < 5.0
-        xpd = pattern.co_directivity_dbi[:, near] - pattern.cross_directivity_dbi[:, near]
-        minimum_xpd = float(np.nanmin(xpd)) if xpd.size else float("nan")
+        xpd_measurement = _minimum_xpd_measurement(pattern, pattern.thetas_deg[None, :] < 5.0)
+        minimum_xpd = float(xpd_measurement["measured_db"])
+        xpd_phi = xpd_measurement["phi_deg"]
+        xpd_theta = xpd_measurement["theta_deg"]
         xpd_pass = math.isfinite(minimum_xpd) and minimum_xpd >= profile.xpd_min_db
     passed = beam_or_gain and bool(co_suppression["passed"]) and bool(xpd_pass) and (
         cross_suppression is None or bool(cross_suppression["passed"])
     )
+
+    beam_margin = None
+    if profile.max_beamwidth_deg is not None and math.isfinite(az_bw) and math.isfinite(el_bw):
+        beam_margin = profile.max_beamwidth_deg - max(az_bw, el_bw)
+    gain_margin = None
+    if profile.min_gain_dbi is not None:
+        gain_margin = pattern.max_directivity_dbi - profile.min_gain_dbi
+    qualification_options = [
+        ("beamwidth qualification", beam_margin, max(az_bw, el_bw), profile.max_beamwidth_deg, "degrees")
+        if beam_margin is not None
+        else None,
+        ("directivity qualification", gain_margin, pattern.max_directivity_dbi, profile.min_gain_dbi, "dBi")
+        if gain_margin is not None
+        else None,
+    ]
+    qualification_options = [option for option in qualification_options if option is not None]
+    qualification = max(qualification_options, key=lambda item: float(item[1])) if qualification_options else None
+
+    limiting_candidates: list[tuple[str, float, float | None, float | None, str, float | None, float | None, float | None]] = []
+    if qualification is not None:
+        limiting_candidates.append((qualification[0], float(qualification[1]), qualification[2], qualification[3], qualification[4], None, None, None))
+    if co_suppression.get("margin_db") is not None:
+        limiting_candidates.append(
+            (
+                "co-polar suppression",
+                float(co_suppression["margin_db"]),
+                float(co_suppression["actual_suppression_db"]),
+                float(co_suppression["required_suppression_db"]),
+                "dB",
+                float(co_suppression["angle_deg"]),
+                None,
+                None,
+            )
+        )
+    if cross_suppression is not None and cross_suppression.get("margin_db") is not None:
+        limiting_candidates.append(
+            (
+                "cross-polar suppression",
+                float(cross_suppression["margin_db"]),
+                float(cross_suppression["actual_suppression_db"]),
+                float(cross_suppression["required_suppression_db"]),
+                "dB",
+                float(cross_suppression["angle_deg"]),
+                None,
+                None,
+            )
+        )
+    if profile.xpd_min_db is not None and minimum_xpd is not None and math.isfinite(minimum_xpd):
+        limiting_candidates.append(
+            (
+                "cross-polar discrimination",
+                minimum_xpd - profile.xpd_min_db,
+                minimum_xpd,
+                profile.xpd_min_db,
+                "dB",
+                None,
+                None if xpd_phi is None else float(xpd_phi),
+                None if xpd_theta is None else float(xpd_theta),
+            )
+        )
+    limiting = min(limiting_candidates, key=lambda item: item[1]) if limiting_candidates else None
+
+    failure_details: list[str] = []
+    if not beam_or_gain:
+        alternatives: list[str] = []
+        has_both_qualification_routes = profile.max_beamwidth_deg is not None and profile.min_gain_dbi is not None
+        if profile.max_beamwidth_deg is not None:
+            if math.isfinite(az_bw) and math.isfinite(el_bw):
+                exceeded = []
+                if az_bw > profile.max_beamwidth_deg:
+                    exceeded.append(f"azimuth beamwidth {az_bw:.2f} degrees")
+                if el_bw > profile.max_beamwidth_deg:
+                    exceeded.append(f"elevation beamwidth {el_bw:.2f} degrees")
+                beamwidth_problem = f"{' and '.join(exceeded)} exceed the {profile.max_beamwidth_deg:.2f}-degree maximum"
+                alternatives.append(
+                    f"the beamwidth alternative is not met because {beamwidth_problem}"
+                    if has_both_qualification_routes
+                    else beamwidth_problem
+                )
+            else:
+                alternatives.append(
+                    "the beamwidth alternative could not be calculated from the available angular samples"
+                    if has_both_qualification_routes
+                    else "beamwidth could not be calculated from the available angular samples"
+                )
+        if profile.min_gain_dbi is not None:
+            directivity_problem = (
+                f"directivity {pattern.max_directivity_dbi:.2f} dBi is "
+                f"{profile.min_gain_dbi - pattern.max_directivity_dbi:.2f} dB below the required {profile.min_gain_dbi:.2f} dBi"
+            )
+            alternatives.append(
+                f"the directivity alternative is not met because {directivity_problem}"
+                if has_both_qualification_routes
+                else directivity_problem
+            )
+        if has_both_qualification_routes:
+            failure_details.append("neither beamwidth nor directivity qualifies: " + "; and ".join(alternatives))
+        else:
+            failure_details.extend(alternatives)
+    if not co_suppression["passed"]:
+        if co_suppression.get("margin_db") is None:
+            failure_details.append(f"the co-polar suppression requirement could not be evaluated ({co_suppression.get('reason', 'missing samples')})")
+        else:
+            failure_details.append(
+                f"co-polar suppression is {float(co_suppression['actual_suppression_db']):.2f} dB at "
+                f"{float(co_suppression['angle_deg']):.2f} degrees, {abs(float(co_suppression['margin_db'])):.2f} dB below "
+                f"the required {float(co_suppression['required_suppression_db']):.2f} dB"
+            )
+    if cross_suppression is not None and not cross_suppression["passed"]:
+        if cross_suppression.get("margin_db") is None:
+            failure_details.append(f"the cross-polar suppression requirement could not be evaluated ({cross_suppression.get('reason', 'missing samples')})")
+        else:
+            failure_details.append(
+                f"cross-polar suppression is {float(cross_suppression['actual_suppression_db']):.2f} dB at "
+                f"{float(cross_suppression['angle_deg']):.2f} degrees, {abs(float(cross_suppression['margin_db'])):.2f} dB below "
+                f"the required {float(cross_suppression['required_suppression_db']):.2f} dB"
+            )
+    if not xpd_pass:
+        if minimum_xpd is not None and math.isfinite(minimum_xpd):
+            failure_details.append(
+                f"cross-polar discrimination is {minimum_xpd:.2f} dB at phi {float(xpd_phi):.2f} degrees, "
+                f"theta {float(xpd_theta):.2f} degrees, {profile.xpd_min_db - minimum_xpd:.2f} dB below "
+                f"the required {profile.xpd_min_db:.2f} dB"
+            )
+        else:
+            failure_details.append("cross-polar discrimination could not be calculated from the available samples")
+    standard_label = "FCC band requirement" if profile.standard == "Band requirement" else f"FCC Standard {profile.standard}"
+    failure_note = f"{standard_label} fails because " + "; and ".join(failure_details) + "." if failure_details else ""
     return {
         "status": "PASS" if passed else "FAIL",
+        "failure_note": failure_note,
         "azimuth_beamwidth_deg": az_bw,
         "elevation_beamwidth_deg": el_bw,
         "max_beamwidth_deg": profile.max_beamwidth_deg,
@@ -386,12 +540,27 @@ def _fcc_profile_result(pattern: Pattern, profile: FCCProfile) -> dict[str, obje
         "beam_or_gain_pass": beam_or_gain,
         "suppression_pass": bool(co_suppression["passed"]),
         "suppression_margin_db": co_suppression.get("margin_db"),
+        "suppression_db": co_suppression.get("actual_suppression_db"),
+        "required_suppression_db": co_suppression.get("required_suppression_db"),
         "limiting_angle_deg": co_suppression.get("angle_deg"),
         "cross_suppression_pass": None if cross_suppression is None else bool(cross_suppression["passed"]),
         "cross_suppression_margin_db": None if cross_suppression is None else cross_suppression.get("margin_db"),
+        "cross_suppression_db": None if cross_suppression is None else cross_suppression.get("actual_suppression_db"),
+        "required_cross_suppression_db": None if cross_suppression is None else cross_suppression.get("required_suppression_db"),
+        "cross_limiting_angle_deg": None if cross_suppression is None else cross_suppression.get("angle_deg"),
         "minimum_xpd_db": minimum_xpd,
         "required_xpd_db": profile.xpd_min_db,
-        "xpd_pass": xpd_pass,
+        "minimum_xpd_phi_deg": xpd_phi,
+        "minimum_xpd_theta_deg": xpd_theta,
+        "xpd_pass": None if profile.xpd_min_db is None else xpd_pass,
+        "overall_margin_db": None if limiting is None else limiting[1],
+        "limiting_component": None if limiting is None else limiting[0],
+        "limiting_measured_value": None if limiting is None else limiting[2],
+        "limiting_limit_value": None if limiting is None else limiting[3],
+        "limiting_unit": None if limiting is None else limiting[4],
+        "overall_limiting_angle_deg": None if limiting is None else limiting[5],
+        "overall_limiting_phi_deg": None if limiting is None else limiting[6],
+        "overall_limiting_theta_deg": None if limiting is None else limiting[7],
     }
 
 
@@ -425,7 +594,7 @@ def analyze_pattern(path: Path, port_label: str, pattern: Pattern) -> tuple[dict
     for profile in fcc_profiles_for_frequency(pattern.frequency_hz / 1e6):
         fcc_band = f"{profile.frequency_min_mhz:g}-{profile.frequency_max_mhz:g} MHz"
         result = _fcc_profile_result(pattern, profile)
-        row = {**common, "fcc_band": fcc_band, "standard": profile.standard, "note": profile.note, **result}
+        row = {**common, "fcc_band": fcc_band, "standard": profile.standard, "regulatory_note": profile.note, **result}
         fcc_details.append(row)
         if result["status"] == "PASS":
             fcc_passed.append(profile.standard)
@@ -481,10 +650,163 @@ def analyze_files(
         raise ValueError("No far-field frequencies fall inside the selected compliance frequency window")
     return {
         "rollup": _build_rollup(summary_rows, etsi_rows, fcc_rows),
+        "per_frequency": _build_per_frequency_results(summary_rows, etsi_rows, fcc_rows),
         "summary": summary_rows,
         "etsi": etsi_rows,
         "fcc": fcc_rows,
     }
+
+
+def _sample_key(row: dict[str, object]) -> tuple[object, ...]:
+    return (row.get("source_path"), row.get("frequency_ghz"), row.get("polarization"))
+
+
+def _build_per_frequency_results(
+    summary_rows: list[dict[str, object]],
+    etsi_rows: list[dict[str, object]],
+    fcc_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    etsi_by_sample: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    fcc_by_sample: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    for row in etsi_rows:
+        etsi_by_sample.setdefault(_sample_key(row), []).append(row)
+    for row in fcc_rows:
+        fcc_by_sample.setdefault(_sample_key(row), []).append(row)
+
+    results: list[dict[str, object]] = []
+    for summary in sorted(summary_rows, key=lambda row: (str(row.get("source_path", "")), float(row["frequency_ghz"]))):
+        key = _sample_key(summary)
+        common = {
+            name: summary.get(name)
+            for name in (
+                "source_file",
+                "source_path",
+                "port_label",
+                "frequency_ghz",
+                "polarization",
+                "max_directivity_dbi",
+            )
+        }
+
+        sample_etsi = etsi_by_sample.get(key, [])
+        if sample_etsi:
+            for row in sample_etsi:
+                angle = row.get("limiting_angle_deg")
+                results.append(
+                    {
+                        **common,
+                        "family": "ETSI RPE",
+                        "band": row.get("etsi_range"),
+                        "classification": f"Class {row.get('rpe_class')}",
+                        "status": row.get("status"),
+                        "note": row.get("note", ""),
+                        "limiting_component": row.get("limiting_component"),
+                        "location": "" if angle is None else f"{row.get('limiting_component')} at {float(angle):.2f} degrees from boresight",
+                        "limiting_angle_deg": angle,
+                        "limiting_phi_deg": None,
+                        "limiting_theta_deg": None,
+                        "measured_value": row.get("actual_dbi"),
+                        "limit_value": row.get("limit_dbi"),
+                        "unit": "dBi",
+                        "margin_db": row.get("margin_db"),
+                    }
+                )
+        else:
+            results.append(
+                {
+                    **common,
+                    "family": "ETSI RPE",
+                    "band": "Not applicable",
+                    "classification": "No applicable class",
+                    "status": "NOT APPLICABLE",
+                    "note": f"No ETSI RPE frequency range covers {float(summary['frequency_ghz']):.3f} GHz.",
+                }
+            )
+
+        xpd_categories = dict(summary.get("_etsi_xpd_categories", {}))
+        if xpd_categories:
+            for category, category_result in sorted(xpd_categories.items()):
+                phi = category_result.get("phi_deg")
+                theta = category_result.get("theta_deg")
+                location = ""
+                if phi is not None and theta is not None:
+                    location = f"phi {float(phi):.2f} degrees, theta {float(theta):.2f} degrees"
+                results.append(
+                    {
+                        **common,
+                        "family": "ETSI XPD",
+                        "band": summary.get("etsi_range"),
+                        "classification": f"Category {category}",
+                        "status": category_result.get("status"),
+                        "note": category_result.get("note", ""),
+                        "limiting_component": "cross-polar discrimination",
+                        "location": location,
+                        "limiting_angle_deg": None,
+                        "limiting_phi_deg": phi,
+                        "limiting_theta_deg": theta,
+                        "measured_value": category_result.get("measured_db"),
+                        "limit_value": category_result.get("required_db"),
+                        "unit": "dB",
+                        "margin_db": category_result.get("margin_db"),
+                    }
+                )
+        else:
+            results.append(
+                {
+                    **common,
+                    "family": "ETSI XPD",
+                    "band": summary.get("etsi_range"),
+                    "classification": "No applicable category",
+                    "status": "NOT APPLICABLE",
+                    "note": f"No ETSI XPD category is defined at {float(summary['frequency_ghz']):.3f} GHz.",
+                }
+            )
+
+        sample_fcc = fcc_by_sample.get(key, [])
+        if sample_fcc:
+            for row in sample_fcc:
+                angle = row.get("overall_limiting_angle_deg")
+                phi = row.get("overall_limiting_phi_deg")
+                theta = row.get("overall_limiting_theta_deg")
+                if angle is not None:
+                    location = f"{float(angle):.2f} degrees from boresight"
+                elif phi is not None and theta is not None:
+                    location = f"phi {float(phi):.2f} degrees, theta {float(theta):.2f} degrees"
+                else:
+                    location = "beamwidth/directivity qualification"
+                results.append(
+                    {
+                        **common,
+                        "family": "FCC Part 101",
+                        "band": row.get("fcc_band"),
+                        "classification": "Band requirement"
+                        if row.get("standard") == "Band requirement"
+                        else f"Standard {row.get('standard')}",
+                        "status": row.get("status"),
+                        "note": row.get("failure_note", ""),
+                        "limiting_component": row.get("limiting_component"),
+                        "location": location,
+                        "limiting_angle_deg": angle,
+                        "limiting_phi_deg": phi,
+                        "limiting_theta_deg": theta,
+                        "measured_value": row.get("limiting_measured_value"),
+                        "limit_value": row.get("limiting_limit_value"),
+                        "unit": row.get("limiting_unit"),
+                        "margin_db": row.get("overall_margin_db"),
+                    }
+                )
+        else:
+            results.append(
+                {
+                    **common,
+                    "family": "FCC Part 101",
+                    "band": "Not applicable",
+                    "classification": "No applicable standard",
+                    "status": "NOT APPLICABLE",
+                    "note": f"No FCC Part 101 antenna standard covers {float(summary['frequency_ghz']):.3f} GHz.",
+                }
+            )
+    return results
 
 
 def _build_rollup(
@@ -586,19 +908,27 @@ def _build_rollup(
         key = tuple(row.get(name) for name in base_keys) + (row.get("fcc_band"), row.get("standard"))
         fcc_groups.setdefault(key, []).append(row)
     for key, rows in fcc_groups.items():
-        margins = [
-            float(value)
-            for row in rows
-            for value in (row.get("suppression_margin_db"), row.get("cross_suppression_margin_db"))
-            if value is not None
-        ]
+        margins = [float(row["overall_margin_db"]) for row in rows if row.get("overall_margin_db") is not None]
+        passed = all(row.get("status") == "PASS" for row in rows)
+        note = ""
+        if not passed:
+            failed_rows = [row for row in rows if row.get("status") == "FAIL"]
+            if failed_rows:
+                worst = min(
+                    failed_rows,
+                    key=lambda row: float(row["overall_margin_db"])
+                    if row.get("overall_margin_db") is not None
+                    else -math.inf,
+                )
+                note = f"At {float(worst['frequency_ghz']):.3f} GHz, {str(worst.get('failure_note', '')).strip()}"
         rollup.append(
             {
                 **dict(zip(base_keys, key[: len(base_keys)])),
                 "family": "FCC Part 101",
                 "band": key[-2],
-                "classification": f"Standard {key[-1]}",
-                "status": "PASS" if all(row.get("status") == "PASS" for row in rows) else "FAIL",
+                "classification": "Band requirement" if key[-1] == "Band requirement" else f"Standard {key[-1]}",
+                "status": "PASS" if passed else "FAIL",
+                "note": note,
                 "frequencies_checked": len(rows),
                 "frequency_min_ghz": min(float(row["frequency_ghz"]) for row in rows),
                 "frequency_max_ghz": max(float(row["frequency_ghz"]) for row in rows),

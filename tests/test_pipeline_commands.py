@@ -222,6 +222,8 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertIn(str(context.compliance_output), compliance_command)
         self.assertIn("one.ffs", compliance_command)
         self.assertIn("--port-labels-json", compliance_command)
+        self.assertNotIn("--fmin", compliance_command)
+        self.assertNotIn("--fmax", compliance_command)
 
 
 if __name__ == "__main__":

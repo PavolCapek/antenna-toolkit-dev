@@ -399,6 +399,8 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertEqual(queued, ["beam", "compliance", "extract", "plot", "vswr", "datasheet"])
         self.assertTrue(any(Path(arg).name == "compliance_report.py" for arg in queued_args["compliance"]))
         self.assertIn("--port-labels-json", queued_args["compliance"])
+        self.assertNotIn("--fmin", queued_args["compliance"])
+        self.assertNotIn("--fmax", queued_args["compliance"])
         self.assertIn("--beamwidth-db-colors", queued_args["plot"])
         self.assertEqual(queued_args["plot"][queued_args["plot"].index("--cartesian-figure-width") + 1], "9.75")
         self.assertEqual(queued_args["plot"][queued_args["plot"].index("--cartesian-figure-height") + 1], "4.5")

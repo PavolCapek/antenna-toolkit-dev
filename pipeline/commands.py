@@ -19,13 +19,11 @@ def build_compliance_command(
 ) -> list[str]:
     if context is not None:
         output_path = context.compliance_output
-        settings = context.settings
         port_labels_json = context.polar_port_labels_json
-    if output_path is None or settings is None:
-        raise ValueError("build_compliance_command requires output_path and settings")
+    if output_path is None:
+        raise ValueError("build_compliance_command requires output_path")
     args = [python_executable, "-u", script_path, str(output_path), *(str(path) for path in ffs_paths)]
     _append_if_text(args, "--port-labels-json", port_labels_json)
-    _append_frequency_window(args, settings)
     return args
 
 

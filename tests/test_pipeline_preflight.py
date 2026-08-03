@@ -6,6 +6,34 @@ from pipeline.preflight import collect_preflight_issues
 
 
 class PipelinePreflightTests(unittest.TestCase):
+    def test_compliance_does_not_require_shared_frequency_window(self) -> None:
+        issues = collect_preflight_issues(
+            stage_keys=["compliance"],
+            has_active_project=True,
+            enabled_ffs=["Input data/a.ffs"],
+            missing_ffs_display=[],
+            touchstone_selected=False,
+            touchstone_ready=False,
+            touchstone_display="",
+            technical_data="",
+            technical_data_is_url=False,
+            technical_data_is_google_sheet=False,
+            google_sheet_has_id=False,
+            google_sheets_auth_configured=False,
+            technical_data_exists=False,
+            technical_data_display="",
+            template_exists=False,
+            template_display="",
+            frequency_window_valid=False,
+            beam_output_exists=False,
+            extract_output_exists=False,
+            extract_stage_stale=False,
+            plot_output_exists=False,
+            plot_stage_stale=False,
+        )
+
+        self.assertEqual(issues, [])
+
     def test_missing_project_blocks_with_single_message(self) -> None:
         issues = collect_preflight_issues(
             stage_keys=["beam"],

@@ -193,10 +193,11 @@ Numeric cells are written as real numbers, not strings.
 
 ## Standards Compliance
 
-The Compliance stage evaluates every enabled `.ffs` file and every frequency in
-the shared frequency window. Its workbook contains:
+The Compliance stage evaluates every enabled `.ffs` file and every frequency
+sample available in each file. Its workbook contains:
 
 - a per-frequency summary with the best ETSI RPE class, ETSI XPD category, and FCC performance standard passed
+- a unified per-frequency results sheet with one row per applicable class, category, or standard, including exact limiting values and plain-language failure reasons
 - an antenna rollup showing which classifications pass at every checked frequency in each applicable band
 - a row for every applicable ETSI RPE class with co-/cross-polar pass state, limiting angle, margin, and a plain-language explanation for failures
 - a row for every applicable FCC A/B/B1/B2 or band requirement with beamwidth, directivity, suppression, and XPD evidence
@@ -218,8 +219,10 @@ python beamwidth_xlsx.py "Projects\SH60WB\SH60WB.xlsx" "Input data\SH60WB_Horizo
 Generate the ETSI/FCC compliance workbook:
 
 ```powershell
-python compliance_report.py "Projects\SH60WB\SH60WB-compliance.xlsx" "Input data\SH60WB_Horizontal.ffs" "Input data\SH60WB_Vertical.ffs" --fmin 4.8 --fmax 6.2
+python compliance_report.py "Projects\SH60WB\SH60WB-compliance.xlsx" "Input data\SH60WB_Horizontal.ffs" "Input data\SH60WB_Vertical.ffs"
 ```
+
+The CLI still accepts `--fmin` and `--fmax` when an explicitly filtered report is needed.
 
 Generate plots from workbook:
 

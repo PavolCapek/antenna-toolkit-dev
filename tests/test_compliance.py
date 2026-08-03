@@ -5,7 +5,14 @@ from pathlib import Path
 
 import numpy as np
 
-from compliance.engine import Pattern, _build_rollup, analyze_pattern, mask_limits, pattern_from_rows
+from compliance.engine import (
+    Pattern,
+    _build_per_frequency_results,
+    _build_rollup,
+    analyze_pattern,
+    mask_limits,
+    pattern_from_rows,
+)
 from compliance.standards import etsi_profiles_for_frequency, fcc_profiles_for_frequency
 from compliance_report import write_workbook
 
@@ -109,10 +116,92 @@ def test_each_failed_etsi_xpd_category_has_a_plain_language_rollup_note() -> Non
     assert all("below the required" in str(row["note"]) for row in failed_xpd)
 
 
+def test_per_frequency_results_cover_every_applicable_class_and_standard() -> None:
+    phis = np.asarray([0.0, 90.0, 180.0, 270.0])
+    thetas = np.arange(0.0, 181.0, 1.0)
+    pattern = Pattern(
+        frequency_hz=6e9,
+        phis_deg=phis,
+        thetas_deg=thetas,
+        total_directivity_dbi=np.zeros((len(phis), len(thetas))),
+        co_directivity_dbi=np.zeros((len(phis), len(thetas))),
+        cross_directivity_dbi=np.full((len(phis), len(thetas)), -10.0),
+        polarization="H",
+        polarization_basis="test",
+    )
+
+    summary, etsi_rows, fcc_rows = analyze_pattern(Path("demo_H.ffs"), "H", pattern)
+    rows = _build_per_frequency_results([summary], etsi_rows, fcc_rows)
+
+    assert len([row for row in rows if row["family"] == "ETSI RPE"]) == 4
+    assert len([row for row in rows if row["family"] == "ETSI XPD"]) == 3
+    assert len([row for row in rows if row["family"] == "FCC Part 101"]) == 3
+    assert all(row["frequency_ghz"] == 6.0 for row in rows)
+    failed_fcc = [row for row in rows if row["family"] == "FCC Part 101" and row["status"] == "FAIL"]
+    assert failed_fcc
+    assert all("fails because" in str(row["note"]) for row in failed_fcc)
+    assert all(row.get("limiting_component") for row in failed_fcc)
+
+
+def test_per_frequency_results_keep_samples_outside_all_standard_bands() -> None:
+    phis = np.asarray([0.0, 90.0, 180.0, 270.0])
+    thetas = np.arange(0.0, 181.0, 1.0)
+    pattern = Pattern(
+        frequency_hz=500e6,
+        phis_deg=phis,
+        thetas_deg=thetas,
+        total_directivity_dbi=np.zeros((len(phis), len(thetas))),
+        co_directivity_dbi=np.zeros((len(phis), len(thetas))),
+        cross_directivity_dbi=np.full((len(phis), len(thetas)), -40.0),
+        polarization="H",
+        polarization_basis="test",
+    )
+
+    summary, etsi_rows, fcc_rows = analyze_pattern(Path("demo_H.ffs"), "H", pattern)
+    rows = _build_per_frequency_results([summary], etsi_rows, fcc_rows)
+
+    assert {row["family"] for row in rows} == {"ETSI RPE", "ETSI XPD", "FCC Part 101"}
+    assert all(row["status"] == "NOT APPLICABLE" for row in rows)
+    assert all(row["frequency_ghz"] == 0.5 for row in rows)
+
+
+def test_fcc_failure_note_only_mentions_available_qualification_routes() -> None:
+    phis = np.asarray([0.0, 90.0, 180.0, 270.0])
+    thetas = np.arange(0.0, 181.0, 1.0)
+    pattern = Pattern(
+        frequency_hz=2e9,
+        phis_deg=phis,
+        thetas_deg=thetas,
+        total_directivity_dbi=np.zeros((len(phis), len(thetas))),
+        co_directivity_dbi=np.zeros((len(phis), len(thetas))),
+        cross_directivity_dbi=np.full((len(phis), len(thetas)), -20.0),
+        polarization="H",
+        polarization_basis="test",
+    )
+
+    _, _, fcc_rows = analyze_pattern(Path("demo_H.ffs"), "H", pattern)
+
+    assert fcc_rows
+    assert all("beamwidth" in str(row["failure_note"]) for row in fcc_rows)
+    assert all("neither beamwidth nor directivity" not in str(row["failure_note"]) for row in fcc_rows)
+    assert all(row["gain_pass"] is None for row in fcc_rows)
+    assert all(row["xpd_pass"] is None for row in fcc_rows)
+
+
 def test_compliance_workbook_contains_traceable_sheets(tmp_path: Path) -> None:
     output = tmp_path / "compliance.xlsx"
     results = {
         "rollup": [{"source_file": "demo.ffs", "family": "FCC Part 101", "classification": "Standard A", "status": "PASS"}],
+        "per_frequency": [
+            {
+                "source_file": "demo.ffs",
+                "frequency_ghz": 6.0,
+                "family": "ETSI RPE",
+                "classification": "Class 3",
+                "status": "FAIL",
+                "note": "ETSI Class 3 fails because the pattern exceeds the limit.",
+            }
+        ],
         "summary": [{"source_file": "demo.ffs", "frequency_ghz": 6.0, "fcc_best_standard": "A"}],
         "etsi": [
             {
@@ -130,7 +219,14 @@ def test_compliance_workbook_contains_traceable_sheets(tmp_path: Path) -> None:
     from openpyxl import load_workbook
 
     workbook = load_workbook(output, data_only=True)
-    assert workbook.sheetnames == ["Antenna Rollup", "Summary", "ETSI RPE Details", "FCC Details", "Methodology"]
+    assert workbook.sheetnames == [
+        "Antenna Rollup",
+        "Per-Frequency Results",
+        "Summary",
+        "ETSI RPE Details",
+        "FCC Details",
+        "Methodology",
+    ]
     methodology = dict(workbook["Methodology"].iter_rows(values_only=True))
     assert "Directivity is used" in methodology["Gain convention"]
     headers = [cell.value for cell in workbook["ETSI RPE Details"][1]]

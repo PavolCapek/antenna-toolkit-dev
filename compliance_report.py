@@ -31,7 +31,11 @@ def _write_table_sheet(workbook, title: str, rows: list[dict[str, object]]) -> N
     if not rows:
         worksheet.append(["No applicable requirements or results"])
         return
-    headers = [header for header in rows[0] if not header.startswith("_")]
+    headers: list[str] = []
+    for row in rows:
+        for header in row:
+            if not header.startswith("_") and header not in headers:
+                headers.append(header)
     display_tokens = {
         "db": "dB",
         "dbi": "dBi",
@@ -86,7 +90,8 @@ def _write_table_sheet(workbook, title: str, rows: list[dict[str, object]]) -> N
             for cell in cells:
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
                 if cell.value:
-                    worksheet.row_dimensions[cell.row].height = 48
+                    wrapped_lines = max(1, math.ceil(len(str(cell.value)) / 72))
+                    worksheet.row_dimensions[cell.row].height = min(120, max(30, 16 * wrapped_lines + 6))
         if header == "frequencies_checked":
             for cell in cells:
                 cell.number_format = "0"
@@ -94,6 +99,9 @@ def _write_table_sheet(workbook, title: str, rows: list[dict[str, object]]) -> N
             for cell in cells:
                 cell.number_format = "0.000"
         elif header.endswith(("_db", "_dbi", "_deg")):
+            for cell in cells:
+                cell.number_format = "0.00"
+        elif header in {"measured_value", "limit_value"}:
             for cell in cells:
                 cell.number_format = "0.00"
 
@@ -105,6 +113,7 @@ def write_workbook(output: Path, results: dict[str, list[dict[str, object]]], *,
     workbook = Workbook()
     workbook.remove(workbook.active)
     _write_table_sheet(workbook, "Antenna Rollup", results["rollup"])
+    _write_table_sheet(workbook, "Per-Frequency Results", results["per_frequency"])
     _write_table_sheet(workbook, "Summary", results["summary"])
     _write_table_sheet(workbook, "ETSI RPE Details", results["etsi"])
     _write_table_sheet(workbook, "FCC Details", results["fcc"])
@@ -117,6 +126,7 @@ def write_workbook(output: Path, results: dict[str, list[dict[str, object]]], *,
         ("FCC rules", FCC_EDITION),
         ("FCC source", FCC_SOURCE_URL),
         ("Frequency window", f"{fmin_ghz:g} to {fmax_ghz:g} GHz" if fmin_ghz > 0 and fmax_ghz > 0 else "All input frequencies"),
+        ("Sample coverage", "Every available input frequency sample is listed. Frequencies outside ETSI or FCC bands are retained as Not applicable."),
         ("Gain convention", "Directivity is used wherever ETSI or FCC refers to antenna gain, by explicit project decision."),
         ("Polarization convention", "Ludwig-3 linear co/cross components; H or V comes from the port label/filename, otherwise the main-beam field is used."),
         ("Plane convention", "CST phi=0/180 is azimuth and phi=90/270 is elevation. Opposite sides are evaluated independently."),
