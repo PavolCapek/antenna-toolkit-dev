@@ -1239,4 +1239,58 @@ def _build_rollup(
                 "worst_margin_db": min(margins) if margins else None,
             }
         )
+
+    summary_by_antenna: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    for row in summary_rows:
+        key = tuple(row.get(name) for name in base_keys)
+        summary_by_antenna.setdefault(key, []).append(row)
+    represented = {
+        tuple(row.get(name) for name in base_keys) + (row.get("family"),)
+        for row in rollup
+    }
+    missing_family_labels = (
+        (
+            "ETSI RPE",
+            "No applicable class",
+            "ETSI point-to-point RPE was checked at every selected frequency; none falls inside a defined RPE range.",
+        ),
+        (
+            "ETSI XPD",
+            "No applicable category",
+            "ETSI cross-polar discrimination was checked at every selected frequency; none has a defined XPD category.",
+        ),
+        (
+            "FCC Part 101",
+            "No applicable standard",
+            "FCC Part 101 was checked at every selected frequency; none falls inside a defined antenna-standard band.",
+        ),
+    )
+    for key, rows in summary_by_antenna.items():
+        families = list(missing_family_labels)
+        if any(bool(row.get("etsi_sector_enabled")) for row in rows):
+            families.insert(
+                1,
+                (
+                    "ETSI Sector RPE",
+                    "No applicable class",
+                    "ETSI single-beam sector RPE was checked at every selected frequency; none falls inside a defined RPE range.",
+                ),
+            )
+        for family, classification, note in families:
+            if key + (family,) in represented:
+                continue
+            rollup.append(
+                {
+                    **dict(zip(base_keys, key)),
+                    "family": family,
+                    "band": "Not applicable",
+                    "classification": classification,
+                    "status": "NOT APPLICABLE",
+                    "note": note,
+                    "frequencies_checked": len(rows),
+                    "frequency_min_ghz": min(float(row["frequency_ghz"]) for row in rows),
+                    "frequency_max_ghz": max(float(row["frequency_ghz"]) for row in rows),
+                    "worst_margin_db": None,
+                }
+            )
     return rollup

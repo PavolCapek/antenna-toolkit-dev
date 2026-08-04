@@ -100,6 +100,34 @@ class EvidenceCollector:
         if previous is None or self._rank(case) < self._rank(previous):
             self._cases[case.key] = case
 
+    def _consider_not_applicable(
+        self,
+        common: dict[str, object],
+        pattern: Pattern,
+        *,
+        family: str,
+        classification: str,
+        explanation: str,
+    ) -> None:
+        self._consider(
+            EvidenceCase(
+                **common,
+                family=family,
+                band="Not applicable",
+                classification=classification,
+                status="NOT APPLICABLE",
+                margin_db=None,
+                limiting_component="",
+                location="",
+                measured_value=None,
+                limit_value=None,
+                unit="",
+                explanation=explanation,
+                pattern=pattern,
+                row={},
+            )
+        )
+
     def observe(
         self,
         _path: Path,
@@ -139,6 +167,14 @@ class EvidenceCollector:
                     row=row,
                 )
             )
+        if not etsi_rows:
+            self._consider_not_applicable(
+                common,
+                pattern,
+                family="ETSI RPE",
+                classification="No applicable class",
+                explanation="ETSI point-to-point RPE was checked; this frequency is outside its defined ranges.",
+            )
 
         for row in sector_rows:
             component = str(row.get("limiting_component", "") or "")
@@ -161,6 +197,14 @@ class EvidenceCollector:
                     row=row,
                 )
             )
+        if summary.get("etsi_sector_enabled") and not sector_rows:
+            self._consider_not_applicable(
+                common,
+                pattern,
+                family="ETSI Sector RPE",
+                classification="No applicable class",
+                explanation="ETSI single-beam sector RPE was checked; this frequency is outside its defined ranges.",
+            )
 
         categories = dict(summary.get("_etsi_xpd_categories", {}))
         for category, raw_result in categories.items():
@@ -182,6 +226,14 @@ class EvidenceCollector:
                     pattern=pattern,
                     row=result,
                 )
+            )
+        if not categories:
+            self._consider_not_applicable(
+                common,
+                pattern,
+                family="ETSI XPD",
+                classification="No applicable category",
+                explanation="ETSI cross-polar discrimination was checked; no XPD category is defined at this frequency.",
             )
 
         for row in fcc_rows:
@@ -209,6 +261,14 @@ class EvidenceCollector:
                     pattern=pattern,
                     row=row,
                 )
+            )
+        if not fcc_rows:
+            self._consider_not_applicable(
+                common,
+                pattern,
+                family="FCC Part 101",
+                classification="No applicable standard",
+                explanation="FCC Part 101 was checked; this frequency is outside its defined antenna-standard bands.",
             )
 
     def ordered_cases(self, rollup_rows: Iterable[dict[str, object]]) -> list[EvidenceCase]:
@@ -472,8 +532,11 @@ def _case_figure(case: EvidenceCase, omitted_angle_range: OmittedAngleRange):
     elif case.family == "ETSI Sector RPE":
         _plot_etsi_sector(axis, case, omitted_angle_range)
     elif case.family == "ETSI XPD":
-        category = int(case.classification.removeprefix("Category "))
-        _plot_xpd(axis, case, category=category, requirement=case.limit_value)
+        if case.classification.startswith("Category "):
+            category = int(case.classification.removeprefix("Category "))
+            _plot_xpd(axis, case, category=category, requirement=case.limit_value)
+        else:
+            _plot_message(axis, case.explanation or "No applicable ETSI XPD category is available.")
     elif case.family == "FCC Part 101":
         _plot_fcc(axis, case, omitted_angle_range)
     else:

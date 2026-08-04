@@ -290,10 +290,65 @@ def test_per_frequency_results_keep_samples_outside_all_standard_bands() -> None
 
     summary, etsi_rows, fcc_rows = analyze_pattern(Path("demo_H.ffs"), "H", pattern)
     rows = _build_per_frequency_results([summary], etsi_rows, fcc_rows)
+    rollup = _build_rollup([summary], etsi_rows, fcc_rows)
 
     assert {row["family"] for row in rows} == {"ETSI RPE", "ETSI XPD", "FCC Part 101"}
     assert all(row["status"] == "NOT APPLICABLE" for row in rows)
     assert all(row["frequency_ghz"] == 0.5 for row in rows)
+    assert {row["family"] for row in rollup} == {"ETSI RPE", "ETSI XPD", "FCC Part 101"}
+    assert all(row["status"] == "NOT APPLICABLE" for row in rollup)
+    assert all(row["frequencies_checked"] == 1 for row in rollup)
+
+
+def test_evidence_collector_keeps_not_applicable_standard_families() -> None:
+    phis = np.asarray([0.0, 90.0, 180.0, 270.0])
+    thetas = np.arange(0.0, 181.0, 1.0)
+    pattern = Pattern(
+        frequency_hz=500e6,
+        phis_deg=phis,
+        thetas_deg=thetas,
+        total_directivity_dbi=np.zeros((len(phis), len(thetas))),
+        co_directivity_dbi=np.zeros((len(phis), len(thetas))),
+        cross_directivity_dbi=np.full((len(phis), len(thetas)), -40.0),
+        polarization="H",
+        polarization_basis="test",
+    )
+    summary, etsi_rows, fcc_rows = analyze_pattern(Path("demo_H.ffs"), "H", pattern)
+    collector = EvidenceCollector()
+    collector.observe(Path("demo_H.ffs"), "H", pattern, summary, etsi_rows, [], fcc_rows)
+    rollup = _build_rollup([summary], etsi_rows, fcc_rows)
+
+    cases = collector.ordered_cases(rollup)
+
+    assert {case.family for case in cases} == {"ETSI RPE", "ETSI XPD", "FCC Part 101"}
+    assert all(case.status == "NOT APPLICABLE" for case in cases)
+    assert all(case.margin_db is None for case in cases)
+
+
+def test_rollup_keeps_fcc_when_etsi_applies_but_no_fcc_band_exists() -> None:
+    phis = np.asarray([0.0, 90.0, 180.0, 270.0])
+    thetas = np.arange(0.0, 181.0, 1.0)
+    pattern = Pattern(
+        frequency_hz=5.9e9,
+        phis_deg=phis,
+        thetas_deg=thetas,
+        total_directivity_dbi=np.zeros((len(phis), len(thetas))),
+        co_directivity_dbi=np.zeros((len(phis), len(thetas))),
+        cross_directivity_dbi=np.full((len(phis), len(thetas)), -40.0),
+        polarization="H",
+        polarization_basis="test",
+    )
+    summary, etsi_rows, fcc_rows = analyze_pattern(Path("demo_H.ffs"), "H", pattern)
+
+    rollup = _build_rollup([summary], etsi_rows, fcc_rows)
+    fcc_rollup = [row for row in rollup if row["family"] == "FCC Part 101"]
+
+    assert etsi_rows
+    assert not fcc_rows
+    assert len(fcc_rollup) == 1
+    assert fcc_rollup[0]["status"] == "NOT APPLICABLE"
+    assert fcc_rollup[0]["classification"] == "No applicable standard"
+    assert "was checked" in str(fcc_rollup[0]["note"])
 
 
 def test_fcc_failure_note_only_mentions_available_qualification_routes() -> None:
