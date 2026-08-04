@@ -340,6 +340,37 @@ def test_atomic_publish_rolls_back_group_on_failure(tmp_path: Path) -> None:
     assert (tmp_path / "b.txt").read_text(encoding="utf-8") == "old-b"
 
 
+def test_atomic_publish_retries_transient_windows_replace_lock(tmp_path: Path) -> None:
+    stage = StageWorkspace(tmp_path, "probe")
+    staged_output = stage.path("output")
+    staged_output.mkdir()
+    (staged_output / "result.txt").write_text("complete", encoding="utf-8")
+    path_type = type(stage.root)
+    original_replace = path_type.replace
+    replace_attempts = 0
+
+    class TransientWindowsPermissionError(PermissionError):
+        winerror = 5
+
+    def flaky_replace(self: Path, target: Path):
+        nonlocal replace_attempts
+        if self == staged_output:
+            replace_attempts += 1
+            if replace_attempts < 3:
+                raise TransientWindowsPermissionError("simulated transient lock")
+        return original_replace(self, target)
+
+    with (
+        mock.patch.object(path_type, "replace", new=flaky_replace),
+        mock.patch("pipeline.atomic.time.sleep") as sleep,
+    ):
+        stage.publish(["output"])
+
+    assert replace_attempts == 3
+    assert sleep.call_args_list == [mock.call(0.05), mock.call(0.1)]
+    assert (tmp_path / "output" / "result.txt").read_text(encoding="utf-8") == "complete"
+
+
 def test_atomic_publish_validates_nested_outputs_before_replacement(tmp_path: Path) -> None:
     existing = tmp_path / "output.txt"
     existing.write_bytes(b"known-good")

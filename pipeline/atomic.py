@@ -2,12 +2,29 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from uuid import uuid4
 
 
 class AtomicPublishError(RuntimeError):
     pass
+
+
+_WINDOWS_TRANSIENT_REPLACE_ERRORS = {5, 32, 33}
+_REPLACE_RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 1.0)
+
+
+def _replace_path(source: Path, target: Path) -> Path:
+    """Replace a path, tolerating short-lived Windows file-system locks."""
+    for delay in _REPLACE_RETRY_DELAYS_SECONDS:
+        try:
+            return source.replace(target)
+        except PermissionError as exc:
+            if getattr(exc, "winerror", None) not in _WINDOWS_TRANSIENT_REPLACE_ERRORS:
+                raise
+            time.sleep(delay)
+    return source.replace(target)
 
 
 def _remove_path(path: Path) -> None:
@@ -86,14 +103,14 @@ class StageWorkspace:
                     continue
                 backup_path = backup_root / relative
                 backup_path.parent.mkdir(parents=True, exist_ok=True)
-                final_path.replace(backup_path)
+                _replace_path(final_path, backup_path)
                 moved_old.append(relative)
 
             for relative in required_paths:
                 staged_path = self.root / relative
                 final_path = self.final_root / relative
                 final_path.parent.mkdir(parents=True, exist_ok=True)
-                staged_path.replace(final_path)
+                _replace_path(staged_path, final_path)
                 published.append(relative)
         except Exception as exc:
             for relative in reversed(published):
@@ -103,7 +120,7 @@ class StageWorkspace:
                 final_path = self.final_root / relative
                 try:
                     final_path.parent.mkdir(parents=True, exist_ok=True)
-                    backup_path.replace(final_path)
+                    _replace_path(backup_path, final_path)
                 except Exception as restore_exc:
                     rollback_errors.append(f"{relative}: {restore_exc}")
             detail = f"; backups retained at {backup_root}; rollback errors: {'; '.join(rollback_errors)}" if rollback_errors else ""
