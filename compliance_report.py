@@ -10,6 +10,8 @@ from pathlib import Path
 from compliance.engine import analyze_files, parse_omitted_angle_range
 from compliance.standards import (
     ETSI_EDITION,
+    ETSI_SECTOR_EDITION,
+    ETSI_SECTOR_SOURCE_URL,
     ETSI_SOURCE_URL,
     FCC_EDITION,
     FCC_SOURCE_URL,
@@ -106,7 +108,15 @@ def _write_table_sheet(workbook, title: str, rows: list[dict[str, object]]) -> N
                 cell.number_format = "0.00"
 
 
-def write_workbook(output: Path, results: dict[str, list[dict[str, object]]], *, fmin_ghz: float, fmax_ghz: float) -> None:
+def write_workbook(
+    output: Path,
+    results: dict[str, list[dict[str, object]]],
+    *,
+    fmin_ghz: float,
+    fmax_ghz: float,
+    sector_width_deg: float = 0.0,
+    sector_center_ghz: float = 0.0,
+) -> None:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
 
@@ -115,7 +125,7 @@ def write_workbook(output: Path, results: dict[str, list[dict[str, object]]], *,
     _write_table_sheet(workbook, "Antenna Rollup", results["rollup"])
     _write_table_sheet(workbook, "Per-Frequency Results", results["per_frequency"])
     _write_table_sheet(workbook, "Summary", results["summary"])
-    _write_table_sheet(workbook, "ETSI RPE Details", results["etsi"])
+    _write_table_sheet(workbook, "ETSI RPE Details", [*results["etsi"], *results.get("sector", [])])
     _write_table_sheet(workbook, "FCC Details", results["fcc"])
 
     methodology = workbook.create_sheet("Methodology")
@@ -131,6 +141,8 @@ def write_workbook(output: Path, results: dict[str, list[dict[str, object]]], *,
         ("Generated UTC", datetime.now(timezone.utc).replace(microsecond=0).isoformat()),
         ("ETSI rules", ETSI_EDITION),
         ("ETSI source", ETSI_SOURCE_URL),
+        ("ETSI sector rules", ETSI_SECTOR_EDITION),
+        ("ETSI sector source", ETSI_SECTOR_SOURCE_URL),
         ("FCC rules", FCC_EDITION),
         ("FCC source", FCC_SOURCE_URL),
         ("Frequency window", frequency_window),
@@ -139,6 +151,20 @@ def write_workbook(output: Path, results: dict[str, list[dict[str, object]]], *,
         ("Polarization convention", "Ludwig-3 linear co/cross components; H or V comes from the port label/filename, otherwise the main-beam field is used."),
         ("Plane convention", "CST phi=0/180 is azimuth and phi=90/270 is elevation. Opposite sides are evaluated independently."),
         ("ETSI RPE method", "Actual co/cross directivity is compared with every applicable piecewise-linear RPE mask over its published angular domain."),
+        (
+            "ETSI sector method",
+            "Disabled (sector width is 0)."
+            if sector_width_deg <= 0
+            else (
+                f"Linear single-beam sector RPEs with symmetric elevation are evaluated for a declared {sector_width_deg:g} degree sector. "
+                "Co-polar and cross-polar results are expressed relative to the strongest co-polar azimuth sample inside the declared sector. "
+                + (
+                    f"Declared operating-range centre f0 is {sector_center_ghz:g} GHz."
+                    if sector_center_ghz > 0
+                    else "Automatic f0 uses the midpoint of the selected, bounded compliance frequency window."
+                )
+            ),
+        ),
         ("ETSI XPD method", "Category 1 uses the azimuth 1 dB beamwidth; Category 2 uses the 3D 1 dB contour; Category 3 conservatively includes the 3 degree main-beam region."),
         ("FCC method", "Compliance requires beamwidth in both planes OR directivity, plus every applicable co-polar suppression bin and any cross-polar/XPD requirement."),
         ("Interpretation", "This is a simulation/data pre-compliance assessment. It is not an accredited measurement report or regulatory certification."),
@@ -151,7 +177,7 @@ def write_workbook(output: Path, results: dict[str, list[dict[str, object]]], *,
         row[0].font = Font(bold=True, color="1F1F1F")
         row[0].fill = label_fill
         row[1].alignment = Alignment(wrap_text=True, vertical="top")
-    for row_number in (3, 5):
+    for row_number in (3, 5, 7):
         methodology.cell(row_number, 2).hyperlink = methodology.cell(row_number, 2).value
         methodology.cell(row_number, 2).style = "Hyperlink"
     methodology.sheet_view.showGridLines = False
@@ -171,12 +197,26 @@ def _port_labels(raw: str) -> dict[str, str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check CST far-field patterns against ETSI EN 302 217 and FCC Part 101 antenna requirements.")
+    parser = argparse.ArgumentParser(description="Check CST far-field patterns against ETSI point-to-point/sector and FCC Part 101 antenna requirements.")
     parser.add_argument("output", type=Path, help="Output compliance workbook (.xlsx)")
     parser.add_argument("ffs", nargs="+", type=Path, help="CST broadband .ffs input files")
     parser.add_argument("--port-labels-json", default="", help="Optional filename-to-port-label JSON object")
     parser.add_argument("--fmin", type=float, default=0.0, help="Minimum frequency in GHz")
     parser.add_argument("--fmax", type=float, default=0.0, help="Maximum frequency in GHz")
+    parser.add_argument(
+        "--sector-width",
+        type=float,
+        default=0.0,
+        metavar="DEGREES",
+        help="Declared ETSI single-beam sector width (2 alpha); 0 disables sector evaluation",
+    )
+    parser.add_argument(
+        "--sector-center",
+        type=float,
+        default=0.0,
+        metavar="GHZ",
+        help="Declared sector operating-range centre f0; 0 selects it automatically",
+    )
     parser.add_argument(
         "--omit-angle-range",
         type=parse_omitted_angle_range,
@@ -187,6 +227,12 @@ def main() -> int:
     args = parser.parse_args()
     if args.fmin > 0 and args.fmax > 0 and args.fmax <= args.fmin:
         parser.error("--fmax must be greater than --fmin")
+    if args.sector_width != 0.0 and not 15.0 <= args.sector_width <= 180.0:
+        parser.error("--sector-width must be 0 (disabled) or between 15 and 180 degrees")
+    if args.sector_center < 0.0:
+        parser.error("--sector-center must be 0 (automatic) or greater than 0 GHz")
+    if args.sector_width > 0.0 and args.sector_center == 0.0 and not (args.fmin > 0.0 and args.fmax > 0.0):
+        parser.error("sector evaluation requires --sector-center, or both --fmin and --fmax for automatic f0")
     if args.output.suffix.lower() != ".xlsx":
         parser.error("output must use the .xlsx extension")
 
@@ -197,11 +243,20 @@ def main() -> int:
         fmin_ghz=args.fmin,
         fmax_ghz=args.fmax,
         omitted_angle_range=args.omit_angle_range,
+        sector_width_deg=args.sector_width,
+        sector_center_ghz=args.sector_center,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with StageWorkspace(args.output.parent, "compliance") as stage:
         staged_output = stage.path(args.output.name)
-        write_workbook(staged_output, results, fmin_ghz=args.fmin, fmax_ghz=args.fmax)
+        write_workbook(
+            staged_output,
+            results,
+            fmin_ghz=args.fmin,
+            fmax_ghz=args.fmax,
+            sector_width_deg=args.sector_width,
+            sector_center_ghz=args.sector_center,
+        )
         emit_progress("compliance", 2, 2, f"Saving {args.output.name}")
         stage.publish([args.output.name])
     print(f"Wrote compliance workbook: {args.output}")

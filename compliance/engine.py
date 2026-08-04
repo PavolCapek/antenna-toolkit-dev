@@ -18,7 +18,9 @@ from compliance.standards import (
     FCC_ANGLE_BINS,
     FCCProfile,
     ETSIRPEProfile,
+    ETSISectorProfile,
     etsi_profiles_for_frequency,
+    etsi_sector_profiles,
     etsi_xpd_requirements,
     fcc_profiles_for_frequency,
 )
@@ -300,6 +302,95 @@ def _etsi_profile_result(
         "limiting_angle_deg": limiting["angle_deg"],
         "actual_dbi": limiting["actual_dbi"],
         "limit_dbi": limiting["limit_dbi"],
+    }
+
+
+def _etsi_sector_profile_result(
+    pattern: Pattern,
+    profile: ETSISectorProfile,
+    sector_width_deg: float,
+    center_frequency_ghz: float,
+    omitted_angle_range: OmittedAngleRange = None,
+) -> dict[str, object]:
+    class_label = f"ETSI Sector Class {profile.class_name}"
+    if not (profile.sector_width_min_deg <= sector_width_deg <= profile.sector_width_max_deg):
+        return {
+            "status": "NOT APPLICABLE",
+            "note": (
+                f"{class_label} is not applicable because its permitted sector width is "
+                f"{profile.sector_width_min_deg:g}-{profile.sector_width_max_deg:g} degrees, "
+                f"but {sector_width_deg:g} degrees was declared."
+            ),
+            "reason": "Declared sector width is outside the class range",
+        }
+    if not (profile.frequency_min_ghz <= center_frequency_ghz <= profile.frequency_max_ghz):
+        return {
+            "status": "INDETERMINATE",
+            "note": (
+                f"{class_label} could not be evaluated because declared centre frequency f0 is "
+                f"{center_frequency_ghz:g} GHz, outside the {profile.range_key} mask range."
+            ),
+            "reason": "Declared centre frequency is outside the mask range",
+        }
+
+    co_az = _plane_envelope(pattern.co_directivity_dbi, pattern.phis_deg, 0.0)
+    cross_az = _plane_envelope(pattern.cross_directivity_dbi, pattern.phis_deg, 0.0)
+    reference_samples = (
+        (pattern.thetas_deg <= sector_width_deg / 2.0 + 1e-9)
+        & _included_angle_mask(pattern.thetas_deg, omitted_angle_range)
+        & np.isfinite(co_az)
+    )
+    if not np.any(reference_samples):
+        return {
+            "status": "INDETERMINATE",
+            "note": f"{class_label} could not be evaluated because no usable samples remain inside the declared sector.",
+            "reason": "No usable samples inside the declared sector",
+        }
+    reference_dbi = float(np.nanmax(co_az[reference_samples]))
+    co_el = _plane_envelope(pattern.co_directivity_dbi, pattern.phis_deg, 90.0)
+    cross_el = _plane_envelope(pattern.cross_directivity_dbi, pattern.phis_deg, 90.0)
+    components = [
+        ("co-polar azimuth", _mask_result(co_az - reference_dbi, pattern.thetas_deg, profile.co_points, omitted_angle_range)),
+        ("cross-polar azimuth", _mask_result(cross_az - reference_dbi, pattern.thetas_deg, profile.cross_points, omitted_angle_range)),
+        ("co-polar elevation", _mask_result(co_el - reference_dbi, pattern.thetas_deg, profile.elevation_co_points, omitted_angle_range)),
+        ("cross-polar elevation", _mask_result(cross_el - reference_dbi, pattern.thetas_deg, profile.elevation_cross_points, omitted_angle_range)),
+    ]
+    finite_components = [item for item in components if item[1]["margin_db"] is not None]
+    if not finite_components:
+        return {
+            "status": "INDETERMINATE",
+            "note": f"{class_label} could not be evaluated because none of its mask angles are available.",
+            "reason": "No mask angles are available",
+            "sector_reference_directivity_dbi": reference_dbi,
+        }
+    limiting_name, limiting = min(finite_components, key=lambda item: float(item[1]["margin_db"]))
+    failed_components = [item for item in components if not item[1]["passed"]]
+    failure_details: list[str] = []
+    for component_name, component in failed_components:
+        if component["margin_db"] is None:
+            failure_details.append(f"the {component_name} mask could not be evaluated from the available angular samples")
+            continue
+        shortfall = -float(component["margin_db"])
+        failure_details.append(
+            f"the relative {component_name} pattern is {shortfall:.2f} dB above the allowed limit at "
+            f"{float(component['angle_deg']):.2f} degrees "
+            f"(measured {float(component['actual_dbi']):.2f} dB relative to the sector maximum; "
+            f"limit {float(component['limit_dbi']):.2f} dB)"
+        )
+    note = f"{class_label} fails because " + "; and ".join(failure_details) + "." if failure_details else ""
+    return {
+        "status": "FAIL" if failed_components else "PASS",
+        "note": note,
+        "co_azimuth_pass": bool(components[0][1]["passed"]),
+        "cross_azimuth_pass": bool(components[1][1]["passed"]),
+        "co_elevation_pass": bool(components[2][1]["passed"]),
+        "cross_elevation_pass": bool(components[3][1]["passed"]),
+        "margin_db": limiting["margin_db"],
+        "limiting_component": limiting_name,
+        "limiting_angle_deg": limiting["angle_deg"],
+        "actual_relative_db": limiting["actual_dbi"],
+        "limit_relative_db": limiting["limit_dbi"],
+        "sector_reference_directivity_dbi": reference_dbi,
     }
 
 
@@ -690,10 +781,17 @@ def analyze_files(
     fmin_ghz: float = 0.0,
     fmax_ghz: float = 0.0,
     omitted_angle_range: OmittedAngleRange = None,
+    sector_width_deg: float = 0.0,
+    sector_center_ghz: float = 0.0,
 ) -> dict[str, list[dict[str, object]]]:
+    if sector_width_deg > 0.0 and sector_center_ghz <= 0.0 and not (fmin_ghz > 0.0 and fmax_ghz > 0.0):
+        raise ValueError(
+            "Sector evaluation requires a declared centre frequency, or both compliance frequency bounds for automatic f0"
+        )
     labels = {str(key).lower(): str(value).strip() for key, value in (port_labels or {}).items()}
     summary_rows: list[dict[str, object]] = []
     etsi_rows: list[dict[str, object]] = []
+    sector_rows: list[dict[str, object]] = []
     fcc_rows: list[dict[str, object]] = []
     for path_value in paths:
         path = Path(path_value)
@@ -711,16 +809,66 @@ def analyze_files(
                 pattern,
                 omitted_angle_range=omitted_angle_range,
             )
+            if sector_width_deg > 0.0:
+                effective_center = sector_center_ghz
+                if effective_center <= 0.0:
+                    effective_center = (fmin_ghz + fmax_ghz) / 2.0
+                passed_sector_classes: list[str] = []
+                profiles = etsi_sector_profiles(frequency_ghz, effective_center, sector_width_deg)
+                for profile in profiles:
+                    result = _etsi_sector_profile_result(
+                        pattern,
+                        profile,
+                        sector_width_deg,
+                        effective_center,
+                        omitted_angle_range,
+                    )
+                    sector_rows.append(
+                        {
+                            **{name: summary.get(name) for name in (
+                                "source_file",
+                                "source_path",
+                                "port_label",
+                                "frequency_ghz",
+                                "polarization",
+                                "polarization_basis",
+                                "max_directivity_dbi",
+                            )},
+                            "standard_family": "ETSI EN 302 326-3 single-beam sector (linear, symmetric elevation)",
+                            "etsi_sector_range": profile.range_key,
+                            "sector_class": profile.class_name,
+                            "sector_width_deg": sector_width_deg,
+                            "sector_center_ghz": effective_center,
+                            "sector_width_min_deg": profile.sector_width_min_deg,
+                            "sector_width_max_deg": profile.sector_width_max_deg,
+                            **result,
+                        }
+                    )
+                    if result.get("status") == "PASS":
+                        passed_sector_classes.append(profile.class_name)
+                summary.update(
+                    {
+                        "etsi_sector_enabled": True,
+                        "etsi_sector_width_deg": sector_width_deg,
+                        "etsi_sector_center_ghz": effective_center,
+                        "etsi_sector_range": profiles[0].range_key if profiles else "Not applicable",
+                        "etsi_best_sector_class": passed_sector_classes[-1]
+                        if passed_sector_classes
+                        else ("None" if profiles else "Not applicable"),
+                        "etsi_passed_sector_classes": ", ".join(passed_sector_classes),
+                    }
+                )
             summary_rows.append(summary)
             etsi_rows.extend(etsi)
             fcc_rows.extend(fcc)
     if not summary_rows:
         raise ValueError("No far-field frequencies fall inside the selected compliance frequency window")
     return {
-        "rollup": _build_rollup(summary_rows, etsi_rows, fcc_rows),
-        "per_frequency": _build_per_frequency_results(summary_rows, etsi_rows, fcc_rows),
+        "rollup": _build_rollup(summary_rows, etsi_rows, fcc_rows, sector_rows),
+        "per_frequency": _build_per_frequency_results(summary_rows, etsi_rows, fcc_rows, sector_rows),
         "summary": summary_rows,
         "etsi": etsi_rows,
+        "sector": sector_rows,
         "fcc": fcc_rows,
     }
 
@@ -733,13 +881,17 @@ def _build_per_frequency_results(
     summary_rows: list[dict[str, object]],
     etsi_rows: list[dict[str, object]],
     fcc_rows: list[dict[str, object]],
+    sector_rows: list[dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     etsi_by_sample: dict[tuple[object, ...], list[dict[str, object]]] = {}
     fcc_by_sample: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    sector_by_sample: dict[tuple[object, ...], list[dict[str, object]]] = {}
     for row in etsi_rows:
         etsi_by_sample.setdefault(_sample_key(row), []).append(row)
     for row in fcc_rows:
         fcc_by_sample.setdefault(_sample_key(row), []).append(row)
+    for row in sector_rows or []:
+        sector_by_sample.setdefault(_sample_key(row), []).append(row)
 
     results: list[dict[str, object]] = []
     for summary in sorted(summary_rows, key=lambda row: (str(row.get("source_path", "")), float(row["frequency_ghz"]))):
@@ -790,6 +942,42 @@ def _build_per_frequency_results(
                     "note": f"No ETSI RPE frequency range covers {float(summary['frequency_ghz']):.3f} GHz.",
                 }
             )
+
+        if summary.get("etsi_sector_enabled"):
+            sample_sector = sector_by_sample.get(key, [])
+            if sample_sector:
+                for row in sample_sector:
+                    angle = row.get("limiting_angle_deg")
+                    results.append(
+                        {
+                            **common,
+                            "family": "ETSI Sector RPE",
+                            "band": row.get("etsi_sector_range"),
+                            "classification": f"Class {row.get('sector_class')}",
+                            "status": row.get("status"),
+                            "note": row.get("note", ""),
+                            "limiting_component": row.get("limiting_component"),
+                            "location": "" if angle is None else f"{row.get('limiting_component')} at {float(angle):.2f} degrees from boresight",
+                            "limiting_angle_deg": angle,
+                            "limiting_phi_deg": None,
+                            "limiting_theta_deg": None,
+                            "measured_value": row.get("actual_relative_db"),
+                            "limit_value": row.get("limit_relative_db"),
+                            "unit": "dB relative to sector maximum",
+                            "margin_db": row.get("margin_db"),
+                        }
+                    )
+            else:
+                results.append(
+                    {
+                        **common,
+                        "family": "ETSI Sector RPE",
+                        "band": "Not applicable",
+                        "classification": "No applicable class",
+                        "status": "NOT APPLICABLE",
+                        "note": f"No ETSI EN 302 326-3 single-beam sector RPE covers {float(summary['frequency_ghz']):.3f} GHz.",
+                    }
+                )
 
         xpd_categories = dict(summary.get("_etsi_xpd_categories", {}))
         if xpd_categories:
@@ -881,6 +1069,7 @@ def _build_rollup(
     summary_rows: list[dict[str, object]],
     etsi_rows: list[dict[str, object]],
     fcc_rows: list[dict[str, object]],
+    sector_rows: list[dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     rollup: list[dict[str, object]] = []
     base_keys = ("source_file", "source_path", "port_label", "polarization")
@@ -910,6 +1099,44 @@ def _build_rollup(
             {
                 **dict(zip(base_keys, key[: len(base_keys)])),
                 "family": "ETSI RPE",
+                "band": key[-2],
+                "classification": f"Class {key[-1]}",
+                "status": status,
+                "note": note,
+                "frequencies_checked": len(rows),
+                "frequency_min_ghz": min(float(row["frequency_ghz"]) for row in rows),
+                "frequency_max_ghz": max(float(row["frequency_ghz"]) for row in rows),
+                "worst_margin_db": min(margins) if margins else None,
+            }
+        )
+
+    sector_groups: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    for row in sector_rows or []:
+        key = tuple(row.get(name) for name in base_keys) + (row.get("etsi_sector_range"), row.get("sector_class"))
+        sector_groups.setdefault(key, []).append(row)
+    for key, rows in sector_groups.items():
+        statuses = [str(row.get("status", "")) for row in rows]
+        margins = [float(row["margin_db"]) for row in rows if row.get("margin_db") is not None]
+        status = "PASS" if statuses and all(value == "PASS" for value in statuses) else (
+            "NOT APPLICABLE" if statuses and all(value == "NOT APPLICABLE" for value in statuses) else (
+                "INDETERMINATE" if statuses and all(value == "INDETERMINATE" for value in statuses) else "FAIL"
+            )
+        )
+        note = ""
+        if status == "FAIL":
+            failed_rows = [row for row in rows if row.get("status") == "FAIL"]
+            if failed_rows:
+                worst = min(
+                    failed_rows,
+                    key=lambda row: float(row["margin_db"]) if row.get("margin_db") is not None else -math.inf,
+                )
+                note = f"At {float(worst['frequency_ghz']):.3f} GHz, {str(worst.get('note', '')).strip()}"
+        elif status in {"NOT APPLICABLE", "INDETERMINATE"}:
+            note = str(rows[0].get("note", ""))
+        rollup.append(
+            {
+                **dict(zip(base_keys, key[: len(base_keys)])),
+                "family": "ETSI Sector RPE",
                 "band": key[-2],
                 "classification": f"Class {key[-1]}",
                 "status": status,

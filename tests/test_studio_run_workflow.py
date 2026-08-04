@@ -9,6 +9,14 @@ pytestmark = [pytest.mark.qt_slow, pytest.mark.gui_workflow]
 
 
 class StudioRunWorkflowTests(StudioDirtyStateBase):
+    def test_sector_preflight_requires_valid_width_and_declared_center(self) -> None:
+        self.window.compliance_sector_width.setValue(10.0)
+
+        messages = self.window._validation_messages()
+
+        self.assertTrue(any("sector width is invalid" in message for message in messages))
+        self.assertTrue(any("needs a centre f0" in message for message in messages))
+
     def test_run_preflight_reports_all_full_pipeline_blockers(self) -> None:
         missing_ffs = Path(self.temp_dir.name) / "missing.ffs"
         self.window._add_ffs_files([str(missing_ffs)])
@@ -371,6 +379,8 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.window.pdf_metadata_author.setText("Pipeline Author")
         self.window.compliance_fmin.setValue(4.9)
         self.window.compliance_fmax.setValue(6.1)
+        self.window.compliance_sector_width.setValue(90.0)
+        self.window.compliance_sector_center.setValue(5.5)
         self.window.cartesian_figure_width.setValue(9.75)
         self.window.cartesian_figure_height.setValue(4.5)
         self.window.polar_figure_size.setValue(7.75)
@@ -412,6 +422,14 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertEqual(
             queued_args["compliance"][queued_args["compliance"].index("--fmax") + 1],
             "6.1",
+        )
+        self.assertEqual(
+            queued_args["compliance"][queued_args["compliance"].index("--sector-width") + 1],
+            "90.0",
+        )
+        self.assertEqual(
+            queued_args["compliance"][queued_args["compliance"].index("--sector-center") + 1],
+            "5.5",
         )
         self.assertIn("--beamwidth-db-colors", queued_args["plot"])
         self.assertEqual(queued_args["plot"][queued_args["plot"].index("--cartesian-figure-width") + 1], "9.75")

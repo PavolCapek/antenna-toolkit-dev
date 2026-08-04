@@ -16,7 +16,7 @@ from compliance.engine import (
     parse_omitted_angle_range,
     pattern_from_rows,
 )
-from compliance.standards import etsi_profiles_for_frequency, fcc_profiles_for_frequency
+from compliance.standards import etsi_profiles_for_frequency, etsi_sector_profiles, fcc_profiles_for_frequency
 from compliance_report import write_workbook
 
 
@@ -51,6 +51,24 @@ def test_standard_profiles_are_frequency_specific() -> None:
     assert [profile.class_name for profile in etsi_profiles_for_frequency(4.7)] == ["1", "2", "3", "4"]
     assert [profile.standard for profile in fcc_profiles_for_frequency(6000)] == ["A", "B1", "B2"]
     assert not fcc_profiles_for_frequency(4700)
+
+
+def test_sector_profiles_apply_declared_width_f0_and_lower_integer_rounding() -> None:
+    profiles = etsi_sector_profiles(6.0, 6.0, 90.0)
+
+    assert [profile.class_name for profile in profiles] == ["SS1", "SS2", "SS3"]
+    ss2 = profiles[1]
+    assert ss2.co_points == ((0.0, 0.0), (50.0, 0.0), (108.0, -20.0), (153.0, -20.0), (180.0, -25.0))
+    assert ss2.cross_points == ((0.0, -20.0), (72.0, -20.0), (102.0, -25.0), (159.0, -25.0), (180.0, -25.0))
+    assert profiles[2].cross_points[0] == (0.0, -22.0)
+    assert profiles[2].co_points[-1] == (180.0, -29.0)
+
+
+def test_sector_profiles_cover_each_linear_single_beam_frequency_table() -> None:
+    assert [profile.class_name for profile in etsi_sector_profiles(2.0, 2.0, 90.0)] == ["SS"]
+    assert [profile.class_name for profile in etsi_sector_profiles(30.0, 30.0, 90.0)] == ["SS1", "SS2a", "SS2b", "SS3", "SS4"]
+    assert [profile.class_name for profile in etsi_sector_profiles(42.0, 42.0, 90.0)] == ["SS1", "SS2", "SS3"]
+    assert not etsi_sector_profiles(15.0, 15.0, 90.0)
 
 
 def test_omitted_angle_range_parser_accepts_range_single_angle_and_blank() -> None:
@@ -134,6 +152,50 @@ def test_file_analysis_filters_every_available_sample_to_compliance_frequency_wi
     )
 
     assert [row["frequency_ghz"] for row in results["summary"]] == [6.0]
+
+
+def test_file_analysis_adds_sector_classes_for_every_selected_frequency(monkeypatch) -> None:
+    rows = _synthetic_h_rows()
+    monkeypatch.setattr(
+        "compliance.engine.read_ffs_broadband",
+        lambda _path: {5e9: rows, 6e9: rows},
+    )
+
+    results = analyze_files(
+        [Path("demo_H.ffs")],
+        fmin_ghz=5.0,
+        fmax_ghz=7.0,
+        sector_width_deg=90.0,
+    )
+
+    assert len(results["sector"]) == 6
+    assert {row["sector_class"] for row in results["sector"]} == {"SS1", "SS2", "SS3"}
+    assert {row["sector_center_ghz"] for row in results["sector"]} == {6.0}
+    sector_frequency_rows = [row for row in results["per_frequency"] if row["family"] == "ETSI Sector RPE"]
+    assert len(sector_frequency_rows) == 6
+    assert {row["frequency_ghz"] for row in sector_frequency_rows} == {5.0, 6.0}
+    assert len([row for row in results["rollup"] if row["family"] == "ETSI Sector RPE"]) == 3
+
+
+def test_sector_analysis_requires_declared_or_bounded_automatic_center() -> None:
+    with pytest.raises(ValueError, match="declared centre frequency"):
+        analyze_files([Path("demo_H.ffs")], sector_width_deg=90.0)
+
+
+def test_failed_sector_classes_explain_each_failed_component(monkeypatch) -> None:
+    rows = []
+    for phi in (0.0, 90.0, 180.0, 270.0):
+        for theta in np.arange(0.0, 181.0, 1.0):
+            rows.append((phi, float(theta), 1.0 + 0.0j, 0.5 + 0.0j))
+    monkeypatch.setattr("compliance.engine.read_ffs_broadband", lambda _path: {6e9: rows})
+
+    results = analyze_files([Path("demo_H.ffs")], sector_width_deg=90.0, sector_center_ghz=6.0)
+    failed = [row for row in results["sector"] if row["status"] == "FAIL"]
+
+    assert failed
+    assert all(str(row["note"]).startswith(f"ETSI Sector Class {row['sector_class']} fails because") for row in failed)
+    assert all("above the allowed limit" in str(row["note"]) for row in failed)
+    assert all("relative to the sector maximum" in str(row["note"]) for row in failed)
 
 
 def test_each_failed_etsi_class_has_a_plain_language_note() -> None:
@@ -277,6 +339,14 @@ def test_compliance_workbook_contains_traceable_sheets(tmp_path: Path) -> None:
                 "note": "ETSI Class 3 fails because the co-polar azimuth pattern is 2.00 dB above the allowed limit.",
             }
         ],
+        "sector": [
+            {
+                "source_file": "demo.ffs",
+                "standard_family": "ETSI EN 302 326-3 single-beam sector (linear, symmetric elevation)",
+                "sector_class": "SS2",
+                "status": "PASS",
+            }
+        ],
         "fcc": [{"source_file": "demo.ffs", "standard": "A", "status": "PASS"}],
     }
 
@@ -299,3 +369,6 @@ def test_compliance_workbook_contains_traceable_sheets(tmp_path: Path) -> None:
     headers = [cell.value for cell in workbook["ETSI RPE Details"][1]]
     note_column = headers.index("Note") + 1
     assert "ETSI Class 3 fails because" in workbook["ETSI RPE Details"].cell(2, note_column).value
+    standard_family_column = headers.index("Standard Family") + 1
+    assert "EN 302 326-3" in workbook["ETSI RPE Details"].cell(3, standard_family_column).value
+    assert "single-beam sector" in methodology["ETSI sector rules"].lower() or "302 326-3" in methodology["ETSI sector rules"]

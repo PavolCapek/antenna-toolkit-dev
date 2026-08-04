@@ -14,6 +14,8 @@ STAGE_SETTING_KEYS: dict[str, tuple[str, ...]] = {
         "compliance_fmin",
         "compliance_fmax",
         "compliance_omit_angle_range",
+        "compliance_sector_width",
+        "compliance_sector_center",
     ),
     "extract": ("smooth", "theta", "shared_fmin", "shared_fmax"),
     "datasheet": (

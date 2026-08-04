@@ -1740,6 +1740,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.compliance_omit_angle_range.textChanged.connect(
             lambda value: self.store.set("compliance_omit_angle_range", value)
         )
+        self.compliance_sector_width = TrimmedDoubleSpinBox(); self.compliance_sector_width.setRange(0.0, 180.0); self.compliance_sector_width.setDecimals(3); self.compliance_sector_width.setSingleStep(5.0); self.compliance_sector_width.setValue(float(self.store.get("compliance_sector_width", 0.0))); self.compliance_sector_width.valueChanged.connect(lambda v: self.store.set("compliance_sector_width", float(v)))
+        self.compliance_sector_center = TrimmedDoubleSpinBox(); self.compliance_sector_center.setRange(0.0, 1000.0); self.compliance_sector_center.setDecimals(6); self.compliance_sector_center.setSingleStep(0.1); self.compliance_sector_center.setValue(float(self.store.get("compliance_sector_center", 0.0))); self.compliance_sector_center.valueChanged.connect(lambda v: self.store.set("compliance_sector_center", float(v)))
         workbook_card = Card("Beam, workbook, and VSWR smoothing", "Processing")
         workbook_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         workbook_card.setMinimumWidth(320)
@@ -1781,6 +1783,18 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "Omit angle range",
             self.compliance_omit_angle_range,
             "Inclusive boresight-angle range omitted from ETSI and FCC pattern comparisons, for example 179-180. Leave blank to omit nothing.",
+        )
+        add_form_row(
+            compliance_form,
+            "Sector width (2alpha)",
+            StepperField(self.compliance_sector_width),
+            "Declared single-beam sector width in degrees for ETSI EN 302 326-3. Use 0 to disable sector evaluation; enabled values must be 15 to 180 degrees.",
+        )
+        add_form_row(
+            compliance_form,
+            "Sector centre f0",
+            StepperField(self.compliance_sector_center),
+            "Centre of the antenna's declared operating frequency range in GHz. Use 0 to derive it from the midpoint of the compliance frequency window; both frequency bounds must then be set.",
         )
         compliance_card.body.addLayout(compliance_form)
 
@@ -2217,6 +2231,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.compliance_fmin.setValue(0.0)
         self.compliance_fmax.setValue(0.0)
         self.compliance_omit_angle_range.setText("180-180")
+        self.compliance_sector_width.setValue(0.0)
+        self.compliance_sector_center.setValue(0.0)
         self.plot_grid.set_color(DEFAULT_GRID_COLOR, persist=False)
         self.cartesian_grid_line_width.setValue(0.9)
         self.polar_grid_line_width.setValue(0.9)
@@ -2361,6 +2377,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "compliance_fmin": "Compliance frequency minimum",
             "compliance_fmax": "Compliance frequency maximum",
             "compliance_omit_angle_range": "Compliance omitted angle range",
+            "compliance_sector_width": "Compliance sector width",
+            "compliance_sector_center": "Compliance sector centre f0",
             "grid_color": "Grid color",
             "cartesian_grid_line_width": "Cartesian grid width",
             "polar_grid_line_width": "Polar grid width",
@@ -2977,6 +2995,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self.compliance_fmin.valueChanged,
             self.compliance_fmax.valueChanged,
             self.compliance_omit_angle_range.textChanged,
+            self.compliance_sector_width.valueChanged,
+            self.compliance_sector_center.valueChanged,
             self.plot_grid.colorChanged,
             self.cartesian_grid_line_width.valueChanged,
             self.polar_grid_line_width.valueChanged,
@@ -3494,6 +3514,15 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             messages.append("Shared frequency window is invalid: max must be greater than min.")
         if not self._compliance_frequency_window_is_valid():
             messages.append("Compliance frequency window is invalid: max must be greater than min.")
+        sector_width = float(self.compliance_sector_width.value())
+        if sector_width != 0.0 and sector_width < 15.0:
+            messages.append("ETSI sector width is invalid: use 0 to disable it, or enter 15 to 180 degrees.")
+        if (
+            sector_width > 0.0
+            and float(self.compliance_sector_center.value()) == 0.0
+            and not (float(self.compliance_fmin.value()) > 0.0 and float(self.compliance_fmax.value()) > 0.0)
+        ):
+            messages.append("ETSI sector evaluation needs a centre f0, or both compliance frequency bounds for automatic f0.")
         return messages
 
     def _last_success_timestamp(self) -> str:
@@ -4739,6 +4768,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "compliance_fmin": float(self.compliance_fmin.value()),
             "compliance_fmax": float(self.compliance_fmax.value()),
             "compliance_omit_angle_range": self.compliance_omit_angle_range.text().strip(),
+            "compliance_sector_width": float(self.compliance_sector_width.value()),
+            "compliance_sector_center": float(self.compliance_sector_center.value()),
             "grid_color": self.plot_grid.color(),
             "cartesian_grid_line_width": float(self.cartesian_grid_line_width.value()),
             "polar_grid_line_width": float(self.polar_grid_line_width.value()),
@@ -4819,6 +4850,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if "compliance_fmin" in values: self.compliance_fmin.setValue(float(values["compliance_fmin"]))
         if "compliance_fmax" in values: self.compliance_fmax.setValue(float(values["compliance_fmax"]))
         if "compliance_omit_angle_range" in values: self.compliance_omit_angle_range.setText(str(values["compliance_omit_angle_range"]))
+        if "compliance_sector_width" in values: self.compliance_sector_width.setValue(float(values["compliance_sector_width"]))
+        if "compliance_sector_center" in values: self.compliance_sector_center.setValue(float(values["compliance_sector_center"]))
         if "grid_color" in values: self.plot_grid.set_color(str(values["grid_color"]))
         cartesian_grid_line_width = value_or_legacy("cartesian_grid_line_width", "plot_grid_line_width")
         if cartesian_grid_line_width is not None: self.cartesian_grid_line_width.setValue(float(cartesian_grid_line_width))

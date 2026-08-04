@@ -29,6 +29,8 @@ class StudioPipelineTests(unittest.TestCase):
             "compliance_fmin": 4.9,
             "compliance_fmax": 6.1,
             "compliance_omit_angle_range": "180-180",
+            "compliance_sector_width": 90.0,
+            "compliance_sector_center": 6.0,
             "unrelated": "ignored",
         }
 
@@ -44,6 +46,8 @@ class StudioPipelineTests(unittest.TestCase):
                 "compliance_fmin": 4.9,
                 "compliance_fmax": 6.1,
                 "compliance_omit_angle_range": "180-180",
+                "compliance_sector_width": 90.0,
+                "compliance_sector_center": 6.0,
             },
         )
 
@@ -107,7 +111,7 @@ class StudioPipelineTests(unittest.TestCase):
         )
 
         self.assertEqual(files, [compliance_output])
-        self.assertEqual(stage_tool_versions("compliance")["compliance_rules"], 4)
+        self.assertEqual(stage_tool_versions("compliance")["compliance_rules"], 5)
 
     def test_stage_tool_versions_and_stale_detail(self) -> None:
         versions = stage_tool_versions("datasheet", plot_asset_style_version=3, datasheet_render_version=2)

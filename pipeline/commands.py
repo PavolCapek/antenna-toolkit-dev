@@ -29,6 +29,8 @@ def build_compliance_command(
         _append_if_nonzero(args, "--fmin", settings.compliance_fmin)
         _append_if_nonzero(args, "--fmax", settings.compliance_fmax)
         _append_if_text(args, "--omit-angle-range", settings.compliance_omit_angle_range)
+        _append_if_nonzero(args, "--sector-width", settings.compliance_sector_width)
+        _append_if_nonzero(args, "--sector-center", settings.compliance_sector_center)
     return args
 
 

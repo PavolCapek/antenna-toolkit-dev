@@ -74,6 +74,8 @@ class PresetSettings:
     compliance_fmin: float = 0.0
     compliance_fmax: float = 0.0
     compliance_omit_angle_range: str = "180-180"
+    compliance_sector_width: float = 0.0
+    compliance_sector_center: float = 0.0
     grid_color: str = DEFAULT_GRID_COLOR
     cartesian_grid_line_width: float = 0.9
     polar_grid_line_width: float = 0.9
@@ -141,6 +143,16 @@ class PresetSettings:
                 source,
                 "compliance_omit_angle_range",
                 defaults.compliance_omit_angle_range,
+            ),
+            compliance_sector_width=_float_value(
+                source,
+                "compliance_sector_width",
+                defaults.compliance_sector_width,
+            ),
+            compliance_sector_center=_float_value(
+                source,
+                "compliance_sector_center",
+                defaults.compliance_sector_center,
             ),
             grid_color=_str_value(source, "grid_color", defaults.grid_color),
             cartesian_grid_line_width=_legacy_float(source, "cartesian_grid_line_width", "plot_grid_line_width", default_map["cartesian_grid_line_width"]),

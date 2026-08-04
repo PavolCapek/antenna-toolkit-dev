@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -7,6 +8,11 @@ ETSI_EDITION = "ETSI EN 302 217-4 V2.2.1 (2025-07)"
 ETSI_SOURCE_URL = (
     "https://www.etsi.org/deliver/etsi_EN/302200_302299/30221704/"
     "02.02.01_60/en_30221704v020201p.pdf"
+)
+ETSI_SECTOR_EDITION = "ETSI EN 302 326-3 V2.1.1 (2021-09)"
+ETSI_SECTOR_SOURCE_URL = (
+    "https://www.etsi.org/deliver/etsi_en/302300_302399/30232603/"
+    "02.01.01_60/en_30232603v020101p.pdf"
 )
 FCC_EDITION = "47 CFR 101.115 (eCFR snapshot 2026-07-27)"
 FCC_SOURCE_URL = (
@@ -42,6 +48,20 @@ class FCCProfile:
     cross_suppression_db: tuple[float | None, ...] = ()
     xpd_min_db: float | None = None
     note: str = ""
+
+
+@dataclass(frozen=True)
+class ETSISectorProfile:
+    range_key: str
+    frequency_min_ghz: float
+    frequency_max_ghz: float
+    class_name: str
+    co_points: tuple[Point, ...]
+    cross_points: tuple[Point, ...]
+    elevation_co_points: tuple[Point, ...]
+    elevation_cross_points: tuple[Point, ...]
+    sector_width_min_deg: float = 15.0
+    sector_width_max_deg: float = 180.0
 
 
 FCC_ANGLE_BINS: tuple[tuple[float, float], ...] = (
@@ -118,6 +138,153 @@ def etsi_profiles_for_frequency(frequency_ghz: float) -> tuple[ETSIRPEProfile, .
         for profile in ETSI_RPE_PROFILES
         if profile.frequency_min_ghz <= frequency_ghz < profile.frequency_max_ghz
     )
+
+
+def _floor(value: float) -> float:
+    """Apply the lower-integer rounding required by EN 302 326-3 clause 4.4.2.1."""
+    return float(math.floor(value + 1e-12))
+
+
+def _sector_profile(
+    range_key: str,
+    fmin: float,
+    fmax: float,
+    class_name: str,
+    co: tuple[Point, ...],
+    cross: tuple[Point, ...],
+    elevation_base: tuple[Point, ...],
+    *,
+    sector_width_max_deg: float = 180.0,
+) -> ETSISectorProfile:
+    co_180 = next(value for angle, value in reversed(co) if angle <= 180.0 + 1e-9)
+    cross_0 = next(value for angle, value in cross if angle >= -1e-9)
+    cross_180 = next(value for angle, value in reversed(cross) if angle <= 180.0 + 1e-9)
+    elevation_co = (*elevation_base, (180.0, co_180))
+    elevation_cross = ((0.0, cross_0), (180.0, cross_180))
+    return ETSISectorProfile(
+        range_key,
+        fmin,
+        fmax,
+        class_name,
+        co,
+        cross,
+        elevation_co,
+        elevation_cross,
+        sector_width_max_deg=sector_width_max_deg,
+    )
+
+
+def etsi_sector_profiles(
+    frequency_ghz: float,
+    center_frequency_ghz: float,
+    sector_width_deg: float,
+) -> tuple[ETSISectorProfile, ...]:
+    """Return linear, single-beam sector RPE profiles from EN 302 326-3 tables 13, 15 and 17-19."""
+    f0 = float(center_frequency_ghz)
+    alpha = float(sector_width_deg) / 2.0
+    def a(offset: float) -> float:
+        return _floor(alpha + offset)
+
+    twice_a = _floor(2.0 * alpha)
+
+    if 1.0 <= frequency_ghz < 3.0:
+        final = _floor(-1.4 * f0 - 20.0)
+        co = (
+            (0.0, 0.0),
+            (a(5.0), 0.0),
+            (a(105.0 - 7.0 * f0), _floor(-0.7 * f0 - 16.0)),
+            (_floor(184.4 - 4.4 * f0), final),
+            (180.0, final),
+        )
+        cross = (
+            (0.0, -20.0),
+            (a(57.5 - 5.0 * f0), -20.0),
+            (a(87.5 - 5.0 * f0), final),
+            (180.0, final),
+        )
+        return (
+            _sector_profile(
+                "1-3 GHz",
+                1.0,
+                3.0,
+                "SS",
+                co,
+                cross,
+                ((0.0, 0.0), (12.0, 0.0), (12.0, -3.0), (14.0, -5.0), (20.0, -5.0), (60.0, -13.0), (60.0, -18.0), (90.0, -18.0)),
+            ),
+        )
+
+    if 3.0 <= frequency_ghz <= 11.0:
+        elevation = ((0.0, 0.0), (10.0, 0.0), (25.0, -15.0), (90.0, -19.0))
+        ss1_co = ((0.0, 0.0), (a(5.0), 0.0), (160.0, -20.0), (180.0, -20.0))
+        ss1_cross = ((0.0, -12.0), (a(5.0), -15.0), (160.0, -20.0), (180.0, -20.0))
+        ss2_co = (
+            (0.0, 0.0),
+            (a(5.0), 0.0),
+            (a(105.0 - 7.0 * f0), -20.0),
+            (_floor(195.0 - 7.0 * f0), -20.0),
+            (180.0, -25.0),
+        )
+        ss2_cross = (
+            (0.0, -20.0),
+            (a(57.5 - 5.0 * f0), -20.0),
+            (a(87.5 - 5.0 * f0), -25.0),
+            (_floor(186.0 - 4.4 * f0), -25.0),
+            (180.0, -25.0),
+        )
+        ss3_cross_limit = _floor(-1.4 * f0 - 20.0)
+        ss3_cross_start = _floor(-0.7 * f0 - 17.5)
+        ss3_co = (
+            (0.0, 0.0),
+            (a(20.0 - 1.4 * f0), 0.0),
+            (a(75.0 - 4.3 * f0), -23.0),
+            (_floor(165.0 - 4.3 * f0), -23.0),
+            (150.0, ss3_cross_limit),
+            (180.0, ss3_cross_limit),
+        )
+        ss3_cross = (
+            (0.0, ss3_cross_start),
+            (a(20.0 - 1.4 * f0), ss3_cross_start),
+            (a(75.0 - 4.3 * f0), ss3_cross_limit),
+            (150.0, ss3_cross_limit),
+            (180.0, ss3_cross_limit),
+        )
+        return (
+            _sector_profile("3-11 GHz", 3.0, 11.0, "SS1", ss1_co, ss1_cross, elevation),
+            _sector_profile("3-11 GHz", 3.0, 11.0, "SS2", ss2_co, ss2_cross, elevation),
+            _sector_profile("3-11 GHz", 3.0, 11.0, "SS3", ss3_co, ss3_cross, elevation),
+        )
+
+    if 24.25 <= frequency_ghz <= 40.5:
+        elevation = (
+            ((0.0, 0.0), (6.0, 0.0), (15.0, -15.0), (90.0, -25.0))
+            if frequency_ghz <= 30.0
+            else ((0.0, 0.0), (6.0, 0.0), (10.0, -10.0), (90.0, -20.0))
+        )
+        profiles = (
+            ("SS1", ((0.0, 0.0), (a(5.0), 0.0), (_floor(2.0 * alpha + 5.0), -10.0), (135.0, -12.0), (155.0, -15.0), (180.0, -25.0)), ((0.0, -20.0), (_floor(alpha), -20.0), (a(15.0), -25.0), (180.0, -25.0)), 130.0),
+            ("SS2a", ((0.0, 0.0), (a(5.0), 0.0), (twice_a, -20.0), (180.0, -30.0)), ((0.0, -20.0), (_floor(alpha), -20.0), (twice_a, -25.0), (180.0, -30.0)), 180.0),
+            ("SS2b", ((0.0, 0.0), (a(5.0), 0.0), (twice_a, -20.0), (180.0, -30.0)), ((0.0, -25.0), (_floor(alpha), -25.0), (a(5.0), -25.0), (twice_a, -30.0), (180.0, -30.0)), 180.0),
+            ("SS3", ((0.0, 0.0), (a(5.0), 0.0), (a(30.0), -20.0), (110.0, -23.0), (140.0, -35.0), (180.0, -35.0)), ((0.0, -25.0), (_floor(alpha), -25.0), (a(30.0), -30.0), (105.0, -30.0), (140.0, -35.0), (180.0, -35.0)), 180.0),
+            ("SS4", ((0.0, 0.0), (a(5.0), 0.0), (a(15.0), -20.0), (110.0, -23.0), (140.0, -35.0), (180.0, -35.0)), ((0.0, -25.0), (_floor(alpha), -25.0), (a(15.0), -30.0), (105.0, -30.0), (140.0, -35.0), (180.0, -35.0)), 180.0),
+        )
+        return tuple(
+            _sector_profile("24.25-40.5 GHz", 24.25, 40.5, name, co, cross, elevation, sector_width_max_deg=max_width)
+            for name, co, cross, max_width in profiles
+        )
+
+    if 40.5 < frequency_ghz <= 43.5:
+        elevation = ((0.0, 0.0), (6.0, 0.0), (15.0, -15.0), (90.0, -25.0))
+        profiles = (
+            ("SS1", ((0.0, 0.0), (a(5.0), 0.0), (_floor(2.0 * alpha + 5.0), -10.0), (135.0, -12.0), (155.0, -15.0), (180.0, -25.0)), ((0.0, -22.0), (_floor(alpha), -22.0), (a(15.0), -25.0), (180.0, -25.0)), 130.0),
+            ("SS2", ((0.0, 0.0), (a(5.0), 0.0), (a(15.0), -20.0), (110.0, -23.0), (140.0, -35.0), (180.0, -35.0)), ((0.0, -25.0), (_floor(alpha), -25.0), (a(15.0), -30.0), (105.0, -30.0), (140.0, -35.0), (180.0, -35.0)), 180.0),
+            ("SS3", ((0.0, 0.0), (a(5.0), 0.0), (twice_a, -20.0), (180.0, -30.0)), ((0.0, -25.0), (_floor(alpha), -25.0), (twice_a, -30.0), (180.0, -30.0)), 180.0),
+        )
+        return tuple(
+            _sector_profile("40.5-43.5 GHz", 40.5, 43.5, name, co, cross, elevation, sector_width_max_deg=max_width)
+            for name, co, cross, max_width in profiles
+        )
+    return ()
 
 
 def _f(

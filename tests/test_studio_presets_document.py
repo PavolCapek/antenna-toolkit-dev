@@ -153,11 +153,15 @@ class StudioPresetsDocumentTests(StudioDirtyStateBase):
         self.assertEqual(self.window.compliance_fmin.value(), 0.0)
         self.assertEqual(self.window.compliance_fmax.value(), 0.0)
         self.assertEqual(self.window.compliance_omit_angle_range.text(), "180-180")
+        self.assertEqual(self.window.compliance_sector_width.value(), 0.0)
+        self.assertEqual(self.window.compliance_sector_center.value(), 0.0)
         initial_snapshot = self.window._current_stage_snapshot("compliance")
 
         self.window.compliance_fmin.setValue(4.9)
         self.window.compliance_fmax.setValue(6.1)
         self.window.compliance_omit_angle_range.setText("178-180")
+        self.window.compliance_sector_width.setValue(90.0)
+        self.window.compliance_sector_center.setValue(5.5)
         changed_snapshot = self.window._current_stage_snapshot("compliance")
 
         self.assertEqual(self.window.collect_preset_values()["compliance_fmin"], 4.9)
@@ -166,17 +170,23 @@ class StudioPresetsDocumentTests(StudioDirtyStateBase):
             self.window.collect_preset_values()["compliance_omit_angle_range"],
             "178-180",
         )
+        self.assertEqual(self.window.collect_preset_values()["compliance_sector_width"], 90.0)
+        self.assertEqual(self.window.collect_preset_values()["compliance_sector_center"], 5.5)
         self.assertNotEqual(initial_snapshot["settings"], changed_snapshot["settings"])
         self.window.apply_preset_values(
             {
                 "compliance_fmin": 5.0,
                 "compliance_fmax": 6.0,
                 "compliance_omit_angle_range": "179-180",
+                "compliance_sector_width": 120.0,
+                "compliance_sector_center": 5.6,
             }
         )
         self.assertEqual(self.window.compliance_fmin.value(), 5.0)
         self.assertEqual(self.window.compliance_fmax.value(), 6.0)
         self.assertEqual(self.window.compliance_omit_angle_range.text(), "179-180")
+        self.assertEqual(self.window.compliance_sector_width.value(), 120.0)
+        self.assertEqual(self.window.compliance_sector_center.value(), 5.6)
 
     def test_datasheet_template_selection_is_preset_backed_and_marks_snapshot_stale(self) -> None:
         default_template = Path(self.temp_dir.name) / "Datasheet - RFE.pdf"

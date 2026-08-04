@@ -170,6 +170,8 @@ class PipelineCommandTests(unittest.TestCase):
             compliance_fmin=4.9,
             compliance_fmax=6.1,
             compliance_omit_angle_range="178-180",
+            compliance_sector_width=90.0,
+            compliance_sector_center=5.5,
         )
         context = RunContext(
             project_slug="demo",
@@ -231,6 +233,8 @@ class PipelineCommandTests(unittest.TestCase):
         )
         self.assertEqual(compliance_command[compliance_command.index("--fmin") + 1], "4.9")
         self.assertEqual(compliance_command[compliance_command.index("--fmax") + 1], "6.1")
+        self.assertEqual(compliance_command[compliance_command.index("--sector-width") + 1], "90.0")
+        self.assertEqual(compliance_command[compliance_command.index("--sector-center") + 1], "5.5")
 
 
 if __name__ == "__main__":
