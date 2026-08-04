@@ -4,7 +4,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 import numpy as np
 
@@ -408,7 +408,7 @@ def _minimum_xpd_measurement(pattern: Pattern, valid: np.ndarray) -> dict[str, f
     }
 
 
-def _xpd_measurements(pattern: Pattern) -> tuple[dict[str, float | None], ...]:
+def xpd_assessment_masks(pattern: Pattern) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     peak = float(np.nanmax(pattern.co_directivity_dbi))
     category1_mask = np.zeros_like(pattern.co_directivity_dbi, dtype=bool)
     for target_phi in (0.0, 180.0):
@@ -417,9 +417,13 @@ def _xpd_measurements(pattern: Pattern) -> tuple[dict[str, float | None], ...]:
 
     one_db_3d = pattern.co_directivity_dbi >= peak - 1.0
     extended = one_db_3d | (pattern.thetas_deg[None, :] <= 3.0)
+    return category1_mask, one_db_3d, extended
+
+
+def _xpd_measurements(pattern: Pattern) -> tuple[dict[str, float | None], ...]:
     return tuple(
         _minimum_xpd_measurement(pattern, mask)
-        for mask in (category1_mask, one_db_3d, extended)
+        for mask in xpd_assessment_masks(pattern)
     )
 
 
@@ -783,6 +787,7 @@ def analyze_files(
     omitted_angle_range: OmittedAngleRange = None,
     sector_width_deg: float = 0.0,
     sector_center_ghz: float = 0.0,
+    pattern_observer: Callable[..., None] | None = None,
 ) -> dict[str, list[dict[str, object]]]:
     if sector_width_deg > 0.0 and sector_center_ghz <= 0.0 and not (fmin_ghz > 0.0 and fmax_ghz > 0.0):
         raise ValueError(
@@ -809,6 +814,7 @@ def analyze_files(
                 pattern,
                 omitted_angle_range=omitted_angle_range,
             )
+            sample_sector_rows: list[dict[str, object]] = []
             if sector_width_deg > 0.0:
                 effective_center = sector_center_ghz
                 if effective_center <= 0.0:
@@ -823,7 +829,7 @@ def analyze_files(
                         effective_center,
                         omitted_angle_range,
                     )
-                    sector_rows.append(
+                    sample_sector_rows.append(
                         {
                             **{name: summary.get(name) for name in (
                                 "source_file",
@@ -858,8 +864,11 @@ def analyze_files(
                         "etsi_passed_sector_classes": ", ".join(passed_sector_classes),
                     }
                 )
+            if pattern_observer is not None:
+                pattern_observer(path, label, pattern, summary, etsi, sample_sector_rows, fcc)
             summary_rows.append(summary)
             etsi_rows.extend(etsi)
+            sector_rows.extend(sample_sector_rows)
             fcc_rows.extend(fcc)
     if not summary_rows:
         raise ValueError("No far-field frequencies fall inside the selected compliance frequency window")

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+import compliance_report
+from compliance.evidence import EvidenceCollector, write_evidence_pdf
 from compliance.engine import (
     Pattern,
     _build_per_frequency_results,
@@ -319,15 +322,40 @@ def test_fcc_failure_note_only_mentions_available_qualification_routes() -> None
 def test_compliance_workbook_contains_traceable_sheets(tmp_path: Path) -> None:
     output = tmp_path / "compliance.xlsx"
     results = {
-        "rollup": [{"source_file": "demo.ffs", "family": "FCC Part 101", "classification": "Standard A", "status": "PASS"}],
+        "rollup": [
+            {
+                "source_file": "demo.ffs",
+                "port_label": "H",
+                "polarization": "H",
+                "family": "FCC Part 101",
+                "band": "5925-6425 MHz",
+                "classification": "Standard A",
+                "status": "PASS",
+                "frequencies_checked": 1,
+                "frequency_min_ghz": 6.0,
+                "frequency_max_ghz": 6.0,
+                "worst_margin_db": 1.5,
+                "note": "",
+            }
+        ],
         "per_frequency": [
             {
                 "source_file": "demo.ffs",
+                "port_label": "H",
                 "frequency_ghz": 6.0,
+                "polarization": "H",
+                "max_directivity_dbi": 35.0,
                 "family": "ETSI RPE",
+                "band": "1 (3-14 GHz)",
                 "classification": "Class 3",
                 "status": "FAIL",
                 "note": "ETSI Class 3 fails because the pattern exceeds the limit.",
+                "limiting_component": "co-polar azimuth",
+                "location": "co-polar azimuth at 20.00 degrees from boresight",
+                "measured_value": -20.0,
+                "limit_value": -25.0,
+                "unit": "dBi",
+                "margin_db": -5.0,
             }
         ],
         "summary": [{"source_file": "demo.ffs", "frequency_ghz": 6.0, "fcc_best_standard": "A"}],
@@ -350,25 +378,191 @@ def test_compliance_workbook_contains_traceable_sheets(tmp_path: Path) -> None:
         "fcc": [{"source_file": "demo.ffs", "standard": "A", "status": "PASS"}],
     }
 
-    write_workbook(output, results, fmin_ghz=5.9, fmax_ghz=6.1)
+    write_workbook(
+        output,
+        results,
+        fmin_ghz=5.9,
+        fmax_ghz=6.1,
+        evidence_filename="compliance-evidence.pdf",
+        generated_at_utc="2026-08-04T10:00:00+00:00",
+    )
 
     from openpyxl import load_workbook
 
     workbook = load_workbook(output, data_only=True)
-    assert workbook.sheetnames == [
-        "Antenna Rollup",
-        "Per-Frequency Results",
-        "Summary",
-        "ETSI RPE Details",
-        "FCC Details",
-        "Methodology",
+    assert workbook.sheetnames == ["Overview", "Frequency Results", "Methodology"]
+    assert [cell.value for cell in workbook["Overview"][1]] == [
+        "Antenna",
+        "Port",
+        "Polarization",
+        "Standard Family",
+        "Band",
+        "Class / Category",
+        "Result",
+        "Frequencies Checked",
+        "Minimum GHz",
+        "Maximum GHz",
+        "Worst Margin dB",
+        "Explanation",
     ]
+    assert [cell.value for cell in workbook["Frequency Results"][1]] == [
+        "Antenna",
+        "Port",
+        "Frequency GHz",
+        "Polarization",
+        "Directivity dBi",
+        "Standard Family",
+        "Band",
+        "Class / Category",
+        "Result",
+        "Margin dB",
+        "Limiting Component",
+        "Location",
+        "Measured",
+        "Limit",
+        "Unit",
+        "Explanation",
+    ]
+    assert workbook["Frequency Results"].cell(2, 3).number_format == "0.000"
+    assert workbook["Frequency Results"].cell(2, 13).number_format == "0.00"
+    assert workbook["Frequency Results"].cell(2, 9).fill.fgColor.rgb.endswith("FFC7CE")
+    assert "ETSI Class 3 fails because" in workbook["Frequency Results"].cell(2, 16).value
     methodology = dict(workbook["Methodology"].iter_rows(values_only=True))
     assert "Directivity is used" in methodology["Gain convention"]
     assert methodology["Frequency window"] == "5.9 to 6.1 GHz"
-    headers = [cell.value for cell in workbook["ETSI RPE Details"][1]]
-    note_column = headers.index("Note") + 1
-    assert "ETSI Class 3 fails because" in workbook["ETSI RPE Details"].cell(2, note_column).value
-    standard_family_column = headers.index("Standard Family") + 1
-    assert "EN 302 326-3" in workbook["ETSI RPE Details"].cell(3, standard_family_column).value
+    assert "every evaluated frequency" in methodology["Result interpretation"]
+    assert "positive margin" in methodology["Margin interpretation"]
+    assert "compliance-evidence.pdf" in methodology["Evidence pack"]
+    evidence_row = next(
+        row for row in workbook["Methodology"].iter_rows() if row[0].value == "Evidence pack"
+    )
+    assert evidence_row[1].hyperlink.target == "compliance-evidence.pdf"
     assert "single-beam sector" in methodology["ETSI sector rules"].lower() or "302 326-3" in methodology["ETSI sector rules"]
+
+
+def test_evidence_collector_selects_minimum_margin_frequency() -> None:
+    collector = EvidenceCollector()
+    base_pattern = pattern_from_rows(Path("demo_H.ffs"), 5e9, _synthetic_h_rows(), "H")
+    for frequency_ghz, margin in ((5.0, 2.0), (6.0, -1.5)):
+        pattern = Pattern(
+            frequency_hz=frequency_ghz * 1e9,
+            phis_deg=base_pattern.phis_deg,
+            thetas_deg=base_pattern.thetas_deg,
+            total_directivity_dbi=base_pattern.total_directivity_dbi,
+            co_directivity_dbi=base_pattern.co_directivity_dbi,
+            cross_directivity_dbi=base_pattern.cross_directivity_dbi,
+            polarization="H",
+            polarization_basis="test",
+        )
+        summary = {
+            "source_file": "demo_H.ffs",
+            "source_path": "demo_H.ffs",
+            "port_label": "H",
+            "frequency_ghz": frequency_ghz,
+            "polarization": "H",
+            "_etsi_xpd_categories": {},
+        }
+        etsi = [
+            {
+                **summary,
+                "etsi_range": "1 (3-14 GHz)",
+                "rpe_class": "1",
+                "status": "PASS" if margin >= 0 else "FAIL",
+                "margin_db": margin,
+                "limiting_component": "co-polar azimuth",
+                "limiting_angle_deg": 10.0,
+                "actual_dbi": 18.0,
+                "limit_dbi": 20.0,
+                "note": "",
+            }
+        ]
+        collector.observe(Path("demo_H.ffs"), "H", pattern, summary, etsi, [], [])
+
+    rollup = [
+        {
+            "source_file": "demo_H.ffs",
+            "source_path": "demo_H.ffs",
+            "port_label": "H",
+            "polarization": "H",
+            "family": "ETSI RPE",
+            "band": "1 (3-14 GHz)",
+            "classification": "Class 1",
+        }
+    ]
+    selected = collector.ordered_cases(rollup)
+
+    assert len(selected) == 1
+    assert selected[0].frequency_ghz == 6.0
+    assert selected[0].margin_db == -1.5
+
+
+def test_evidence_pdf_contains_title_and_one_page_per_selected_family(tmp_path: Path, monkeypatch) -> None:
+    rows = _synthetic_h_rows()
+    monkeypatch.setattr("compliance.engine.read_ffs_broadband", lambda _path: {6e9: rows})
+    collector = EvidenceCollector()
+    results = analyze_files(
+        [Path("demo_H.ffs")],
+        sector_width_deg=90.0,
+        sector_center_ghz=6.0,
+        pattern_observer=collector.observe,
+    )
+    all_cases = collector.ordered_cases(results["rollup"])
+    selected_by_family = {}
+    for case in all_cases:
+        selected_by_family.setdefault(case.family, case)
+    selected = list(selected_by_family.values())
+    output = tmp_path / "compliance-evidence.pdf"
+
+    write_evidence_pdf(
+        output,
+        selected,
+        input_files=[Path("demo_H.ffs")],
+        fmin_ghz=5.9,
+        fmax_ghz=6.1,
+        generated_at_utc="2026-08-04T10:00:00+00:00",
+        omitted_angle_range=(180.0, 180.0),
+    )
+
+    import fitz
+
+    with fitz.open(output) as document:
+        assert document.page_count == len(selected) + 1
+        assert "Standards Compliance Evidence" in document[0].get_text()
+        page_text = "\n".join(page.get_text() for page in document[1:])
+        assert all(family in page_text for family in selected_by_family)
+
+
+def test_compliance_outputs_are_not_replaced_when_evidence_generation_fails(tmp_path: Path, monkeypatch) -> None:
+    output = tmp_path / "demo-compliance.xlsx"
+    evidence = tmp_path / "demo-compliance-evidence.pdf"
+    output.write_bytes(b"old workbook")
+    evidence.write_bytes(b"old evidence")
+    source = tmp_path / "demo_H.ffs"
+    source.write_text("source", encoding="utf-8")
+    results = {
+        "rollup": [],
+        "per_frequency": [],
+        "summary": [],
+        "etsi": [],
+        "sector": [],
+        "fcc": [],
+    }
+
+    monkeypatch.setattr(compliance_report, "analyze_files", lambda *_args, **_kwargs: results)
+    monkeypatch.setattr(
+        compliance_report,
+        "write_workbook",
+        lambda staged, *_args, **_kwargs: staged.write_bytes(b"new workbook"),
+    )
+
+    def fail_evidence(*_args, **_kwargs):
+        raise RuntimeError("simulated evidence failure")
+
+    monkeypatch.setattr(compliance_report, "write_evidence_pdf", fail_evidence)
+    monkeypatch.setattr(sys, "argv", ["compliance_report.py", str(output), str(source)])
+
+    with pytest.raises(RuntimeError, match="simulated evidence failure"):
+        compliance_report.main()
+
+    assert output.read_bytes() == b"old workbook"
+    assert evidence.read_bytes() == b"old evidence"

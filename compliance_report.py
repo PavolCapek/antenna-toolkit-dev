@@ -7,7 +7,9 @@ import math
 from datetime import datetime, timezone
 from pathlib import Path
 
+from compliance.evidence import EvidenceCollector, write_evidence_pdf
 from compliance.engine import analyze_files, parse_omitted_angle_range
+from compliance.paths import evidence_pdf_path
 from compliance.standards import (
     ETSI_EDITION,
     ETSI_SECTOR_EDITION,
@@ -26,34 +28,130 @@ def _clean_excel_value(value):
     return value
 
 
-def _write_table_sheet(workbook, title: str, rows: list[dict[str, object]]) -> None:
+OVERVIEW_COLUMNS = (
+    ("antenna", "Antenna"),
+    ("port", "Port"),
+    ("polarization", "Polarization"),
+    ("family", "Standard Family"),
+    ("band", "Band"),
+    ("classification", "Class / Category"),
+    ("result", "Result"),
+    ("frequencies_checked", "Frequencies Checked"),
+    ("minimum_ghz", "Minimum GHz"),
+    ("maximum_ghz", "Maximum GHz"),
+    ("worst_margin_db", "Worst Margin dB"),
+    ("explanation", "Explanation"),
+)
+
+FREQUENCY_COLUMNS = (
+    ("antenna", "Antenna"),
+    ("port", "Port"),
+    ("frequency_ghz", "Frequency GHz"),
+    ("polarization", "Polarization"),
+    ("directivity_dbi", "Directivity dBi"),
+    ("family", "Standard Family"),
+    ("band", "Band"),
+    ("classification", "Class / Category"),
+    ("result", "Result"),
+    ("margin_db", "Margin dB"),
+    ("limiting_component", "Limiting Component"),
+    ("location", "Location"),
+    ("measured", "Measured"),
+    ("limit", "Limit"),
+    ("unit", "Unit"),
+    ("explanation", "Explanation"),
+)
+
+FAMILY_ORDER = {
+    "ETSI RPE": 0,
+    "ETSI Sector RPE": 1,
+    "ETSI XPD": 2,
+    "FCC Part 101": 3,
+}
+
+
+def _rollup_sort_key(row: dict[str, object]) -> tuple[object, ...]:
+    return (
+        str(row.get("source_file", "")),
+        str(row.get("port_label", "")),
+        str(row.get("polarization", "")),
+        FAMILY_ORDER.get(str(row.get("family", "")), 99),
+        str(row.get("band", "")),
+        str(row.get("classification", "")),
+    )
+
+
+def _overview_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    projected = [
+        {
+            "antenna": row.get("source_file"),
+            "port": row.get("port_label"),
+            "polarization": row.get("polarization"),
+            "family": row.get("family"),
+            "band": row.get("band"),
+            "classification": row.get("classification"),
+            "result": row.get("status"),
+            "frequencies_checked": row.get("frequencies_checked"),
+            "minimum_ghz": row.get("frequency_min_ghz"),
+            "maximum_ghz": row.get("frequency_max_ghz"),
+            "worst_margin_db": row.get("worst_margin_db"),
+            "explanation": row.get("note", ""),
+        }
+        for row in sorted(rows, key=_rollup_sort_key)
+    ]
+    return projected
+
+
+def _frequency_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    projected = [
+        {
+            "antenna": row.get("source_file"),
+            "port": row.get("port_label"),
+            "frequency_ghz": row.get("frequency_ghz"),
+            "polarization": row.get("polarization"),
+            "directivity_dbi": row.get("max_directivity_dbi"),
+            "family": row.get("family"),
+            "band": row.get("band"),
+            "classification": row.get("classification"),
+            "result": row.get("status"),
+            "margin_db": row.get("margin_db"),
+            "limiting_component": row.get("limiting_component"),
+            "location": row.get("location"),
+            "measured": row.get("measured_value"),
+            "limit": row.get("limit_value"),
+            "unit": row.get("unit"),
+            "explanation": row.get("note", ""),
+        }
+        for row in rows
+    ]
+    return sorted(
+        projected,
+        key=lambda row: (
+            str(row.get("antenna", "")),
+            str(row.get("port", "")),
+            float(row.get("frequency_ghz", 0.0) or 0.0),
+            FAMILY_ORDER.get(str(row.get("family", "")), 99),
+            str(row.get("classification", "")),
+        ),
+    )
+
+
+def _write_table_sheet(
+    workbook,
+    title: str,
+    rows: list[dict[str, object]],
+    columns: tuple[tuple[str, str], ...],
+) -> None:
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
     worksheet = workbook.create_sheet(title)
-    if not rows:
-        worksheet.append(["No applicable requirements or results"])
-        return
-    headers: list[str] = []
-    for row in rows:
-        for header in row:
-            if not header.startswith("_") and header not in headers:
-                headers.append(header)
-    display_tokens = {
-        "db": "dB",
-        "dbi": "dBi",
-        "etsi": "ETSI",
-        "fcc": "FCC",
-        "ghz": "GHz",
-        "rpe": "RPE",
-        "xpd": "XPD",
-    }
-    display_headers = [
-        " ".join(display_tokens.get(token, token.capitalize()) for token in header.split("_"))
-        for header in headers
-    ]
+    headers = [key for key, _label in columns]
+    display_headers = [label for _key, label in columns]
     worksheet.append(display_headers)
     for row in rows:
         worksheet.append([_clean_excel_value(row.get(header)) for header in headers])
+    if not rows:
+        worksheet.append(["No applicable requirements or results"])
     header_fill = PatternFill("solid", fgColor="1F4E78")
     for cell in worksheet[1]:
         cell.fill = header_fill
@@ -63,7 +161,7 @@ def _write_table_sheet(workbook, title: str, rows: list[dict[str, object]]) -> N
     worksheet.sheet_view.showGridLines = False
     worksheet.freeze_panes = "A2"
     worksheet.auto_filter.ref = worksheet.dimensions
-    status_columns = {index + 1 for index, name in enumerate(headers) if name == "status" or name.endswith("_pass")}
+    status_columns = {index + 1 for index, name in enumerate(headers) if name == "result"}
     pass_fill = PatternFill("solid", fgColor="C6EFCE")
     fail_fill = PatternFill("solid", fgColor="FFC7CE")
     neutral_fill = PatternFill("solid", fgColor="E7E6E6")
@@ -87,7 +185,7 @@ def _write_table_sheet(workbook, title: str, rows: list[dict[str, object]]) -> N
         worksheet.column_dimensions[worksheet.cell(1, index).column_letter].width = width
         column_cells = worksheet.iter_cols(min_col=index, max_col=index, min_row=2)
         cells = next(column_cells)
-        if header == "note":
+        if header == "explanation":
             worksheet.column_dimensions[worksheet.cell(1, index).column_letter].width = 60
             for cell in cells:
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
@@ -100,10 +198,10 @@ def _write_table_sheet(workbook, title: str, rows: list[dict[str, object]]) -> N
         elif header.endswith("_ghz"):
             for cell in cells:
                 cell.number_format = "0.000"
-        elif header.endswith(("_db", "_dbi", "_deg")):
+        elif header.endswith(("_db", "_dbi")):
             for cell in cells:
                 cell.number_format = "0.00"
-        elif header in {"measured_value", "limit_value"}:
+        elif header in {"measured", "limit"}:
             for cell in cells:
                 cell.number_format = "0.00"
 
@@ -116,17 +214,21 @@ def write_workbook(
     fmax_ghz: float,
     sector_width_deg: float = 0.0,
     sector_center_ghz: float = 0.0,
+    evidence_filename: str | None = None,
+    generated_at_utc: str | None = None,
 ) -> None:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
 
     workbook = Workbook()
     workbook.remove(workbook.active)
-    _write_table_sheet(workbook, "Antenna Rollup", results["rollup"])
-    _write_table_sheet(workbook, "Per-Frequency Results", results["per_frequency"])
-    _write_table_sheet(workbook, "Summary", results["summary"])
-    _write_table_sheet(workbook, "ETSI RPE Details", [*results["etsi"], *results.get("sector", [])])
-    _write_table_sheet(workbook, "FCC Details", results["fcc"])
+    _write_table_sheet(workbook, "Overview", _overview_rows(results["rollup"]), OVERVIEW_COLUMNS)
+    _write_table_sheet(
+        workbook,
+        "Frequency Results",
+        _frequency_rows(results["per_frequency"]),
+        FREQUENCY_COLUMNS,
+    )
 
     methodology = workbook.create_sheet("Methodology")
     if fmin_ghz > 0 and fmax_ghz > 0:
@@ -137,8 +239,10 @@ def write_workbook(
         frequency_window = f"Up to {fmax_ghz:g} GHz"
     else:
         frequency_window = "All input frequencies"
+    generated_at = generated_at_utc or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    evidence_name = evidence_filename or evidence_pdf_path(output).name
     methodology_rows = [
-        ("Generated UTC", datetime.now(timezone.utc).replace(microsecond=0).isoformat()),
+        ("Generated UTC", generated_at),
         ("ETSI rules", ETSI_EDITION),
         ("ETSI source", ETSI_SOURCE_URL),
         ("ETSI sector rules", ETSI_SECTOR_EDITION),
@@ -167,19 +271,28 @@ def write_workbook(
         ),
         ("ETSI XPD method", "Category 1 uses the azimuth 1 dB beamwidth; Category 2 uses the 3D 1 dB contour; Category 3 conservatively includes the 3 degree main-beam region."),
         ("FCC method", "Compliance requires beamwidth in both planes OR directivity, plus every applicable co-polar suppression bin and any cross-polar/XPD requirement."),
+        ("Result interpretation", "A rollup result passes only when every evaluated frequency sample for that class or standard passes."),
+        ("Margin interpretation", "A positive margin passes, a negative margin fails, and the smallest margin is the worst case."),
+        ("Evidence pack", f"See {evidence_name}. Each page shows the minimum-margin frequency for one Overview result."),
         ("Interpretation", "This is a simulation/data pre-compliance assessment. It is not an accredited measurement report or regulatory certification."),
         ("Coverage note", "ETSI range 8/9 class 4 is listed in the overview but no class 4 actual RPE corner-point figure is published in V2.2.1; it is not auto-assigned."),
     ]
+    row_numbers: dict[str, int] = {}
     for key, value in methodology_rows:
         methodology.append([key, value])
+        row_numbers[key] = methodology.max_row
     label_fill = PatternFill("solid", fgColor="D9EAF7")
     for row in methodology.iter_rows():
         row[0].font = Font(bold=True, color="1F1F1F")
         row[0].fill = label_fill
         row[1].alignment = Alignment(wrap_text=True, vertical="top")
-    for row_number in (3, 5, 7):
+    for key in ("ETSI source", "ETSI sector source", "FCC source"):
+        row_number = row_numbers[key]
         methodology.cell(row_number, 2).hyperlink = methodology.cell(row_number, 2).value
         methodology.cell(row_number, 2).style = "Hyperlink"
+    evidence_row = row_numbers["Evidence pack"]
+    methodology.cell(evidence_row, 2).hyperlink = evidence_name
+    methodology.cell(evidence_row, 2).style = "Hyperlink"
     methodology.sheet_view.showGridLines = False
     methodology.column_dimensions["A"].width = 24
     methodology.column_dimensions["B"].width = 120
@@ -236,7 +349,8 @@ def main() -> int:
     if args.output.suffix.lower() != ".xlsx":
         parser.error("output must use the .xlsx extension")
 
-    emit_progress("compliance", 1, 2, "Analyzing ETSI and FCC requirements")
+    emit_progress("compliance", 1, 3, "Analyzing ETSI and FCC requirements")
+    evidence_collector = EvidenceCollector()
     results = analyze_files(
         args.ffs,
         port_labels=_port_labels(args.port_labels_json),
@@ -245,10 +359,15 @@ def main() -> int:
         omitted_angle_range=args.omit_angle_range,
         sector_width_deg=args.sector_width,
         sector_center_ghz=args.sector_center,
+        pattern_observer=evidence_collector.observe,
     )
+    evidence_cases = evidence_collector.ordered_cases(sorted(results["rollup"], key=_rollup_sort_key))
+    generated_at_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    evidence_output = evidence_pdf_path(args.output)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with StageWorkspace(args.output.parent, "compliance") as stage:
         staged_output = stage.path(args.output.name)
+        staged_evidence = stage.path(evidence_output.name)
         write_workbook(
             staged_output,
             results,
@@ -256,10 +375,23 @@ def main() -> int:
             fmax_ghz=args.fmax,
             sector_width_deg=args.sector_width,
             sector_center_ghz=args.sector_center,
+            evidence_filename=evidence_output.name,
+            generated_at_utc=generated_at_utc,
         )
-        emit_progress("compliance", 2, 2, f"Saving {args.output.name}")
-        stage.publish([args.output.name])
+        emit_progress("compliance", 2, 3, f"Creating {evidence_output.name}")
+        write_evidence_pdf(
+            staged_evidence,
+            evidence_cases,
+            input_files=args.ffs,
+            fmin_ghz=args.fmin,
+            fmax_ghz=args.fmax,
+            generated_at_utc=generated_at_utc,
+            omitted_angle_range=args.omit_angle_range,
+        )
+        emit_progress("compliance", 3, 3, f"Saving {args.output.name} and {evidence_output.name}")
+        stage.publish([args.output.name, evidence_output.name])
     print(f"Wrote compliance workbook: {args.output}")
+    print(f"Wrote compliance evidence: {evidence_output}")
     return 0
 
 

@@ -110,8 +110,11 @@ class StudioPipelineTests(unittest.TestCase):
             compliance_output=compliance_output,
         )
 
-        self.assertEqual(files, [compliance_output])
-        self.assertEqual(stage_tool_versions("compliance")["compliance_rules"], 5)
+        self.assertEqual(
+            files,
+            [compliance_output, project_dir / "demo-compliance-evidence.pdf"],
+        )
+        self.assertEqual(stage_tool_versions("compliance")["compliance_rules"], 6)
 
     def test_stage_tool_versions_and_stale_detail(self) -> None:
         versions = stage_tool_versions("datasheet", plot_asset_style_version=3, datasheet_render_version=2)

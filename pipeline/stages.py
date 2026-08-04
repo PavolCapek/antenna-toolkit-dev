@@ -141,7 +141,9 @@ def stage_output_files(
     if stage_key == "extract":
         return [extract_output]
     if stage_key == "compliance":
-        return [compliance_output or project_dir / f"{beam_output.stem}-compliance.xlsx"]
+        workbook = compliance_output or project_dir / f"{beam_output.stem}-compliance.xlsx"
+        evidence = workbook.with_name(f"{workbook.stem}-evidence.pdf")
+        return [workbook, evidence]
     if stage_key == "datasheet":
         return [datasheet_output]
     if stage_key == "vswr":
