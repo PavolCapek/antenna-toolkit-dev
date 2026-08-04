@@ -19,7 +19,15 @@ from compliance.engine import (
     parse_omitted_angle_range,
     pattern_from_rows,
 )
-from compliance.standards import etsi_profiles_for_frequency, etsi_sector_profiles, fcc_profiles_for_frequency
+from compliance.standards import (
+    ETSI_EDITION,
+    ETSI_SOURCE_URL,
+    FCC_EDITION,
+    FCC_SOURCE_URL,
+    etsi_profiles_for_frequency,
+    etsi_sector_profiles,
+    fcc_profiles_for_frequency,
+)
 from compliance_report import write_workbook
 
 
@@ -447,13 +455,14 @@ def test_compliance_workbook_contains_traceable_sheets(tmp_path: Path) -> None:
     workbook = load_workbook(output, data_only=True)
     assert workbook.sheetnames == ["Overview", "Frequency Results", "Methodology"]
     assert [cell.value for cell in workbook["Overview"][1]] == [
-        "Antenna",
-        "Port",
-        "Polarization",
         "Standard Family",
+        "Standard / Norm",
         "Band",
         "Class / Category",
+        "Polarization",
         "Result",
+        "Antenna",
+        "Port",
         "Frequencies Checked",
         "Minimum GHz",
         "Maximum GHz",
@@ -461,15 +470,16 @@ def test_compliance_workbook_contains_traceable_sheets(tmp_path: Path) -> None:
         "Explanation",
     ]
     assert [cell.value for cell in workbook["Frequency Results"][1]] == [
-        "Antenna",
-        "Port",
-        "Frequency GHz",
-        "Polarization",
-        "Directivity dBi",
         "Standard Family",
+        "Standard / Norm",
         "Band",
         "Class / Category",
+        "Frequency GHz",
+        "Polarization",
         "Result",
+        "Antenna",
+        "Port",
+        "Directivity dBi",
         "Margin dB",
         "Limiting Component",
         "Location",
@@ -478,10 +488,14 @@ def test_compliance_workbook_contains_traceable_sheets(tmp_path: Path) -> None:
         "Unit",
         "Explanation",
     ]
-    assert workbook["Frequency Results"].cell(2, 3).number_format == "0.000"
-    assert workbook["Frequency Results"].cell(2, 13).number_format == "0.00"
-    assert workbook["Frequency Results"].cell(2, 9).fill.fgColor.rgb.endswith("FFC7CE")
-    assert "ETSI Class 3 fails because" in workbook["Frequency Results"].cell(2, 16).value
+    assert workbook["Overview"].cell(2, 2).value == FCC_EDITION
+    assert workbook["Overview"].cell(2, 2).hyperlink.target == FCC_SOURCE_URL
+    assert workbook["Frequency Results"].cell(2, 2).value == ETSI_EDITION
+    assert workbook["Frequency Results"].cell(2, 2).hyperlink.target == ETSI_SOURCE_URL
+    assert workbook["Frequency Results"].cell(2, 5).number_format == "0.000"
+    assert workbook["Frequency Results"].cell(2, 14).number_format == "0.00"
+    assert workbook["Frequency Results"].cell(2, 7).fill.fgColor.rgb.endswith("FFC7CE")
+    assert "ETSI Class 3 fails because" in workbook["Frequency Results"].cell(2, 17).value
     methodology = dict(workbook["Methodology"].iter_rows(values_only=True))
     assert "Directivity is used" in methodology["Gain convention"]
     assert methodology["Frequency window"] == "5.9 to 6.1 GHz"
@@ -493,6 +507,50 @@ def test_compliance_workbook_contains_traceable_sheets(tmp_path: Path) -> None:
     )
     assert evidence_row[1].hyperlink.target == "compliance-evidence.pdf"
     assert "single-beam sector" in methodology["ETSI sector rules"].lower() or "302 326-3" in methodology["ETSI sector rules"]
+
+
+def test_report_rows_group_classes_before_polarizations() -> None:
+    rollup_rows = []
+    frequency_rows = []
+    for polarization in ("H", "V"):
+        for class_number in (1, 2):
+            common = {
+                "source_file": f"demo_{polarization}.ffs",
+                "source_path": f"demo_{polarization}.ffs",
+                "port_label": polarization,
+                "polarization": polarization,
+                "family": "ETSI RPE",
+                "band": "1 (3-14 GHz)",
+                "classification": f"Class {class_number}",
+                "status": "PASS",
+            }
+            rollup_rows.append(
+                {
+                    **common,
+                    "frequencies_checked": 1,
+                    "frequency_min_ghz": 6.0,
+                    "frequency_max_ghz": 6.0,
+                    "worst_margin_db": 1.0,
+                    "note": "",
+                }
+            )
+            frequency_rows.append(
+                {
+                    **common,
+                    "frequency_ghz": 6.0,
+                    "max_directivity_dbi": 35.0,
+                    "margin_db": 1.0,
+                    "note": "",
+                }
+            )
+
+    overview = compliance_report._overview_rows(rollup_rows)
+    frequency = compliance_report._frequency_rows(frequency_rows)
+    expected = [("Class 1", "H"), ("Class 1", "V"), ("Class 2", "H"), ("Class 2", "V")]
+
+    assert [(row["classification"], row["polarization"]) for row in overview] == expected
+    assert [(row["classification"], row["polarization"]) for row in frequency] == expected
+    assert all(row["standard"] == ETSI_EDITION for row in overview + frequency)
 
 
 def test_evidence_collector_selects_minimum_margin_frequency() -> None:

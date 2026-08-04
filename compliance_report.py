@@ -29,13 +29,14 @@ def _clean_excel_value(value):
 
 
 OVERVIEW_COLUMNS = (
-    ("antenna", "Antenna"),
-    ("port", "Port"),
-    ("polarization", "Polarization"),
     ("family", "Standard Family"),
+    ("standard", "Standard / Norm"),
     ("band", "Band"),
     ("classification", "Class / Category"),
+    ("polarization", "Polarization"),
     ("result", "Result"),
+    ("antenna", "Antenna"),
+    ("port", "Port"),
     ("frequencies_checked", "Frequencies Checked"),
     ("minimum_ghz", "Minimum GHz"),
     ("maximum_ghz", "Maximum GHz"),
@@ -44,15 +45,16 @@ OVERVIEW_COLUMNS = (
 )
 
 FREQUENCY_COLUMNS = (
-    ("antenna", "Antenna"),
-    ("port", "Port"),
-    ("frequency_ghz", "Frequency GHz"),
-    ("polarization", "Polarization"),
-    ("directivity_dbi", "Directivity dBi"),
     ("family", "Standard Family"),
+    ("standard", "Standard / Norm"),
     ("band", "Band"),
     ("classification", "Class / Category"),
+    ("frequency_ghz", "Frequency GHz"),
+    ("polarization", "Polarization"),
     ("result", "Result"),
+    ("antenna", "Antenna"),
+    ("port", "Port"),
+    ("directivity_dbi", "Directivity dBi"),
     ("margin_db", "Margin dB"),
     ("limiting_component", "Limiting Component"),
     ("location", "Location"),
@@ -69,15 +71,28 @@ FAMILY_ORDER = {
     "FCC Part 101": 3,
 }
 
+STANDARD_BY_FAMILY = {
+    "ETSI RPE": ETSI_EDITION,
+    "ETSI Sector RPE": ETSI_SECTOR_EDITION,
+    "ETSI XPD": ETSI_EDITION,
+    "FCC Part 101": FCC_EDITION,
+}
+
+STANDARD_SOURCE_BY_NAME = {
+    ETSI_EDITION: ETSI_SOURCE_URL,
+    ETSI_SECTOR_EDITION: ETSI_SECTOR_SOURCE_URL,
+    FCC_EDITION: FCC_SOURCE_URL,
+}
+
 
 def _rollup_sort_key(row: dict[str, object]) -> tuple[object, ...]:
     return (
-        str(row.get("source_file", "")),
-        str(row.get("port_label", "")),
-        str(row.get("polarization", "")),
         FAMILY_ORDER.get(str(row.get("family", "")), 99),
         str(row.get("band", "")),
         str(row.get("classification", "")),
+        str(row.get("polarization", "")),
+        str(row.get("source_file", "")),
+        str(row.get("port_label", "")),
     )
 
 
@@ -88,6 +103,7 @@ def _overview_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
             "port": row.get("port_label"),
             "polarization": row.get("polarization"),
             "family": row.get("family"),
+            "standard": STANDARD_BY_FAMILY.get(str(row.get("family", "")), ""),
             "band": row.get("band"),
             "classification": row.get("classification"),
             "result": row.get("status"),
@@ -111,6 +127,7 @@ def _frequency_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
             "polarization": row.get("polarization"),
             "directivity_dbi": row.get("max_directivity_dbi"),
             "family": row.get("family"),
+            "standard": STANDARD_BY_FAMILY.get(str(row.get("family", "")), ""),
             "band": row.get("band"),
             "classification": row.get("classification"),
             "result": row.get("status"),
@@ -127,11 +144,13 @@ def _frequency_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     return sorted(
         projected,
         key=lambda row: (
+            FAMILY_ORDER.get(str(row.get("family", "")), 99),
+            str(row.get("band", "")),
+            str(row.get("classification", "")),
+            float(row.get("frequency_ghz", 0.0) or 0.0),
+            str(row.get("polarization", "")),
             str(row.get("antenna", "")),
             str(row.get("port", "")),
-            float(row.get("frequency_ghz", 0.0) or 0.0),
-            FAMILY_ORDER.get(str(row.get("family", "")), 99),
-            str(row.get("classification", "")),
         ),
     )
 
@@ -192,6 +211,13 @@ def _write_table_sheet(
                 if cell.value:
                     wrapped_lines = max(1, math.ceil(len(str(cell.value)) / 72))
                     worksheet.row_dimensions[cell.row].height = min(120, max(30, 16 * wrapped_lines + 6))
+        if header == "standard":
+            worksheet.column_dimensions[worksheet.cell(1, index).column_letter].width = 44
+            for cell in cells:
+                source_url = STANDARD_SOURCE_BY_NAME.get(str(cell.value or ""))
+                if source_url:
+                    cell.hyperlink = source_url
+                    cell.font = Font(color="0563C1", underline="single")
         if header == "frequencies_checked":
             for cell in cells:
                 cell.number_format = "0"
