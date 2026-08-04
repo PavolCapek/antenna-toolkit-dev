@@ -188,6 +188,41 @@ class StudioPresetsDocumentTests(StudioDirtyStateBase):
         self.assertEqual(self.window.compliance_sector_width.value(), 120.0)
         self.assertEqual(self.window.compliance_sector_center.value(), 5.6)
 
+    def test_compliance_controls_round_trip_through_saved_preset(self) -> None:
+        preset_name = "Compliance Preset"
+        self.window.global_presets[preset_name] = self.window.collect_preset_values()
+        self.window.global_active_preset = preset_name
+        self.window._persist_global_presets()
+        self.window.refresh_preset_list(select_name=preset_name)
+
+        self.window.compliance_fmin.setValue(4.9)
+        self.window.compliance_fmax.setValue(6.1)
+        self.window.compliance_omit_angle_range.setText("178-180")
+        self.window.compliance_sector_width.setValue(90.0)
+        self.window.compliance_sector_center.setValue(5.5)
+        self.window.save_preset()
+        self.app.processEvents()
+
+        loaded = self.window.preset_store.load_presets()[preset_name]
+        self.assertEqual(loaded["compliance_fmin"], 4.9)
+        self.assertEqual(loaded["compliance_fmax"], 6.1)
+        self.assertEqual(loaded["compliance_omit_angle_range"], "178-180")
+        self.assertEqual(loaded["compliance_sector_width"], 90.0)
+        self.assertEqual(loaded["compliance_sector_center"], 5.5)
+
+        self.window.compliance_fmin.setValue(0.0)
+        self.window.compliance_fmax.setValue(0.0)
+        self.window.compliance_omit_angle_range.setText("180-180")
+        self.window.compliance_sector_width.setValue(0.0)
+        self.window.compliance_sector_center.setValue(0.0)
+        self.window.apply_preset_values(loaded)
+
+        self.assertEqual(self.window.compliance_fmin.value(), 4.9)
+        self.assertEqual(self.window.compliance_fmax.value(), 6.1)
+        self.assertEqual(self.window.compliance_omit_angle_range.text(), "178-180")
+        self.assertEqual(self.window.compliance_sector_width.value(), 90.0)
+        self.assertEqual(self.window.compliance_sector_center.value(), 5.5)
+
     def test_datasheet_template_selection_is_preset_backed_and_marks_snapshot_stale(self) -> None:
         default_template = Path(self.temp_dir.name) / "Datasheet - RFE.pdf"
         alternate_template = Path(self.temp_dir.name) / "Alternate Style.pdf"
