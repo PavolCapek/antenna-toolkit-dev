@@ -9,7 +9,7 @@ from pipeline.versions import stage_versions
 RADIATION_PATTERN_FILES_DIR = "radiaiton pattern files"
 
 STAGE_SETTING_KEYS: dict[str, tuple[str, ...]] = {
-    "beam": ("smooth", "theta", "adf_manufacturer", "adf_model"),
+    "beam": ("smooth", "theta", "adf_manufacturer", "adf_model", "compliance_fmin", "compliance_fmax"),
     "compliance": (
         "compliance_fmin",
         "compliance_fmax",

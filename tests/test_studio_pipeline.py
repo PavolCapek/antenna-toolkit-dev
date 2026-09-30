@@ -48,7 +48,9 @@ class StudioPipelineTests(unittest.TestCase):
             "unrelated": "ignored",
         }
 
-        self.assertEqual(stage_settings_snapshot("beam", values), {"smooth": 5, "theta": 8})
+        self.assertEqual(stage_settings_snapshot("beam", values), {
+            "smooth": 5, "theta": 8, "compliance_fmin": 4.9, "compliance_fmax": 6.1,
+        })
         self.assertIn("grid_color", stage_settings_snapshot("plot", values))
         self.assertIn("polar_figure_size", stage_settings_snapshot("plot", values))
         self.assertIn("polar_figure_size", stage_settings_snapshot("datasheet", values))

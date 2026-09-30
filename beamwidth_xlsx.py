@@ -874,6 +874,10 @@ def main() -> int:
     ap.add_argument('--port-labels-json', default='', help='Optional input-path/stem to H/V port label mapping.')
     ap.add_argument('--adf-manufacturer', default='', help='ADF antenna manufacturer (default: UNKNOWN).')
     ap.add_argument('--adf-model', default='', help='ADF model name (default: output stem).')
+    ap.add_argument('--adf-fmin', type=float, default=0.0,
+                    help='Minimum frequency included in the ADF envelope, in GHz (0 = no lower bound).')
+    ap.add_argument('--adf-fmax', type=float, default=0.0,
+                    help='Maximum frequency included in the ADF envelope, in GHz (0 = no upper bound).')
     args = ap.parse_args()
 
     try:
@@ -908,6 +912,8 @@ def main() -> int:
             [sample for result in computed_results for sample in result[7]],
             model=args.adf_model.strip() or args.output.stem,
             manufacturer=args.adf_manufacturer.strip(),
+            fmin_ghz=args.adf_fmin,
+            fmax_ghz=args.adf_fmax,
         )
     except ValueError as exc:
         _fail_invalid_inputs([str(exc)])

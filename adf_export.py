@@ -102,10 +102,21 @@ def _header_text(value: str, limit: int) -> str:
 
 
 def build_adf_document(
-    samples: list[ADFSample], *, model: str, manufacturer: str = "", data_date: str = ""
+    samples: list[ADFSample], *, model: str, manufacturer: str = "", data_date: str = "",
+    fmin_ghz: float = 0.0, fmax_ghz: float = 0.0,
 ) -> str:
+    if not all(np.isfinite(bound) and bound >= 0.0 for bound in (fmin_ghz, fmax_ghz)):
+        raise ValueError("ADF frequency bounds must be finite, nonnegative GHz values")
+    if fmin_ghz > 0.0 and fmax_ghz > 0.0 and fmax_ghz <= fmin_ghz:
+        raise ValueError("ADF frequency maximum must be greater than the minimum, or 0 for no upper bound")
     if not samples:
         raise ValueError("ADF export requires at least one far-field sample")
+    # Use the same inclusive GHz comparisons as Standards Compliance.
+    samples = [sample for sample in samples
+               if (fmin_ghz <= 0.0 or sample.frequency_hz / 1e9 >= fmin_ghz)
+               and (fmax_ghz <= 0.0 or sample.frequency_hz / 1e9 <= fmax_ghz)]
+    if not samples:
+        raise ValueError("ADF export: no far-field samples within the selected frequency range (GHz)")
     frequencies = sorted({sample.frequency_hz for sample in samples})
     low, high = frequencies[0], frequencies[-1]
     middle = (low + high) / 2.0

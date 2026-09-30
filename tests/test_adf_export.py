@@ -124,6 +124,34 @@ def test_missing_azimuth_planes_are_interpolated_periodically_without_copying_a_
     assert math.isnan(sample.azimuth_width_deg)
 
 
+@pytest.mark.parametrize("fmin,fmax,low,high,level", [
+    (5.0, 6.0, 5.0, 6.0, -20.0),
+    (0.0, 5.0, 4.0, 5.0, -10.0),
+    (6.0, 0.0, 6.0, 7.0, -2.0),
+    (0.0, 0.0, 4.0, 7.0, -2.0),
+])
+def test_frequency_bounds_filter_envelope_and_gain_headers_inclusively(fmin, fmax, low, high, level):
+    samples = [_sample("h", frequency * 1e9, "H", [-180, 0, 180], [side, 0, side], frequency + 8)
+               for frequency, side in ((4, -10), (5, -20), (6, -30), (7, -2))]
+    headers, cuts = _read_document(build_adf_document(
+        samples, model="Selected band", fmin_ghz=fmin, fmax_ghz=fmax,
+    ))
+    assert float(headers["LOWFRQ"]) == low * 1000
+    assert float(headers["HGHFRQ"]) == high * 1000
+    assert float(headers["LWGAIN"]) == low + 8
+    assert float(headers["MDGAIN"]) == math.floor((low + high) / 2) + 8
+    assert float(headers["HGGAIN"]) == high + 8
+    assert cuts[0]["points"][0][1] == level
+    assert cuts[1]["points"][0][1] == level - 30
+
+
+@pytest.mark.parametrize("fmin,fmax", [(6, 5), (5, 5), (-1, 0), (0, float("nan")), (float("inf"), 0)])
+def test_invalid_frequency_bounds_are_rejected(fmin, fmax):
+    sample = _sample("h", 5e9, "H", [-180, 0, 180], [-60, 0, -60], 12)
+    with pytest.raises(ValueError, match="ADF frequency"):
+        build_adf_document([sample], model="Example", fmin_ghz=fmin, fmax_ghz=fmax)
+
+
 def test_single_polarization_rounding_keeps_highest_level_and_metadata_cannot_add_records():
     sample = _sample("h", 5e9, "H", [-1, 0, 0.2001, 0.2002, 1], [-10, 0, -8, -2, -10], 12)
     headers, cuts = _read_document(build_adf_document(
@@ -156,7 +184,8 @@ def test_beam_run_publishes_dual_polarization_adf_with_other_exports(tmp_path, s
     stale.write_text("obsolete", encoding="ascii")
     argv = ["beamwidth_xlsx.py", str(output), str(horizontal), str(vertical),
             "--port-labels-json", '{"port1":"H","port2":"V"}',
-            "--adf-manufacturer", "Maker", "--adf-model", "Antenna model"]
+            "--adf-manufacturer", "Maker", "--adf-model", "Antenna model",
+            "--adf-fmin", "6.0", "--adf-fmax", "6.1"]
     if suffix == ".xlsx":
         completed = subprocess.run(
             [sys.executable, str(Path(beamwidth_xlsx.__file__).resolve()), *argv[1:]],
@@ -171,6 +200,7 @@ def test_beam_run_publishes_dual_polarization_adf_with_other_exports(tmp_path, s
     headers, cuts = _read_document(raw.decode("ascii"))
     assert headers["ANTMAN"] == "Maker"
     assert headers["MODNUM"] == "Antenna model"
+    assert float(headers["LOWFRQ"]) == float(headers["HGHFRQ"]) == 6000
     assert len(cuts) == 4
     assert raw.count(b"\n") == raw.count(b"\r\n")
     assert not stale.exists()
@@ -178,7 +208,23 @@ def test_beam_run_publishes_dual_polarization_adf_with_other_exports(tmp_path, s
     assert len(list((radiation / "linkCalc").glob("*.ffs"))) == 4
     assert len(list((radiation / "netsim").iterdir())) == 2
     rows = beamwidth_xlsx.compute_for_file(horizontal, 1, 8)[0]
-    assert float(headers["MDGAIN"]) == pytest.approx(rows[0][17], abs=0.01)
+    assert float(headers["MDGAIN"]) == pytest.approx(rows[2][17], abs=0.01)
+
+
+def test_empty_frequency_selection_keeps_previously_published_outputs(tmp_path):
+    source, output = tmp_path / "sample_H.ffs", tmp_path / "Example.xlsx"
+    _write_ffs(source, "H")
+    output.write_bytes(b"previous workbook")
+    adf = tmp_path / beamwidth_xlsx.RADIATION_PATTERN_FILES_DIR / "adf" / "Example.adf"
+    adf.parent.mkdir(parents=True)
+    adf.write_bytes(b"previous ADF")
+    with mock.patch.object(sys, "argv", [
+        "beamwidth_xlsx.py", str(output), str(source), "--adf-fmin", "8", "--adf-fmax", "9",
+    ]):
+        with pytest.raises(SystemExit, match="no far-field samples within the selected frequency range"):
+            beamwidth_xlsx.main()
+    assert output.read_bytes() == b"previous workbook"
+    assert adf.read_bytes() == b"previous ADF"
 
 
 def test_adf_write_failure_keeps_previously_published_outputs(tmp_path):

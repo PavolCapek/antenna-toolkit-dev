@@ -188,7 +188,14 @@ for vertical inputs. A single polarization produces two cuts; H and V together
 produce four, matching the attached ADF layout. Port labels or filenames identify
 H/V; otherwise the dominant main-beam field determines it.
 
-The envelope takes the highest relative level across the available frequency
+The ADF uses the **Frequency min** and **Frequency max** (GHz) selected in
+**Standards compliance**, including both bounds. A zero bound is unrestricted.
+Its envelope, gains, and beamwidths use only samples inside that range;
+`LOWFRQ` and `HGHFRQ` report the lowest and highest included samples in MHz.
+Changing these bounds marks Workbook for regeneration. If no samples match,
+generation reports an error and preserves the previous outputs.
+
+The envelope takes the highest relative level across the selected frequency
 samples at each angle. Co- and cross-polar levels use the same co-polar peak
 reference at each frequency. Actual opposite half-planes and native theta spacing
 are retained to the format's 0.001-degree precision; absent azimuth phi planes
@@ -205,7 +212,8 @@ All enabled inputs should describe the same antenna and operating band.
 Set **ADF manufacturer** and **ADF model** in the processing settings; they are
 saved with projects and presets. Blank values use `UNKNOWN` for manufacturer
 and the output filename stem for model. CLI equivalents are `--adf-manufacturer`,
-`--adf-model`, and `--port-labels-json`. The file uses ASCII, Windows CRLF line
+`--adf-model`, and `--port-labels-json`; `--adf-fmin` and `--adf-fmax` set the
+ADF frequency bounds in GHz. The file uses ASCII, Windows CRLF line
 endings, and the example's `NOFREQ: -1.00` / blank `PATFRE` envelope convention.
 
 ## Workbook Contents

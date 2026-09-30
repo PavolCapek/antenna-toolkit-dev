@@ -201,6 +201,8 @@ class PipelineCommandTests(unittest.TestCase):
         )
         self.assertIn(str(context.beam_output), beam_command)
         self.assertEqual(beam_command[beam_command.index("--port-labels-json") + 1], '{"one.ffs":"P1"}')
+        self.assertEqual(beam_command[beam_command.index("--adf-fmin") + 1], "4.9")
+        self.assertEqual(beam_command[beam_command.index("--adf-fmax") + 1], "6.1")
 
         vswr_command = build_vswr_command(
             python_executable="python",

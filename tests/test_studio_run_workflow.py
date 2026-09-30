@@ -15,6 +15,8 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.window._add_ffs_files([{"path": str(source), "enabled": True, "port_label": "V"}])
         self.window.adf_manufacturer.setText("Maker")
         self.window.adf_model.setText("Model")
+        self.window.compliance_fmin.setValue(4.9)
+        self.window.compliance_fmax.setValue(6.1)
         values = self.window.collect_preset_values()
         normalized = qt_module.normalize_preset_payload({"ADF": values})["ADF"]
         self.window.apply_preset_values(normalized)
@@ -32,7 +34,24 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
             command = call.args[1]
             self.assertEqual(command[command.index("--adf-manufacturer") + 1], "Maker")
             self.assertEqual(command[command.index("--adf-model") + 1], "Model")
+            self.assertEqual(command[command.index("--adf-fmin") + 1], "4.9")
+            self.assertEqual(command[command.index("--adf-fmax") + 1], "6.1")
             self.assertIn('"V"', command[command.index("--port-labels-json") + 1])
+
+    def test_compliance_frequency_change_marks_adf_workbook_stale(self) -> None:
+        self.window._stage_state("beam")["snapshot"] = self.window._current_stage_snapshot("beam")
+        with mock.patch.object(self.window, "_stage_output_exists", return_value=True):
+            self.assertFalse(self.window._stage_is_stale("beam"))
+            self.window.compliance_fmin.setValue(5.0)
+            self.assertTrue(self.window._stage_is_stale("beam"))
+
+    def test_invalid_compliance_frequency_range_blocks_workbook_adf(self) -> None:
+        self.window.compliance_fmin.setValue(6.0)
+        self.window.compliance_fmax.setValue(5.0)
+        self.assertIn(
+            "Set a valid compliance frequency window or clear one of its bounds.",
+            self.window._run_preflight_messages(["beam"]),
+        )
 
     def test_sector_preflight_requires_valid_width_and_declared_center(self) -> None:
         self.window.compliance_sector_width.setValue(10.0)
@@ -438,6 +457,8 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertEqual(queued, ["beam", "compliance", "extract", "plot", "vswr", "datasheet"])
         self.assertEqual(queued_args["beam"][queued_args["beam"].index("--adf-manufacturer") + 1], "Pipeline Maker")
         self.assertEqual(queued_args["beam"][queued_args["beam"].index("--adf-model") + 1], "Pipeline Model")
+        self.assertEqual(queued_args["beam"][queued_args["beam"].index("--adf-fmin") + 1], "4.9")
+        self.assertEqual(queued_args["beam"][queued_args["beam"].index("--adf-fmax") + 1], "6.1")
         self.assertIn("--port-labels-json", queued_args["beam"])
         self.assertTrue(any(Path(arg).name == "compliance_report.py" for arg in queued_args["compliance"]))
         self.assertIn("--port-labels-json", queued_args["compliance"])

@@ -1778,13 +1778,13 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             compliance_form,
             "Frequency min",
             StepperField(self.compliance_fmin),
-            "Minimum frequency included in the compliance calculation, in GHz. Use 0 for no lower bound.",
+            "Minimum frequency included in the compliance calculation and ADF envelope, in GHz (inclusive). Use 0 for no lower bound.",
         )
         add_form_row(
             compliance_form,
             "Frequency max",
             StepperField(self.compliance_fmax),
-            "Maximum frequency included in the compliance calculation, in GHz. Use 0 for no upper bound.",
+            "Maximum frequency included in the compliance calculation and ADF envelope, in GHz (inclusive). Use 0 for no upper bound.",
         )
         add_form_row(
             compliance_form,

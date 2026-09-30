@@ -28,6 +28,8 @@ def build_beam_command(
         args.extend(["--smooth", str(settings.smooth), "--theta-window", str(settings.theta)])
         _append_if_text(args, "--adf-manufacturer", settings.adf_manufacturer)
         _append_if_text(args, "--adf-model", settings.adf_model)
+        _append_if_nonzero(args, "--adf-fmin", settings.compliance_fmin)
+        _append_if_nonzero(args, "--adf-fmax", settings.compliance_fmax)
     _append_if_text(args, "--port-labels-json", port_labels_json)
     return args
 
