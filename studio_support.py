@@ -86,6 +86,8 @@ PRESET_DIRECTORY_NAME = "Presets"
 PRESET_KEYS = [
     "smooth",
     "theta",
+    "adf_manufacturer",
+    "adf_model",
     "smooth2",
     "shared_xstep",
     "shared_fmin",

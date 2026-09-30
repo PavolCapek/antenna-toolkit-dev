@@ -28,6 +28,11 @@ Beamwidth extractor with XLSX output and per-frequency antenna exports.
   - All frequencies are stored as MHz patterns with 361 phi rows by 181 theta columns.
   - Files are stored in **radiaiton pattern files/netsim/** and retain their UUID on reruns.
 
+- Generates one NSMA **ADF envelope** per workbook from all enabled inputs:
+  - Separate azimuth co/cross cuts for each available H/V polarization.
+  - Native angular sampling, actual opposite half-planes, directivity as header gain.
+  - Saved as **radiaiton pattern files/adf/<workbook-stem>.adf**.
+
 Usage:
   python3 beamwidth_xlsx.py out.xlsx file1.ffs file2.ffs [--smooth 1 --theta-window 8]
 
@@ -45,6 +50,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from adf_export import ADFSample, build_adf_document, sample_from_rows, write_adf_file
 from pipeline.atomic import StageWorkspace
 from pipeline.progress import emit_progress
 from pipeline.stages import RADIATION_PATTERN_FILES_DIR
@@ -456,7 +462,7 @@ def interpolate_netsim_gain_grid(
 # Core computation for one file (returns table rows + patterns)
 # ---------------------------
 
-def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
+def compute_for_file(ffs_path: Path, smooth: int, theta_window: float, port_label: str = ""):
     """Return workbook patterns plus LinkCalc and NetSim outputs.
 
     - rows_out: list[list[object]] for the data table.
@@ -466,6 +472,7 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
     - freq_labels: list of column labels (e.g., '5.500 GHz').
     - linkcalc_rows: mapping of frequency Hz to source-ordered `(phi, theta, gain_dBi)` rows.
     - netsim_patterns: frequency-MHz patterns with 361x181 interpolated gain matrices.
+    - adf_samples: native azimuth co/cross cuts and header metrics per frequency.
     """
     by_freq = read_ffs_broadband(ffs_path)
     thresh = {3.0: ('theta_3dB_half_deg', 'beamwidth_3dB_2sided_deg'),
@@ -478,6 +485,7 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
     freq_labels: list[str] = []
     linkcalc_rows: dict[float, list[LinkCalcRow]] = {}
     netsim_patterns: list[dict[str, object]] = []
+    adf_samples: list[ADFSample] = []
 
     # Build θ grid for patterns: -180..180, 1° step
     theta_grid = np.arange(-180.0, 181.0, 1.0)
@@ -628,6 +636,10 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
             rows_out.append(row)
 
         freq_labels.append(f"{freq_Hz/1e9:.3f} GHz")
+        try:
+            adf_samples.append(sample_from_rows(ffs_path, freq_Hz, rows, port_label))
+        except ValueError as exc:
+            raise FFSParseError(str(exc)) from exc
 
     # Stack patterns (len(theta_grid) x Nfreq)
     patterns_phi0 = np.column_stack(pat0_cols) if pat0_cols else None
@@ -642,6 +654,7 @@ def compute_for_file(ffs_path: Path, smooth: int, theta_window: float):
         freq_labels,
         linkcalc_rows,
         netsim_patterns,
+        adf_samples,
     )
 
 
@@ -851,14 +864,25 @@ def _fail_invalid_inputs(errors: list[str]) -> None:
         raise SystemExit(f"Workbook generation failed; no outputs were published:\n{detail}")
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Beamwidth/Directivity/Beam-efficiency to XLSX with radiation diagrams, .ant, LinkCalc, and NetSim outputs.")
+    ap = argparse.ArgumentParser(description="Beamwidth/Directivity/Beam-efficiency to XLSX with radiation diagrams, .ant, LinkCalc, NetSim, and ADF outputs.")
     ap.add_argument('output', type=Path, help='Output file (.xlsx preferred; if .csv, a per-input CSV is created).')
     ap.add_argument('ffs', nargs='+', type=Path, help='One or more CST Farfield Source Files (.ffs)')
     ap.add_argument('--smooth', type=int, default=1,
                     help='Smoothing window (odd, samples) for main-lobe detection; 1 = no smoothing')
     ap.add_argument('--theta-window', type=float, default=8.0,
                     help='Theta window (deg) around global peak to search for local peaks/nulls')
+    ap.add_argument('--port-labels-json', default='', help='Optional input-path/stem to H/V port label mapping.')
+    ap.add_argument('--adf-manufacturer', default='', help='ADF antenna manufacturer (default: UNKNOWN).')
+    ap.add_argument('--adf-model', default='', help='ADF model name (default: output stem).')
     args = ap.parse_args()
+
+    try:
+        port_labels = json.loads(args.port_labels_json) if args.port_labels_json else {}
+        if not isinstance(port_labels, dict):
+            raise ValueError('expected a JSON object')
+        port_labels = {str(key).lower(): str(value) for key, value in port_labels.items()}
+    except (ValueError, TypeError) as exc:
+        ap.error(f'Invalid --port-labels-json: {exc}')
 
     input_maps = build_input_output_map(args.ffs)
     validation_errors: list[str] = []
@@ -873,10 +897,21 @@ def main() -> int:
             continue
         seen_paths.add(resolved)
         try:
-            computed_results.append(compute_for_file(fpath, args.smooth, args.theta_window))
+            label = next((port_labels[key.lower()] for key in (str(resolved), str(fpath), fpath.stem)
+                          if key.lower() in port_labels), '')
+            computed_results.append(compute_for_file(fpath, args.smooth, args.theta_window, label))
         except FFSParseError as exc:
             validation_errors.append(str(exc))
     _fail_invalid_inputs(validation_errors)
+    try:
+        adf_document = build_adf_document(
+            [sample for result in computed_results for sample in result[7]],
+            model=args.adf_model.strip() or args.output.stem,
+            manufacturer=args.adf_manufacturer.strip(),
+        )
+    except ValueError as exc:
+        _fail_invalid_inputs([str(exc)])
+    adf_relative_path = Path(RADIATION_PATTERN_FILES_DIR) / 'adf' / f'{args.output.stem}.adf'
 
     header = ['freq_Hz', 'freq_GHz', 'phi_cut_deg',
               'theta_3dB_half_deg', 'beamwidth_3dB_2sided_deg',
@@ -912,6 +947,7 @@ def main() -> int:
 
         stage = StageWorkspace(args.output.parent, "beam")
         radiation_dir = stage.path(RADIATION_PATTERN_FILES_DIR)
+        write_adf_file(stage.path(adf_relative_path), adf_document)
         ant_dir = radiation_dir / "ant_files"
         linkcalc_dir = radiation_dir / "linkCalc"
         netsim_dir = radiation_dir / "netsim"
@@ -924,7 +960,7 @@ def main() -> int:
         expected_netsim_files: list[Path] = []
 
         for fpath, mapping, result in zip(args.ffs, input_maps, computed_results):
-            rows, theta_grid, pat0, pat90, labels, linkcalc_rows, netsim_patterns = result
+            rows, theta_grid, pat0, pat90, labels, linkcalc_rows, netsim_patterns, _adf_samples = result
 
             # Data sheet
             title = mapping["data"]
@@ -1013,19 +1049,21 @@ def main() -> int:
         stage.publish(
             [args.output.name, RADIATION_PATTERN_FILES_DIR],
             obsolete=["ant_files", "linkCalc", "netsim"],
-            validate=expected_ant_files + expected_linkcalc_files + expected_netsim_files,
+            validate=expected_ant_files + expected_linkcalc_files + expected_netsim_files + [adf_relative_path],
         )
         print(f"Wrote XLSX: {args.output} with {len(args.ffs)} file sheets + radiation diagrams + summary.")
         published_radiation_dir = args.output.parent / RADIATION_PATTERN_FILES_DIR
         print(f".ant files written to: {published_radiation_dir / 'ant_files'}")
         print(f"LinkCalc .ffs files written to: {published_radiation_dir / 'linkCalc'}")
         print(f"NetSim antenna files written to: {published_radiation_dir / 'netsim'}")
+        print(f"ADF envelope written to: {args.output.parent / adf_relative_path}")
     else:
         # CSV fallback: data-only, one CSV per input
         base = args.output
         base.parent.mkdir(parents=True, exist_ok=True)
         stage = StageWorkspace(base.parent, "beam")
         radiation_dir = stage.path(RADIATION_PATTERN_FILES_DIR)
+        write_adf_file(stage.path(adf_relative_path), adf_document)
         ant_dir = radiation_dir / "ant_files"
         linkcalc_dir = radiation_dir / "linkCalc"
         netsim_dir = radiation_dir / "netsim"
@@ -1038,7 +1076,7 @@ def main() -> int:
         expected_netsim_files: list[Path] = []
         required_outputs: list[str] = [RADIATION_PATTERN_FILES_DIR]
         for fpath, mapping, result in zip(args.ffs, input_maps, computed_results):
-            rows, theta_grid, pat0, pat90, labels, linkcalc_rows, netsim_patterns = result
+            rows, theta_grid, pat0, pat90, labels, linkcalc_rows, netsim_patterns, _adf_samples = result
             out_name = f"{base.stem}-{mapping['ant_stem']}.csv"
             out_csv = stage.path(out_name)
             required_outputs.append(out_name)
@@ -1094,13 +1132,14 @@ def main() -> int:
         stage.publish(
             required_outputs,
             obsolete=obsolete_outputs + ["ant_files", "linkCalc", "netsim"],
-            validate=expected_ant_files + expected_linkcalc_files + expected_netsim_files,
+            validate=expected_ant_files + expected_linkcalc_files + expected_netsim_files + [adf_relative_path],
         )
         emit_progress("beam", progress_total, progress_total, f"Finalizing {base.name}")
         published_radiation_dir = base.parent / RADIATION_PATTERN_FILES_DIR
         print(f".ant files written to: {published_radiation_dir / 'ant_files'}")
         print(f"LinkCalc .ffs files written to: {published_radiation_dir / 'linkCalc'}")
         print(f"NetSim antenna files written to: {published_radiation_dir / 'netsim'}")
+        print(f"ADF envelope written to: {base.parent / adf_relative_path}")
 
     return 0
 

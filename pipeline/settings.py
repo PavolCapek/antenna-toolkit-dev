@@ -53,6 +53,8 @@ def _legacy_float(values: dict[str, Any], primary: str, legacy: str, default: fl
 class PresetSettings:
     smooth: int = 5
     theta: float = 8.0
+    adf_manufacturer: str = ""
+    adf_model: str = ""
     smooth2: int = 5
     shared_xstep: float = 0.2
     shared_fmin: float = 0.0
@@ -119,6 +121,8 @@ class PresetSettings:
         return cls(
             smooth=_int_value(source, "smooth", defaults.smooth),
             theta=_float_value(source, "theta", defaults.theta),
+            adf_manufacturer=_str_value(source, "adf_manufacturer", defaults.adf_manufacturer),
+            adf_model=_str_value(source, "adf_model", defaults.adf_model),
             smooth2=_int_value(source, "smooth2", defaults.smooth2),
             shared_xstep=_float_value(source, "shared_xstep", defaults.shared_xstep),
             shared_fmin=_float_value(source, "shared_fmin", defaults.shared_fmin),

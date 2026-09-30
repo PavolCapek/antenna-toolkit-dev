@@ -1707,6 +1707,12 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
 
         self.beam_smooth = NoWheelSpinBox(); self.beam_smooth.setRange(1, 99); self.beam_smooth.setValue(int(self.store.get("smooth", 5))); self.beam_smooth.valueChanged.connect(lambda v: self.store.set("smooth", int(v)))
         self.theta_window = TrimmedDoubleSpinBox(); self.theta_window.setRange(0.0, 90.0); self.theta_window.setDecimals(6); self.theta_window.setSingleStep(0.5); self.theta_window.setValue(float(self.store.get("theta", 8.0))); self.theta_window.valueChanged.connect(lambda v: self.store.set("theta", float(v)))
+        self.adf_manufacturer = QLineEdit(str(self.store.get("adf_manufacturer", "")))
+        self.adf_manufacturer.setPlaceholderText("UNKNOWN when blank")
+        self.adf_manufacturer.textChanged.connect(lambda v: self.store.set("adf_manufacturer", v))
+        self.adf_model = QLineEdit(str(self.store.get("adf_model", "")))
+        self.adf_model.setPlaceholderText("Project name when blank")
+        self.adf_model.textChanged.connect(lambda v: self.store.set("adf_model", v))
         self.plot_smooth = NoWheelSpinBox(); self.plot_smooth.setRange(1, 99); self.plot_smooth.setValue(int(self.store.get("smooth2", 5))); self.plot_smooth.valueChanged.connect(lambda v: self.store.set("smooth2", int(v)))
         shared_xstep = self.store.get("shared_xstep", self.store.get("xstep", self.store.get("vswr_xstep", 0.2)))
         shared_fmin = self.store.get("shared_fmin", self.store.get("plot_fmin", self.store.get("vswr_fmin", 0.0)))
@@ -1753,6 +1759,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         workbook_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         add_form_row(workbook_form, "Beam smooth", StepperField(self.beam_smooth), "Smoothing window used while creating the workbook from the far-field files. Higher values smooth more aggressively.")
         add_form_row(workbook_form, "Theta window", StepperField(self.theta_window), "Angular window in degrees used for the beamwidth calculation around the main lobe.")
+        add_form_row(workbook_form, "ADF manufacturer", self.adf_manufacturer, "Antenna manufacturer written into the ADF envelope export.")
+        add_form_row(workbook_form, "ADF model", self.adf_model, "Antenna model written into the ADF envelope export. Leave blank to use the project name.")
         add_form_row(workbook_form, "Plot smooth", StepperField(self.plot_smooth), "Smoothing window applied to the workbook-based line plots.")
         add_form_row(workbook_form, "VSWR smooth", StepperField(self.vswr_smooth), "Smoothing window applied to the VSWR traces.")
         workbook_card.body.addLayout(workbook_form)
@@ -2210,6 +2218,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.technical_data_field.clear()
         self.beam_smooth.setValue(5)
         self.theta_window.setValue(8.0)
+        self.adf_manufacturer.clear()
+        self.adf_model.clear()
         self.plot_smooth.setValue(5)
         self.shared_xstep.setValue(0.2)
         self.shared_fmin.setValue(0.0)
@@ -2356,6 +2366,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         labels = {
             "smooth": "Beam smoothing",
             "theta": "Theta window",
+            "adf_manufacturer": "ADF manufacturer",
+            "adf_model": "ADF model",
             "smooth2": "Plot smoothing",
             "shared_xstep": "Shared X step",
             "shared_fmin": "Shared frequency minimum",
@@ -2974,6 +2986,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         tracked_signals = [
             self.beam_smooth.valueChanged,
             self.theta_window.valueChanged,
+            self.adf_manufacturer.textChanged,
+            self.adf_model.textChanged,
             self.plot_smooth.valueChanged,
             self.shared_xstep.valueChanged,
             self.shared_fmin.valueChanged,
@@ -4316,6 +4330,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self.radiation_clear_button,
             self.datasheet_template_combo,
             self.pdf_metadata_author,
+            self.adf_manufacturer,
+            self.adf_model,
         ):
             widget.setEnabled(has_project)
         self.btn_clear_outputs.setEnabled(has_project and not is_running and has_generated_outputs)
@@ -4747,6 +4763,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         return PresetSettings.from_mapping({
             "smooth": int(self.beam_smooth.value()),
             "theta": float(self.theta_window.value()),
+            "adf_manufacturer": self.adf_manufacturer.text().strip(),
+            "adf_model": self.adf_model.text().strip(),
             "smooth2": int(self.plot_smooth.value()),
             "shared_xstep": float(self.shared_xstep.value()),
             "shared_fmin": float(self.shared_fmin.value()),
@@ -4829,6 +4847,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
 
         if "smooth" in values: self.beam_smooth.setValue(int(values["smooth"]))
         if "theta" in values: self.theta_window.setValue(float(values["theta"]))
+        if "adf_manufacturer" in values: self.adf_manufacturer.setText(str(values["adf_manufacturer"]))
+        if "adf_model" in values: self.adf_model.setText(str(values["adf_model"]))
         if "smooth2" in values: self.plot_smooth.setValue(int(values["smooth2"]))
         if "shared_xstep" in values: self.shared_xstep.setValue(float(values["shared_xstep"]))
         if "shared_fmin" in values: self.shared_fmin.setValue(float(values["shared_fmin"]))

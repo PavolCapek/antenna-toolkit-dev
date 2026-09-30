@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.commands import build_compliance_command, build_datasheet_command, build_plot_command, build_vswr_command
+from pipeline.commands import build_beam_command, build_compliance_command, build_datasheet_command, build_plot_command, build_vswr_command
 from pipeline.run_context import RunContext
 from pipeline.settings import PresetSettings
 
@@ -194,6 +194,13 @@ class PipelineCommandTests(unittest.TestCase):
         self.assertIn(str(context.beam_output), plot_command)
         self.assertIn("project", plot_command)
         self.assertEqual(plot_command[plot_command.index("--polar-port-labels-json") + 1], '{"one.ffs":"P1"}')
+
+        beam_command = build_beam_command(
+            python_executable="python", script_path="beamwidth_xlsx.py",
+            ffs_paths=["one.ffs"], context=context,
+        )
+        self.assertIn(str(context.beam_output), beam_command)
+        self.assertEqual(beam_command[beam_command.index("--port-labels-json") + 1], '{"one.ffs":"P1"}')
 
         vswr_command = build_vswr_command(
             python_executable="python",

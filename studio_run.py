@@ -7,7 +7,7 @@ from PySide6.QtCore import QCoreApplication, QTimer
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox
 
-from pipeline.commands import build_compliance_command, build_datasheet_command, build_plot_command, build_vswr_command
+from pipeline.commands import build_beam_command, build_compliance_command, build_datasheet_command, build_plot_command, build_vswr_command
 from pipeline.preflight import collect_preflight_issues
 from pipeline.run_context import RunContext
 from project_store import utc_now_iso
@@ -337,10 +337,10 @@ class StudioRunMixin:
         self._save_project_if_dirty()
         for stage_key in stage_keys:
             if stage_key == "beam":
-                args = [which_python(), "-u", SCRIPT_BEAM, str(context.beam_output)] + self.selected_ffs() + [
-                    "--smooth", str(self.beam_smooth.value()),
-                    "--theta-window", str(self.theta_window.value()),
-                ]
+                args = build_beam_command(
+                    python_executable=which_python(), script_path=SCRIPT_BEAM,
+                    ffs_paths=self.selected_ffs(), context=context,
+                )
             elif stage_key == "compliance":
                 args = build_compliance_command(
                     python_executable=which_python(),
@@ -581,12 +581,10 @@ class StudioRunMixin:
     def run_beam(self):
         if not self._run_preflight_passes(["beam"], "Workbook Preflight"):
             return
-        out = str(self.deduced_beam_output())
-        ffs = self.selected_ffs()
-        args = [which_python(), "-u", SCRIPT_BEAM, out] + ffs + [
-            "--smooth", str(self.beam_smooth.value()),
-            "--theta-window", str(self.theta_window.value())
-        ]
+        args = build_beam_command(
+            python_executable=which_python(), script_path=SCRIPT_BEAM,
+            ffs_paths=self.selected_ffs(), context=self._build_run_context(),
+        )
         self._save_project_if_dirty()
         self._enqueue_stage("beam", args)
 
@@ -697,7 +695,6 @@ class StudioRunMixin:
             return
         self._show_run_start_feedback("Preparing full pipeline...")
         context = self._build_run_context()
-        out = str(context.beam_output)
         ffs = self.selected_ffs()
         template_path = self.selected_datasheet_template_path()
         try:
@@ -707,10 +704,10 @@ class StudioRunMixin:
             self.status(str(exc))
             return
 
-        args_beam = [which_python(), "-u", SCRIPT_BEAM, out] + ffs + [
-            "--smooth", str(self.beam_smooth.value()),
-            "--theta-window", str(self.theta_window.value())
-        ]
+        args_beam = build_beam_command(
+            python_executable=which_python(), script_path=SCRIPT_BEAM,
+            ffs_paths=ffs, context=context,
+        )
         stage_commands: list[tuple[str, list[str]]] = [("beam", args_beam)]
 
         stage_commands.append(

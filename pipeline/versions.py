@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 
+ADF_EXPORT_VERSION = 1
 BEAM_DATA_VERSION = 4
 EXTRACT_DATA_VERSION = 1
 TOUCHSTONE_PARSER_VERSION = 1
@@ -13,6 +14,8 @@ COMPLIANCE_RULES_VERSION = 8
 
 def stage_versions(stage_key: str) -> dict[str, int]:
     versions: dict[str, int] = {}
+    if stage_key == "beam":
+        versions["adf_export"] = ADF_EXPORT_VERSION
     if stage_key == "compliance":
         versions["compliance_rules"] = COMPLIANCE_RULES_VERSION
     if stage_key in {"beam", "extract", "plot", "datasheet"}:

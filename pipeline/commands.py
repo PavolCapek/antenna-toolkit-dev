@@ -7,6 +7,31 @@ from pipeline.run_context import RunContext
 from pipeline.settings import PresetSettings
 
 
+def build_beam_command(
+    *,
+    python_executable: str,
+    script_path: str,
+    ffs_paths: Sequence[str | Path],
+    output_path: str | Path | None = None,
+    settings: PresetSettings | None = None,
+    port_labels_json: str = "",
+    context: RunContext | None = None,
+) -> list[str]:
+    if context is not None:
+        output_path = context.beam_output
+        port_labels_json = context.polar_port_labels_json
+        settings = context.settings
+    if output_path is None:
+        raise ValueError("build_beam_command requires output_path")
+    args = [python_executable, "-u", script_path, str(output_path), *(str(path) for path in ffs_paths)]
+    if settings is not None:
+        args.extend(["--smooth", str(settings.smooth), "--theta-window", str(settings.theta)])
+        _append_if_text(args, "--adf-manufacturer", settings.adf_manufacturer)
+        _append_if_text(args, "--adf-model", settings.adf_model)
+    _append_if_text(args, "--port-labels-json", port_labels_json)
+    return args
+
+
 def build_compliance_command(
     *,
     python_executable: str,

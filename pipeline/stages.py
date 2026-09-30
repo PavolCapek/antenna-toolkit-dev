@@ -9,7 +9,7 @@ from pipeline.versions import stage_versions
 RADIATION_PATTERN_FILES_DIR = "radiaiton pattern files"
 
 STAGE_SETTING_KEYS: dict[str, tuple[str, ...]] = {
-    "beam": ("smooth", "theta"),
+    "beam": ("smooth", "theta", "adf_manufacturer", "adf_model"),
     "compliance": (
         "compliance_fmin",
         "compliance_fmax",
@@ -131,8 +131,8 @@ def stage_output_files(
     compliance_output: Path | None = None,
 ) -> list[Path]:
     if stage_key == "beam":
-        files = [beam_output]
         radiation_dir = project_dir / RADIATION_PATTERN_FILES_DIR
+        files = [beam_output, radiation_dir / "adf" / f"{beam_output.stem}.adf"]
         for folder_name in ("ant_files", "linkCalc", "netsim"):
             folder = radiation_dir / folder_name
             if folder.exists():

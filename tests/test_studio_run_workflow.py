@@ -9,6 +9,31 @@ pytestmark = [pytest.mark.qt_slow, pytest.mark.gui_workflow]
 
 
 class StudioRunWorkflowTests(StudioDirtyStateBase):
+    def test_adf_metadata_and_port_labels_reach_workbook_and_needed_runs(self) -> None:
+        source = Path(self.temp_dir.name) / "port1.ffs"
+        source.write_text("ffs", encoding="ascii")
+        self.window._add_ffs_files([{"path": str(source), "enabled": True, "port_label": "V"}])
+        self.window.adf_manufacturer.setText("Maker")
+        self.window.adf_model.setText("Model")
+        values = self.window.collect_preset_values()
+        normalized = qt_module.normalize_preset_payload({"ADF": values})["ADF"]
+        self.window.apply_preset_values(normalized)
+        self.assertEqual(self.window.current_preset_settings().adf_model, "Model")
+        self.assertEqual(self.window._stage_settings_snapshot("beam")["adf_manufacturer"], "Maker")
+        with (
+            mock.patch.object(self.window, "_run_preflight_passes", return_value=True),
+            mock.patch.object(self.window, "_save_project_if_dirty"),
+            mock.patch.object(self.window, "_enqueue_stage") as enqueue,
+        ):
+            self.window.run_beam()
+            self.window._enqueue_stage_run_sequence(["beam"])
+        self.assertEqual(enqueue.call_count, 2)
+        for call in enqueue.call_args_list:
+            command = call.args[1]
+            self.assertEqual(command[command.index("--adf-manufacturer") + 1], "Maker")
+            self.assertEqual(command[command.index("--adf-model") + 1], "Model")
+            self.assertIn('"V"', command[command.index("--port-labels-json") + 1])
+
     def test_sector_preflight_requires_valid_width_and_declared_center(self) -> None:
         self.window.compliance_sector_width.setValue(10.0)
 
@@ -377,6 +402,8 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.window._set_touchstone(str(s2p_path))
         self.window._set_technical_data(str(technical_data_path))
         self.window.pdf_metadata_author.setText("Pipeline Author")
+        self.window.adf_manufacturer.setText("Pipeline Maker")
+        self.window.adf_model.setText("Pipeline Model")
         self.window.compliance_fmin.setValue(4.9)
         self.window.compliance_fmax.setValue(6.1)
         self.window.compliance_sector_width.setValue(90.0)
@@ -409,6 +436,9 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
             self.window.run_full()
 
         self.assertEqual(queued, ["beam", "compliance", "extract", "plot", "vswr", "datasheet"])
+        self.assertEqual(queued_args["beam"][queued_args["beam"].index("--adf-manufacturer") + 1], "Pipeline Maker")
+        self.assertEqual(queued_args["beam"][queued_args["beam"].index("--adf-model") + 1], "Pipeline Model")
+        self.assertIn("--port-labels-json", queued_args["beam"])
         self.assertTrue(any(Path(arg).name == "compliance_report.py" for arg in queued_args["compliance"]))
         self.assertIn("--port-labels-json", queued_args["compliance"])
         self.assertEqual(

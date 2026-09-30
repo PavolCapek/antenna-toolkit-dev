@@ -17,6 +17,20 @@ from pipeline.stages import (
 
 
 class StudioPipelineTests(unittest.TestCase):
+    def test_beam_outputs_include_adf_envelopes_and_export_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project_dir = Path(temp)
+            adf = project_dir / "radiaiton pattern files" / "adf" / "Demo.adf"
+            files = stage_output_files(
+                "beam", project_dir=project_dir, beam_output=project_dir / "Demo.xlsx",
+                extract_output=project_dir / "extract.xlsx", datasheet_output=project_dir / "datasheet.pdf",
+                vswr_output=project_dir / "vswr.svg",
+            )
+            self.assertIn(adf, files)
+            self.assertFalse(adf.exists())  # Missing ADF must keep Workbook ready to rerun.
+            self.assertEqual(files.count(adf), 1)
+        self.assertIn("adf_export", stage_tool_versions("beam"))
+
     @pytest.mark.export_acceptance
     def test_stage_settings_snapshot_filters_by_stage(self) -> None:
         values = {
