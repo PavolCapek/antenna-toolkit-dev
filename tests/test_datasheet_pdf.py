@@ -546,6 +546,18 @@ class DatasheetPdfTests(unittest.TestCase):
         self.assertEqual(replacements["Elevation Beam Width -3 dB/-6dB"], "7\N{DEGREE SIGN} / 10\N{DEGREE SIGN}")
         self.assertNotIn("Polarization", replacements)
 
+    def test_missing_beamwidth_preserves_other_threshold_and_polarization(self) -> None:
+        sheets = pd.read_excel(self.extract_workbook, sheet_name=None)
+        summary = sheets["ffs_summary"]
+        summary.loc[0, "avg_elevation_bw_3dB_deg"] = float("nan")
+        for rows, expected in ((2, "H N/A, V 20° / H 29°, V 30°"), (1, "N/A / 29°")):
+            with self.subTest(rows=rows):
+                with pd.ExcelWriter(self.extract_workbook) as writer:
+                    summary.iloc[:rows].to_excel(writer, sheet_name="ffs_summary", index=False)
+                    sheets["touchstone_summary"].to_excel(writer, sheet_name="touchstone_summary", index=False)
+                replacements = build_replacements_from_workbook(self.extract_workbook)
+                self.assertEqual(replacements["Elevation Beam Width -3 dB/-6dB"], expected)
+
     def test_build_datasheet_pdf_replaces_template_values(self) -> None:
         build_datasheet_pdf(
             output=self.output_pdf,

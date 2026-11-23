@@ -149,20 +149,24 @@ def _format_frequency_range(fmin_ghz: float, fmax_ghz: float) -> str:
     return f"{_round_half_up(fmin_ghz * 1000.0)} - {_round_half_up(fmax_ghz * 1000.0)} MHz"
 
 
+def _format_beamwidth(value: object) -> str:
+    degrees = _as_float(value)
+    if degrees is None:
+        return "N/A"
+    return f"{_round_half_up(degrees)}\N{DEGREE SIGN}"
+
+
 def _format_beamwidth_text(horizontal: pd.Series, vertical: pd.Series, three_db_col: str, six_db_col: str) -> str:
     return (
-        f"H {_round_half_up(float(horizontal[three_db_col]))}\N{DEGREE SIGN}, "
-        f"V {_round_half_up(float(vertical[three_db_col]))}\N{DEGREE SIGN} / "
-        f"H {_round_half_up(float(horizontal[six_db_col]))}\N{DEGREE SIGN}, "
-        f"V {_round_half_up(float(vertical[six_db_col]))}\N{DEGREE SIGN}"
+        f"H {_format_beamwidth(horizontal[three_db_col])}, "
+        f"V {_format_beamwidth(vertical[three_db_col])} / "
+        f"H {_format_beamwidth(horizontal[six_db_col])}, "
+        f"V {_format_beamwidth(vertical[six_db_col])}"
     )
 
 
 def _format_single_beamwidth_text(row: pd.Series, three_db_col: str, six_db_col: str) -> str:
-    return (
-        f"{_round_half_up(float(row[three_db_col]))}\N{DEGREE SIGN} / "
-        f"{_round_half_up(float(row[six_db_col]))}\N{DEGREE SIGN}"
-    )
+    return f"{_format_beamwidth(row[three_db_col])} / {_format_beamwidth(row[six_db_col])}"
 
 
 def _format_vswr_limit(max_vswr: float) -> str:
