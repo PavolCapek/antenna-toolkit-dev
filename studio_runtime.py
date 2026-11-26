@@ -16,6 +16,8 @@ STAGE_DEFINITIONS = [
     ("datasheet", "Datasheet"),
 ]
 STAGE_LABELS = dict(STAGE_DEFINITIONS)
+FULL_PIPELINE_STAGE_KEYS = list(STAGE_LABELS)
+STAGE_SNAPSHOT_SCHEMA_VERSION = 7
 
 
 class GoogleSheetDownloadError(RuntimeError):

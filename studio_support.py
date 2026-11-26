@@ -12,6 +12,7 @@ import webbrowser
 from pathlib import Path
 from typing import List
 from urllib.parse import quote
+from uuid import uuid4
 
 from PySide6.QtCore import QProcess, QProcessEnvironment
 from path_utils import (
@@ -357,36 +358,36 @@ class PresetFileStore:
             return
         path = self._path_for_name(name)
         payload = {"name": name, "values": clean[name]}
+        self.directory.mkdir(parents=True, exist_ok=True)
+        temporary_path = path.with_suffix(f".{uuid4().hex}.tmp")
         try:
-            self.directory.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        except Exception:
-            logger.warning("Could not save preset file: %s", path, exc_info=True)
+            temporary_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            temporary_path.replace(path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     def delete_preset(self, name: str) -> None:
-        path = self._path_for_name(name)
-        try:
-            if path.exists():
-                path.unlink()
-        except Exception:
-            logger.warning("Could not delete preset file: %s", path, exc_info=True)
+        self._path_for_name(name).unlink(missing_ok=True)
 
     def rename_preset(self, old_name: str, new_name: str, values: dict[str, object]) -> None:
-        if old_name != new_name:
-            self.delete_preset(old_name)
+        old_path = self._path_for_name(old_name)
+        new_path = self._path_for_name(new_name)
         self.save_preset(new_name, values)
+        if old_path.resolve() != new_path.resolve():
+            self.delete_preset(old_name)
 
     def replace_all(self, presets: dict[str, dict[str, object]]) -> None:
         clean = normalize_preset_payload(presets)
         desired_paths = {self._path_for_name(name).resolve() for name in clean}
-        for name, values in clean.items():
-            self.save_preset(name, values)
         try:
+            for name, values in clean.items():
+                self.save_preset(name, values)
             for path in self.directory.glob("*.json"):
                 if path.resolve() not in desired_paths:
                     path.unlink()
-        except Exception:
-            logger.warning("Could not prune preset directory: %s", self.directory, exc_info=True)
+        except OSError:
+            logger.warning("Could not migrate the preset directory: %s", self.directory, exc_info=True)
+            raise
 
     def migrate_from_state(self, store: Persist, key: str = PRESET_STORE_KEY) -> dict[str, dict[str, object]]:
         merged = self.load_presets()
@@ -398,7 +399,10 @@ class PresetFileStore:
         if inline:
             merged.update(inline)
         if merged != self.load_presets():
-            self.replace_all(merged)
+            try:
+                self.replace_all(merged)
+            except OSError:
+                return merged
         if inline:
             store.delete(key)
         return merged

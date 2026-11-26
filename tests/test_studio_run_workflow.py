@@ -213,7 +213,11 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         ffs_path.write_text("ffs", encoding="utf-8")
         self.window._add_ffs_files([{"path": str(ffs_path), "enabled": True, "port_label": "Port 1"}])
         project_dir = self.window.project_results_dir()
-        stem = self.window.deduced_beam_output().stem
+        beam_output = self.window.deduced_beam_output()
+        beam_output.parent.mkdir(parents=True, exist_ok=True)
+        beam_output.write_text("workbook", encoding="utf-8")
+        self.window._stage_state("beam")["snapshot"] = self.window._current_stage_snapshot("beam")
+        stem = beam_output.stem
         for suffix in (
             "gain",
             "gain-legend",
@@ -340,14 +344,50 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         self.assertIn("Plots are stale.", self.window.readiness_summary.text())
         self.assertFalse(self.window.readiness_action.isVisible())
 
-    def test_readiness_pane_hides_open_inputs_action(self) -> None:
+    def test_readiness_pane_offers_to_open_inputs(self) -> None:
         with mock.patch.object(self.window, "has_unsaved_project_changes", return_value=False):
             self.window.refresh_derived_paths()
             self.app.processEvents()
 
         self.assertIn("Add far-field files", self.window.readiness_summary.text())
         self.assertEqual(self.window.readiness_action.text(), "Open Inputs")
-        self.assertFalse(self.window.readiness_action.isVisible())
+        self.assertFalse(self.window.readiness_action.isHidden())
+
+    def test_run_readiness_shares_full_and_stage_preflight_blockers(self) -> None:
+        root = Path(self.temp_dir.name)
+        for name in ("sample.ffs", "sample.s1p", "technical.xlsx"):
+            (root / name).write_text("sample", encoding="utf-8")
+        self.window._add_ffs_files([str(root / "sample.ffs")])
+        self.window._set_touchstone(str(root / "sample.s1p"))
+        self.window._set_technical_data(str(root / "technical.xlsx"))
+
+        self.window.compliance_fmin.setValue(6.0)
+        self.window.compliance_fmax.setValue(5.0)
+        self.window.flush_derived_paths_refresh()
+
+        stage_keys = studio_module.FULL_PIPELINE_STAGE_KEYS
+        blockers = self.window._run_preflight_messages(stage_keys)
+        self.assertEqual(self.window.readiness_summary.text(), "\n".join(blockers))
+        self.assertIn("compliance frequency window", blockers[0])
+        self.assertFalse(self.window.btn_full.isEnabled())
+        self.assertFalse(self.window.stage_rerun_buttons["beam"].isEnabled())
+        self.assertFalse(self.window.stage_rerun_buttons["compliance"].isEnabled())
+        self.assertTrue(self.window.stage_rerun_buttons["vswr"].isEnabled())
+        self.assertEqual(self.window.readiness_action.text(), "Open Processing")
+        with mock.patch("antenna_toolkit_studio.QMessageBox.warning") as warning:
+            self.window.run_full()
+        self.assertIn(blockers[0], warning.call_args.args[2])
+
+        self.window.compliance_fmax.setValue(7.0)
+        self.window.flush_derived_paths_refresh()
+        self.assertEqual(self.window._run_preflight_messages(stage_keys), [])
+        self.assertTrue(self.window.btn_full.isEnabled())
+        self.assertTrue(self.window.stage_rerun_buttons["beam"].isEnabled())
+
+        self.window._set_touchstone("")
+        self.assertFalse(self.window.btn_full.isEnabled())
+        self.assertTrue(self.window.stage_rerun_buttons["compliance"].isEnabled())
+        self.assertFalse(self.window.stage_rerun_buttons["datasheet"].isEnabled())
 
     def test_pipeline_stage_list_gates_actions_by_output_state(self) -> None:
         expected_stages = {"beam", "compliance", "extract", "datasheet", "plot", "vswr"}
@@ -364,7 +404,7 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
             self.window.refresh_derived_paths()
             self.app.processEvents()
             self.assertTrue(all(button.isHidden() for button in self.window.stage_open_buttons.values()))
-            self.assertTrue(all(button.isEnabled() for button in self.window.stage_rerun_buttons.values()))
+            self.assertTrue(all(not button.isEnabled() for button in self.window.stage_rerun_buttons.values()))
             self.assertTrue(all(not button.isHidden() for button in self.window.stage_rerun_buttons.values()))
             self.assertTrue(all(not button.isHidden() for button in self.window.stage_more_buttons.values()))
             self.assertTrue(all(not button.isEnabled() for button in self.window.stage_more_buttons.values()))

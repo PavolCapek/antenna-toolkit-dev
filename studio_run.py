@@ -8,10 +8,11 @@ from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox
 
 from pipeline.commands import build_beam_command, build_compliance_command, build_datasheet_command, build_plot_command, build_vswr_command
-from pipeline.preflight import collect_preflight_issues
+from pipeline.preflight import PreflightIssue, collect_preflight_issues
 from pipeline.run_context import RunContext
 from project_store import utc_now_iso
 from studio_runtime import (
+    FULL_PIPELINE_STAGE_KEYS,
     GoogleSheetDownloadError,
     STAGE_DEFINITIONS,
     STAGE_LABELS,
@@ -55,7 +56,7 @@ class StudioRunMixin:
         lines.append(f"Path: {display_workspace_path(self.project_results_dir())}")
         lines.append("")
         lines.append("Overall preflight")
-        overall = self._run_preflight_messages([stage_key for stage_key, _ in STAGE_DEFINITIONS])
+        overall = self._run_preflight_messages(FULL_PIPELINE_STAGE_KEYS)
         if overall:
             for message in overall:
                 lines.append(f"- {message}")
@@ -188,16 +189,20 @@ class StudioRunMixin:
         return fmin <= 0 or fmax <= 0 or fmax > fmin
 
     def _missing_enabled_ffs(self) -> list[str]:
-        return [path for path in self.selected_ffs() if not Path(path).exists()]
+        return [path for path in self.selected_ffs() if not self._cached_path_exists(Path(path))]
 
-    def _run_preflight_messages(self, stage_keys: list[str]) -> list[str]:
+    def _run_preflight_issues(self, stage_keys: list[str]) -> list[PreflightIssue]:
+        cache_key = f"preflight:{','.join(stage_keys)}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         enabled_ffs = self.selected_ffs()
         missing_ffs = self._missing_enabled_ffs()
         s2p = self.selected_s2p()
         technical_data = self.selected_technical_data()
         technical_data_is_google_sheet = self.technical_data_is_google_sheet()
-        technical_data_exists = bool(technical_data) and Path(technical_data).exists()
-        touchstone_ready = bool(s2p) and Path(s2p).exists()
+        technical_data_exists = bool(technical_data) and not is_url(technical_data) and self._cached_path_exists(Path(technical_data))
+        touchstone_ready = bool(s2p) and self._cached_path_exists(Path(s2p))
         template_path = self.selected_datasheet_template_path()
         issues = collect_preflight_issues(
             stage_keys=stage_keys,
@@ -214,20 +219,27 @@ class StudioRunMixin:
             google_sheets_auth_configured=self.google_sheets_auth_configured(),
             technical_data_exists=technical_data_exists,
             technical_data_display=display_workspace_path(technical_data) if technical_data else "",
-            template_exists=template_path.exists(),
+            template_exists=self._cached_path_exists(template_path),
             template_display=display_workspace_path(template_path),
             frequency_window_valid=self._frequency_window_is_valid(),
             compliance_frequency_window_valid=self._compliance_frequency_window_is_valid(),
-            beam_output_exists=self.deduced_beam_output().exists(),
-            extract_output_exists=self.deduced_extract_output().exists(),
+            beam_output_exists=self._cached_path_exists(self.deduced_beam_output()),
+            beam_stage_stale="plot" in stage_keys and "beam" not in stage_keys and self._stage_is_stale("beam"),
+            extract_output_exists=self._cached_path_exists(self.deduced_extract_output()),
             extract_stage_stale=self._stage_is_stale("extract"),
             plot_output_exists=self._stage_output_exists("plot"),
             plot_stage_stale=self._stage_is_stale("plot"),
+            compliance_sector_width=self.compliance_sector_width.value(),
+            compliance_sector_center_available=(
+                self.compliance_sector_center.value() > 0
+                or (self.compliance_fmin.value() > 0 and self.compliance_fmax.value() > 0)
+            ),
         )
-        messages = [issue.message for issue in issues]
-        if "plot" in stage_keys and "beam" not in stage_keys and self.deduced_beam_output().exists() and self._stage_is_stale("beam"):
-            messages.append("Rerun Workbook before generating plots because the workbook is stale.")
-        return messages
+        self._cache_set(cache_key, issues)
+        return issues
+
+    def _run_preflight_messages(self, stage_keys: list[str]) -> list[str]:
+        return [issue.message for issue in self._run_preflight_issues(stage_keys)]
 
     def _run_preflight_passes(self, stage_keys: list[str], title: str) -> bool:
         messages = self._run_preflight_messages(stage_keys)
@@ -691,7 +703,7 @@ class StudioRunMixin:
         self._enqueue_stage("vswr", args)
 
     def run_full(self):
-        if not self._run_preflight_passes(["beam", "compliance", "extract", "plot", "vswr", "datasheet"], "Full Pipeline Preflight"):
+        if not self._run_preflight_passes(FULL_PIPELINE_STAGE_KEYS, "Full Pipeline Preflight"):
             return
         self._show_run_start_feedback("Preparing full pipeline...")
         context = self._build_run_context()

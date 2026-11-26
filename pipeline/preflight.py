@@ -34,6 +34,9 @@ def collect_preflight_issues(
     extract_stage_stale: bool,
     plot_output_exists: bool,
     plot_stage_stale: bool,
+    beam_stage_stale: bool = False,
+    compliance_sector_width: float = 0.0,
+    compliance_sector_center_available: bool = True,
 ) -> list[PreflightIssue]:
     if not has_active_project:
         return [PreflightIssue("missing_project", "Create or select a project first.")]
@@ -48,7 +51,7 @@ def collect_preflight_issues(
     issues: list[PreflightIssue] = []
 
     if needs_ffs and not enabled_ffs:
-        issues.append(PreflightIssue("missing_ffs", "Add at least one enabled .ffs file."))
+        issues.append(PreflightIssue("missing_ffs", "Add far-field files (.ffs) and enable at least one."))
     if missing_ffs_display and (needs_ffs or "extract" in requested):
         sample = ", ".join(missing_ffs_display[:3])
         more = " ..." if len(missing_ffs_display) > 3 else ""
@@ -119,8 +122,23 @@ def collect_preflight_issues(
             )
         )
 
-    if "plot" in requested and not beam_output_exists and "beam" not in requested:
-        issues.append(PreflightIssue("missing_beam_output", "Generate the workbook before running Plots."))
+    if "compliance" in requested:
+        if compliance_sector_width != 0.0 and not 15.0 <= compliance_sector_width <= 180.0:
+            issues.append(PreflightIssue(
+                "invalid_compliance_sector_width",
+                "ETSI sector width is invalid. Use 0 to disable it, or enter 15 to 180 degrees.",
+            ))
+        if compliance_sector_width > 0.0 and not compliance_sector_center_available:
+            issues.append(PreflightIssue(
+                "missing_compliance_sector_center",
+                "ETSI sector evaluation needs a centre f0, or both compliance frequency bounds for automatic f0.",
+            ))
+
+    if "plot" in requested and "beam" not in requested:
+        if not beam_output_exists:
+            issues.append(PreflightIssue("missing_beam_output", "Generate the workbook before running Plots."))
+        elif beam_stage_stale:
+            issues.append(PreflightIssue("stale_beam_output", "Rerun Workbook before generating plots because the workbook is stale."))
 
     if "datasheet" in requested:
         if not extract_output_exists and "extract" not in requested:

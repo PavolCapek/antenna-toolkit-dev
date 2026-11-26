@@ -11,10 +11,11 @@ This Windows PySide6 app processes CST far-field `.ffs` exports and Touchstone `
 - `compliance_report.py` generates ETSI/FCC results. `extract_data_xlsx.py` summarizes far-field and Touchstone metrics. `plot.py` and `plot_vswr.py` generate chart assets.
 - `datasheet_pdf.py` assembles template PDFs from the Extract workbook, plot assets, and technical data. `datasheet/models.py` formats performance fields. A cut without a downward threshold crossing can leave a beamwidth blank in Extract. The datasheet shows `N/A` for that individual value and retains the other thresholds and polarizations.
 
-## Studio settings and UX
+## Studio settings and run readiness
 
-- Projects own input paths, far-field enablement and port labels, explicit datasheet radiation frequencies, and run history. With no preset selected, the project also saves its processing, plot, and PDF settings. With a preset selected, the project saves the preset name and reloads the shared values from `Presets/`. Applying a preset can replace unsaved manual settings. Runs use the current form values, including unsaved preset edits.
-- The Studio review verified a mismatch between Run readiness and preflight for an invalid compliance frequency range. Recommended first revision is explicit settings ownership and safe preset switching, followed by output-specific readiness driven by the same preflight checks as Run.
+- Projects save their own input paths, port labels, radiation frequency selections, processing, plot and PDF settings, and run history. **Preview and apply** copies values from a shared preset into the active project. The ADF model stays with the project. **Save as preset** and **Update shared preset** write reusable settings to `Presets/`. The project records the last applied preset name for reference.
+- Project schema v8 stores the effective settings. Opening a linked legacy project snapshots its embedded or shared preset. Studio also snapshots unopened legacy projects before an explicit shared preset change can affect them. Run snapshots retain their existing format.
+- Run readiness, validation, and the Full Pipeline, stage, and needed-output actions use common preflight checks in `pipeline/preflight.py`.
 
 ## Verification
 

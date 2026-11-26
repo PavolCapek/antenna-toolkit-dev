@@ -34,7 +34,7 @@ class StudioGoogleSheetsTests(StudioDirtyStateBase):
 
         messages = self.window._validation_messages()
 
-        self.assertTrue(any("Google Sheets sign-in is required" in message for message in messages))
+        self.assertTrue(any("Sign in to Google Sheets" in message for message in messages))
 
     def test_google_sign_in_button_shows_setup_state(self) -> None:
         self.window.refresh_derived_paths()

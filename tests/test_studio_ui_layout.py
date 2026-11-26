@@ -9,27 +9,19 @@ pytestmark = [pytest.mark.qt_slow, pytest.mark.gui_workflow]
 
 
 class StudioUiLayoutTests(StudioDirtyStateBase):
-    def test_workspace_status_indicators_replace_summary_badges(self) -> None:
-        self.assertFalse(hasattr(self.window, "count_badge"))
-        self.assertFalse(hasattr(self.window, "preset_badge"))
+    def test_workspace_shows_explicit_preset_actions_and_project_save_status(self) -> None:
         self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
-        self.assertEqual(self.window.preset_save_state_indicator.text(), "No preset selected")
-
-        self.window.global_presets["Preset A"] = self.window.collect_preset_values()
-        self.window.global_active_preset = "Preset A"
-        self.window.project_active_preset = "Preset A"
+        self.assertFalse(self.window.preset_apply_button.isEnabled())
+        self.assertFalse(self.window.preset_update_action.isEnabled())
+        self.window.global_presets["Preset A"] = {"smooth": 9}
         self.window.refresh_preset_list(select_name="Preset A")
-        self.window.save_project_changes()
-        self.app.processEvents()
 
-        self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset saved")
-
-        self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
-        self.app.processEvents()
+        self.assertTrue(self.window.preset_apply_button.isEnabled())
+        self.assertTrue(self.window.preset_update_action.isEnabled())
+        self.assertIn("Save project", self.window.preset_state_label.text())
+        self.window.beam_smooth.setValue(9)
         self.window.flush_derived_paths_refresh()
-
-        self.assertEqual(self.window.preset_save_state_indicator.text(), "Preset has unsaved changes")
-        self.assertEqual(self.window.project_save_state_indicator.text(), "Project saved")
+        self.assertEqual(self.window.project_save_state_indicator.text(), "Project has unsaved changes")
 
     def test_project_unsaved_indicator_lists_added_far_field_file(self) -> None:
         self.window._add_ffs_files(["Input data/a.ffs"])
@@ -50,25 +42,12 @@ class StudioUiLayoutTests(StudioDirtyStateBase):
 
         self.assertEqual(self.window.project_save_state_indicator.diff_items(), [])
 
-    def test_preset_unsaved_indicator_lists_changed_control(self) -> None:
-        self.window.global_presets["Preset A"] = self.window.collect_preset_values()
-        self.window.global_active_preset = "Preset A"
-        self.window.project_active_preset = "Preset A"
-        self.window.refresh_preset_list(select_name="Preset A")
-        self.window.save_project_changes()
-        self.app.processEvents()
-
+    def test_project_unsaved_indicator_lists_changed_setting(self) -> None:
         self.window.beam_smooth.setValue(self.window.beam_smooth.value() + 1)
-        self.app.processEvents()
         self.window.flush_derived_paths_refresh()
 
-        diff_items = self.window.preset_save_state_indicator.diff_items()
-
+        diff_items = self.window.project_save_state_indicator.diff_items()
         self.assertTrue(any(item.startswith("Beam smoothing:") for item in diff_items))
-
-    def test_clean_indicators_do_not_advertise_hover_diff_entries(self) -> None:
-        self.assertEqual(self.window.project_save_state_indicator.diff_items(), [])
-        self.assertEqual(self.window.preset_save_state_indicator.diff_items(), [])
 
     def test_style_color_selectors_share_palette_with_previews(self) -> None:
         selectors = [

@@ -21,7 +21,7 @@ from path_utils import (
 PROJECTS_DIRNAME = "Projects"
 PROJECT_FILE_NAME = "project.json"
 logger = logging.getLogger(__name__)
-CURRENT_PROJECT_SCHEMA_VERSION = 7
+CURRENT_PROJECT_SCHEMA_VERSION = 8
 BUNDLE_MAX_FILES = 5_000
 BUNDLE_MAX_MEMBER_SIZE = 512 * 1024 * 1024
 BUNDLE_MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024
@@ -141,7 +141,7 @@ class ProjectRecord:
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
-            "schema_version": CURRENT_PROJECT_SCHEMA_VERSION,
+            "schema_version": self.schema_version,
             "name": self.name,
             "slug": self.slug,
             "ffs_items": self.ffs_items,
@@ -256,7 +256,6 @@ class ProjectStore:
 
     def save_project(self, project: ProjectRecord, previous_slug: str | None = None) -> Path:
         self.projects_dir.mkdir(parents=True, exist_ok=True)
-        project.schema_version = CURRENT_PROJECT_SCHEMA_VERSION
         target_dir = project.project_dir(self.root)
         if previous_slug and previous_slug != project.slug:
             source_dir = self.projects_dir / previous_slug
@@ -267,7 +266,12 @@ class ProjectStore:
                 self._rename_slugged_outputs(target_dir, previous_slug, project.slug)
         target_dir.mkdir(parents=True, exist_ok=True)
         project_file = target_dir / PROJECT_FILE_NAME
-        project_file.write_text(json.dumps(project.to_dict(), indent=2), encoding="utf-8")
+        temporary_file = project_file.with_suffix(f".{uuid4().hex}.tmp")
+        try:
+            temporary_file.write_text(json.dumps(project.to_dict(), indent=2), encoding="utf-8")
+            temporary_file.replace(project_file)
+        finally:
+            temporary_file.unlink(missing_ok=True)
         return target_dir
 
     def delete_project(self, slug: str) -> None:
@@ -292,7 +296,7 @@ class ProjectStore:
         duplicate = ProjectRecord(
             name=new_name,
             slug=new_slug,
-            schema_version=CURRENT_PROJECT_SCHEMA_VERSION,
+            schema_version=source.schema_version,
             ffs_items=[dict(item) for item in source.ffs_items],
             touchstone_file=source.touchstone_file,
             technical_data_file=source.technical_data_file,

@@ -51,9 +51,11 @@ from pipeline.stages import (
 from pipeline.versions import DATASHEET_RENDER_VERSION, PLOT_ASSET_STYLE_VERSION, VSWR_ASSET_STYLE_VERSION
 from studio_run import StudioRunMixin
 from studio_runtime import (
+    FULL_PIPELINE_STAGE_KEYS,
     GoogleSheetDownloadError,
     STAGE_DEFINITIONS,
     STAGE_LABELS,
+    STAGE_SNAPSHOT_SCHEMA_VERSION,
     clean_run_state,
     extract_google_sheet_id,
     format_timestamp,
@@ -84,7 +86,6 @@ THEME_OPTIONS = [
     ("sepia", "Sepia"),
 ]
 THEME_LABELS = {key: label for key, label in THEME_OPTIONS}
-ACTIVE_PRESET_KEY = "active_preset"
 THEME_STYLES = {
     "light": {
         "palette_window": "#edf2f7",
@@ -1082,8 +1083,8 @@ class HelpWindow(QWidget):
         workspace_note = QLabel(
             "1. Create a project by name.\n"
             "2. Add or edit project inputs on the Inputs tab.\n"
-            "3. Choose or update the project preset and tuning controls.\n"
-            "4. Click Save project to persist the current inputs and preset.\n"
+            "3. Preview and apply a shared preset if needed, then adjust the project settings.\n"
+            "4. Click Save project to keep the current inputs and settings.\n"
             "5. Run the pipeline from the Run tab."
         )
         workspace_note.setWordWrap(True)
@@ -1160,17 +1161,13 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
         self._saved_project_signature = ""
         self._reverting_project_selection = False
-        self._reverting_preset_selection = False
         self._suppress_project_selection_prompt = False
         self.active_project_slug = ""
         self.active_project_name = ""
         self.preset_store = PresetFileStore(preset_storage_dir(STATE_FILE), legacy_preset_storage_dirs(STATE_FILE))
         self.global_presets: dict[str, dict[str, object]] = self.preset_store.migrate_from_state(self.store)
-        self.global_active_preset = str(self.store.get(ACTIVE_PRESET_KEY, "")).strip()
-        if self.global_active_preset and self.global_active_preset not in self.global_presets:
-            self.global_active_preset = ""
-            self.store.set(ACTIVE_PRESET_KEY, "")
         self.project_active_preset = ""
+        self.project_legacy_presets: dict[str, dict[str, Any]] = {}
         self.project_run_state: dict[str, object] = {}
         self._compact_layout = False
         self._scroll_page_layouts: list[QVBoxLayout] = []
@@ -1332,6 +1329,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             status_label = QLabel("Waiting for the first run.")
             status_label.setObjectName("stageStatus")
             status_label.setWordWrap(True)
+            status_label.setTextFormat(Qt.TextFormat.PlainText)
             timestamp_label = QLabel("Generated: not yet")
             timestamp_label.setObjectName("helper")
             timestamp_label.setWordWrap(True)
@@ -1384,7 +1382,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         project_card = Card("Project workspace", "Command center")
         self.project_card = project_card
         project_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        project_help = QLabel("Create or select a project first. Each project keeps its own inputs, selected preset, processing settings, and outputs.")
+        project_help = QLabel("Create or select a project first. Each project keeps its own inputs, settings, and outputs.")
         project_help.setWordWrap(True)
         project_help.setObjectName("helper")
         self.project_help_label = project_help
@@ -1400,7 +1398,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.project_save_button = QPushButton("Save project")
         self.project_save_button.clicked.connect(self.save_project_changes)
         self.project_new_button.setToolTip("Create a new project by name. Add inputs on the Inputs tab, then save the project.")
-        self.project_save_button.setToolTip("Write the current project inputs, presets, settings, and run metadata to disk.")
+        self.project_save_button.setToolTip("Save the inputs and settings used by this project.")
         self.project_more_button = QToolButton()
         self.project_more_button.setText("More")
         self.project_more_button.setPopupMode(QToolButton.InstantPopup)
@@ -1472,6 +1470,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.readiness_summary = QLabel("Create a project to start tracking run readiness.")
         self.readiness_summary.setObjectName("helper")
         self.readiness_summary.setWordWrap(True)
+        self.readiness_summary.setTextFormat(Qt.TextFormat.PlainText)
         readiness_card.body.addWidget(self.readiness_summary)
         readiness_panel = ResponsiveCardPanel(max_columns=4, min_card_width=170)
         self.readiness_panel = readiness_panel
@@ -1530,34 +1529,34 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         run_lay.addWidget(quick_actions)
         run_lay.addStretch(1)
 
-        preset_card = Card("Saved presets", "Presets")
+        preset_card = Card("Shared presets", "Presets")
         self.preset_card = preset_card
         preset_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        preset_help = QLabel("Save reusable control/range/style presets for product lines. Presets do not change the currently selected input files.")
+        preset_help = QLabel("Use a shared preset as a starting point for project settings.")
         preset_help.setWordWrap(True)
         preset_help.setObjectName("helper")
         self.preset_help_label = preset_help
         preset_card.body.addWidget(preset_help)
         self.preset_combo = QComboBox()
-        self.preset_combo.currentTextChanged.connect(self.on_preset_selected)
-        self.preset_combo.setToolTip("Choose a saved preset to apply its control, range, and style settings.")
+        self.preset_combo.currentIndexChanged.connect(self._update_preset_action_state)
+        self.preset_combo.setToolTip("Select a shared preset to preview or manage.")
         preset_card.body.addWidget(self.preset_combo)
-        self.preset_state_label = QLabel("Choose a preset or keep working manually.")
+        self.preset_state_label = QLabel("Project edits are saved with Save project.")
         self.preset_state_label.setObjectName("helper")
         self.preset_state_label.setWordWrap(True)
+        self.preset_state_label.setTextFormat(Qt.TextFormat.PlainText)
         preset_card.body.addWidget(self.preset_state_label)
-        self.preset_save_state_indicator = HoverDiffIndicator("No preset selected")
-        self.preset_save_state_indicator.setObjectName("saveStateIndicator")
-        preset_card.body.addWidget(self.preset_save_state_indicator, 0, Qt.AlignLeft)
-        self.preset_new_button = QPushButton("New"); self.preset_new_button.clicked.connect(self.create_preset)
-        self.preset_save_button = QPushButton("Save"); self.preset_save_button.clicked.connect(self.save_preset)
-        self.preset_new_button.setToolTip("Create a new preset from the current GUI settings. Use Save project to persist it.")
-        self.preset_save_button.setToolTip("Overwrite the selected preset with the current GUI settings. Use Save project to persist it.")
+        self.preset_apply_button = QPushButton("Preview and apply…")
+        self.preset_apply_button.clicked.connect(self.preview_and_apply_preset)
+        self.preset_new_button = QPushButton("Save as preset…")
+        self.preset_new_button.clicked.connect(self.create_preset)
+        self.preset_new_button.setToolTip("Save a new shared preset using this project's reusable settings.")
         self.preset_more_button = QToolButton()
         self.preset_more_button.setText("More")
         self.preset_more_button.setPopupMode(QToolButton.InstantPopup)
         self.preset_more_button.setToolTip("More preset actions.")
         self.preset_more_menu = QMenu(self.preset_more_button)
+        self.preset_update_action = self.preset_more_menu.addAction("Update shared preset…", self.save_preset)
         self.preset_rename_action = self.preset_more_menu.addAction("Rename preset", self.rename_preset)
         self.preset_delete_action = self.preset_more_menu.addAction("Delete preset", self.delete_preset)
         self.preset_more_menu.addSeparator()
@@ -1566,7 +1565,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.preset_more_button.setMenu(self.preset_more_menu)
         preset_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=110)
         self.preset_actions = preset_actions
-        preset_actions.set_buttons([self.preset_new_button, self.preset_save_button, self.preset_more_button])
+        preset_actions.set_buttons([self.preset_apply_button, self.preset_new_button, self.preset_more_button])
         preset_card.body.addWidget(preset_actions)
         command_left_layout.addSpacing(14)
         command_left_layout.addWidget(preset_card)
@@ -2094,10 +2093,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
     def _show_document_tab(self) -> None:
         self._select_workflow_tab("Document")
 
-    def _open_project_actions_menu(self) -> None:
-        if self.project_more_button.isEnabled():
-            self.project_more_button.showMenu()
-
     def _datasheet_template_label(self, filename: str) -> str:
         stem = Path(str(filename or "")).stem.strip()
         label = stem.replace("_", " ").replace("-", " ").strip()
@@ -2168,7 +2163,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.readiness_action.setText(text)
         self.readiness_action.setEnabled(enabled)
         self.readiness_action.setToolTip(tooltip or text)
-        self.readiness_action.setVisible(text not in {"Run Full Pipeline", "Open Inputs"})
+        self.readiness_action.setVisible(text != "Run Full Pipeline")
 
     def _update_google_credentials_button_state(self) -> None:
         ready = self.google_sheets_auth_configured()
@@ -2207,6 +2202,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.active_project_slug = ""
         self.active_project_name = ""
         self.project_active_preset = ""
+        self.project_legacy_presets = {}
+        self._project_radiation_frequencies = None
         self.project_run_state = {}
         self._saved_project_signature = ""
         self._pending_stage_keys = []
@@ -2278,10 +2275,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.rings.setText("0,-7.5,-15,-22.5,-30")
         self.angle_step.setValue(30)
         self.clip_db.setValue(-30.0)
-        if self.global_active_preset in self.global_presets:
-            self.apply_preset_values(self.global_presets.get(self.global_active_preset, {}))
         self.workflow_tabs.setCurrentIndex(0)
-        self.refresh_preset_list(select_name=self.global_active_preset)
+        self.refresh_preset_list(select_name="")
         self.project_combo.blockSignals(True)
         self.project_combo.setCurrentIndex(0)
         self.project_combo.blockSignals(False)
@@ -2292,9 +2287,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
 
     def _default_project_settings(self) -> dict[str, object]:
         return default_preset_settings()
-
-    def _apply_default_project_settings(self) -> None:
-        self.apply_preset_values(self._default_project_settings())
 
     def _project_signature(self, project: ProjectRecord | None = None) -> str:
         project = project or self.current_project()
@@ -2317,31 +2309,23 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             return {}
         return payload if isinstance(payload, dict) else {}
 
-    def _active_preset_for_dirty_check(self) -> str:
-        return str(self.project_active_preset or self.global_active_preset or self.current_preset_name()).strip()
-
     def _normalized_preset_values(self, values: dict[str, object] | None) -> dict[str, object]:
         coerced = PresetSettings.from_mapping(values if isinstance(values, dict) else {}).to_dict()
-        for key in list(coerced):
+        defaults = self._default_project_settings()
+        for key, value in coerced.items():
             if key.endswith("_color") or key.startswith("plot_line_") or key == "grid_color":
-                coerced[key] = str(coerced[key]).strip().upper()
+                color = QColor(str(value))
+                coerced[key] = (color.name() if color.isValid() else str(defaults[key])).upper()
+            elif key.endswith("_style"):
+                coerced[key] = "dashed" if str(value).lower() in {"dashed", "dash", "--"} else "solid"
         return coerced
-
-    def has_unsaved_preset_changes(self) -> bool:
-        if self._loading_project:
-            return False
-        name = self._active_preset_for_dirty_check()
-        if not name:
-            return False
-        preset = self.global_presets.get(name)
-        return isinstance(preset, dict) and self._normalized_preset_values(preset) != self._normalized_preset_values(self.collect_preset_values())
 
     def _limited_diff_items(self, items: list[str], limit: int = 12) -> list[str]:
         if len(items) <= limit:
             return items
         return items[:limit] + [f"{len(items) - limit} more changes..."]
 
-    def _display_diff_value(self, value: Any) -> str:
+    def _display_diff_value(self, value: Any, *, compact: bool = True) -> str:
         if value in (None, ""):
             return "empty"
         if isinstance(value, bool):
@@ -2357,10 +2341,12 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         text = str(value).strip()
         if any(sep in text for sep in ("\\", "/")):
             text = display_workspace_path(text)
-        return text if len(text) <= 72 else f"{text[:69]}..."
+        return text if not compact or len(text) <= 72 else f"{text[:69]}..."
 
-    def _diff_change_text(self, label: str, before: Any, after: Any) -> str:
-        return f"{label}: {self._display_diff_value(before)} -> {self._display_diff_value(after)}"
+    def _diff_change_text(self, label: str, before: Any, after: Any, *, compact: bool = True) -> str:
+        old_text = self._display_diff_value(before, compact=compact)
+        new_text = self._display_diff_value(after, compact=compact)
+        return f"{label}: {old_text} -> {new_text}"
 
     def _preset_field_label(self, key: str) -> str:
         labels = {
@@ -2428,14 +2414,16 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         }
         return labels.get(key, key.replace("_", " ").title())
 
-    def _preset_diff_items(self, before: dict[str, Any] | None = None, after: dict[str, Any] | None = None) -> list[str]:
-        old_values = self._normalized_preset_values(before if isinstance(before, dict) else {})
-        new_values = self._normalized_preset_values(after if isinstance(after, dict) else self.collect_preset_values())
+    def _settings_diff_items(self, before: dict[str, Any], after: dict[str, Any], *, compact: bool = False) -> list[str]:
+        old_values = self._normalized_preset_values(before)
+        new_values = self._normalized_preset_values(after)
         items: list[str] = []
         for key in sorted(set(old_values) | set(new_values), key=self._preset_field_label):
             if old_values.get(key) != new_values.get(key):
-                items.append(self._diff_change_text(self._preset_field_label(key), old_values.get(key), new_values.get(key)))
-        return self._limited_diff_items(items)
+                items.append(self._diff_change_text(
+                    self._preset_field_label(key), old_values.get(key), new_values.get(key), compact=compact
+                ))
+        return items
 
     def _project_diff_items(self) -> list[str]:
         if not self.active_project_slug:
@@ -2470,26 +2458,19 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         for key, label in (
             ("touchstone_file", "Touchstone file"),
             ("technical_data_file", "Technical Data source"),
-            ("active_preset", "Active preset"),
+            ("active_preset", "Last applied preset"),
             ("radiation_pattern_frequencies_ghz", "Radiation frequencies"),
         ):
             if before.get(key) != after.get(key):
                 items.append(self._diff_change_text(label, before.get(key), after.get(key)))
         if before.get("settings", {}) != after.get("settings", {}):
-            items.extend(self._preset_diff_items(before.get("settings", {}), after.get("settings", {})))
+            items.extend(self._settings_diff_items(before.get("settings", {}), after.get("settings", {}), compact=True))
         if before.get("run_state", {}) != after.get("run_state", {}):
             items.append("Run metadata changed")
         return self._limited_diff_items(items)
 
-    def _current_preset_diff_items(self) -> list[str]:
-        name = self._active_preset_for_dirty_check()
-        preset = self.global_presets.get(name)
-        if not name or not isinstance(preset, dict):
-            return []
-        return self._preset_diff_items(preset, self.collect_preset_values())
-
     def _mark_project_dirty(self) -> None:
-        if self._loading_project or not self.active_project_slug:
+        if self._loading_project or self._applying_preset_values or not self.active_project_slug:
             return
         self.refresh_derived_paths()
 
@@ -2502,37 +2483,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if self._refresh_timer.isActive():
             self._refresh_timer.stop()
         self.refresh_derived_paths()
-
-    def _save_active_preset(self, *, refresh: bool = False) -> bool:
-        name = self._active_preset_for_dirty_check()
-        if not name or name not in self.global_presets:
-            return False
-        self.global_presets[name] = self.collect_preset_values()
-        self.project_active_preset = name
-        self.global_active_preset = name
-        self._persist_global_presets()
-        if refresh:
-            self.refresh_preset_list(select_name=name)
-        else:
-            self.refresh_derived_paths()
-        return True
-
-    def _confirm_pending_preset_changes(self, action: str) -> bool:
-        if not self.has_unsaved_preset_changes():
-            return True
-        name = self._active_preset_for_dirty_check()
-        answer = QMessageBox.question(
-            self,
-            "Unsaved Preset Changes",
-            f"Preset '{name}' has unsaved changes. Save before {action}?",
-            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-            QMessageBox.Save,
-        )
-        if answer == QMessageBox.Cancel:
-            return False
-        if answer == QMessageBox.Save:
-            self._save_active_preset(refresh=False)
-        return True
 
     def _confirm_pending_project_changes(self, action: str) -> bool:
         if not self.has_unsaved_project_changes():
@@ -2548,13 +2498,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             return False
         if answer == QMessageBox.Save:
             self.save_active_project()
-        return True
-
-    def _confirm_pending_changes(self, action: str, *, include_preset: bool = True, include_project: bool = True) -> bool:
-        if include_preset and not self._confirm_pending_preset_changes(action):
-            return False
-        if include_project and not self._confirm_pending_project_changes(action):
-            return False
         return True
 
     def _save_project_if_dirty(self) -> None:
@@ -2972,9 +2915,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.store.set("theme", self.theme)
         self._sync_theme_selector()
         self._apply_style()
-        self._refresh_stage_labels()
         self.refresh_derived_paths()
-        self._update_preset_action_state()
 
     def toggle_console(self, checked: bool = False):
         self._set_console_visible(checked)
@@ -3047,9 +2988,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
 
     def on_project_configuration_changed(self, *_args) -> None:
         if self._loading_project or self._applying_preset_values:
-            return
-        if self._active_preset_for_dirty_check():
-            self.request_derived_paths_refresh()
             return
         if self.active_project_slug:
             self.request_derived_paths_refresh()
@@ -3298,7 +3236,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
 
     def _current_stage_snapshot(self, stage_key: str) -> dict[str, object]:
         snapshot: dict[str, object] = {
-            "schema_version": CURRENT_PROJECT_SCHEMA_VERSION,
+            "schema_version": STAGE_SNAPSHOT_SCHEMA_VERSION,
             "settings": self._stage_settings_snapshot(stage_key),
         }
         tool_versions = self._stage_tool_versions(stage_key)
@@ -3477,67 +3415,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self._cache_set(cache_key, list(keys))
         return keys
 
-    def _preset_matches_selected(self) -> bool:
-        name = self.project_active_preset or self.current_preset_name()
-        if not name:
-            return False
-        preset = self.global_presets.get(name)
-        return isinstance(preset, dict) and self._normalized_preset_values(preset) == self._normalized_preset_values(self.collect_preset_values())
-
     def _validation_messages(self) -> list[str]:
-        if not self.active_project_slug:
-            return ["Select or create a project to begin."]
-        messages: list[str] = []
-        items = self.collect_ffs_items()
-        paths = [str(item["path"]) for item in items]
-        enabled_paths = [str(item["path"]) for item in items if bool(item["enabled"])]
-        duplicates = sorted({path for path in paths if paths.count(path) > 1})
-        missing_ffs = [path for path in paths if path and not self._cached_path_exists(Path(path))]
-        if not items:
-            messages.append("Add at least one far-field file for workbook and plot stages.")
-        elif not enabled_paths:
-            messages.append("All far-field files are disabled. Enable at least one to run workbook or plots.")
-        if duplicates:
-            messages.append(f"Duplicate far-field entries: {', '.join(display_workspace_path(path) for path in duplicates[:3])}")
-        if missing_ffs:
-            sample = ", ".join(display_workspace_path(path) for path in missing_ffs[:3])
-            more = " ..." if len(missing_ffs) > 3 else ""
-            messages.append(f"Missing far-field files: {sample}{more}")
-        s2p = self.selected_s2p()
-        if s2p and not self._cached_path_exists(Path(s2p)):
-            messages.append(f"Selected Touchstone file is missing: {display_workspace_path(s2p)}")
-        elif not s2p:
-            messages.append("VSWR stage is unavailable until a Touchstone file is selected.")
-        technical_data = self.selected_technical_data()
-        if is_url(technical_data) and not self.technical_data_is_google_sheet():
-            messages.append("Selected Technical Data URL is not a Google Sheet link.")
-        elif self.technical_data_is_google_sheet() and not extract_google_sheet_id(technical_data):
-            messages.append("Selected Google Sheet URL is missing a spreadsheet ID.")
-        elif self.technical_data_is_google_sheet() and not self.google_sheets_auth_configured():
-            messages.append("Google Sheets sign-in is required before Datasheet generation.")
-        elif technical_data and not is_url(technical_data) and not self._cached_path_exists(Path(technical_data)):
-            messages.append(f"Selected Technical Data workbook is missing: {display_workspace_path(technical_data)}")
-        elif not technical_data:
-            messages.append("Datasheet stage is unavailable until a Technical Data workbook is selected.")
-        template_path = self.selected_datasheet_template_path()
-        if not self._cached_path_exists(template_path):
-            messages.append(f"Selected datasheet template is missing: {display_workspace_path(template_path)}")
-        fmin = float(self.shared_fmin.value())
-        fmax = float(self.shared_fmax.value())
-        if fmin > 0 and fmax <= fmin:
-            messages.append("Shared frequency window is invalid: max must be greater than min.")
-        if not self._compliance_frequency_window_is_valid():
-            messages.append("Compliance frequency window is invalid: max must be greater than min.")
-        sector_width = float(self.compliance_sector_width.value())
-        if sector_width != 0.0 and sector_width < 15.0:
-            messages.append("ETSI sector width is invalid: use 0 to disable it, or enter 15 to 180 degrees.")
-        if (
-            sector_width > 0.0
-            and float(self.compliance_sector_center.value()) == 0.0
-            and not (float(self.compliance_fmin.value()) > 0.0 and float(self.compliance_fmax.value()) > 0.0)
-        ):
-            messages.append("ETSI sector evaluation needs a centre f0, or both compliance frequency bounds for automatic f0.")
-        return messages
+        return self._run_preflight_messages(FULL_PIPELINE_STAGE_KEYS)
 
     def _last_success_timestamp(self) -> str:
         stamps = [
@@ -3693,14 +3572,19 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             output_exists = self._stage_output_exists(stage_key)
             any_output_exists = self._stage_output_any_exists(stage_key)
             has_project = bool(self.active_project_slug)
+            blockers = self._run_preflight_messages([stage_key]) if has_project and applicable else []
             self.stage_open_buttons[stage_key].setEnabled(bool(self.active_project_slug) and output_exists)
             self.stage_reveal_actions[stage_key].setEnabled(bool(self.active_project_slug) and any_output_exists)
             self.stage_delete_actions[stage_key].setEnabled(bool(self.active_project_slug) and any_output_exists)
             self.stage_rerun_buttons[stage_key].setEnabled(
                 has_project
                 and applicable
+                and not blockers
                 and not is_running
             )
+            run_button = self.stage_rerun_buttons[stage_key]
+            run_button.setText("Rerun" if output_exists or status == "failed" else "Generate")
+            run_button.setToolTip("\n".join(blockers) or f"Generate the {stage_label.lower()} output.")
             self.stage_open_buttons[stage_key].setVisible(output_exists)
             self.stage_rerun_buttons[stage_key].setVisible(has_project and applicable)
             self.stage_more_buttons[stage_key].setVisible(has_project and (applicable or any_output_exists))
@@ -3735,6 +3619,11 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success and any_output_exists else "Generated: not available"
                 chip_text = status.capitalize()
                 chip_tone = status
+            elif blockers:
+                text = blockers[0]
+                timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success else "Generated: not yet"
+                chip_text = "Blocked"
+                chip_tone = "blocked"
             elif self._stage_is_stale(stage_key):
                 text = self._stage_stale_detail(stage_key) or "Stale"
                 timestamp_text = f"Generated: {format_timestamp(last_success)}" if last_success else "Generated: unknown"
@@ -3762,7 +3651,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 chip_text = "Blocked"
                 chip_tone = "blocked"
             else:
-                text = "Waiting for the first run."
+                text = "Ready to generate."
                 timestamp_text = "Generated: not yet"
                 chip_text = "Waiting"
                 chip_tone = "muted"
@@ -3778,11 +3667,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         missing_enabled = self._missing_enabled_ffs() if has_project else []
         s2p = self.selected_s2p() if has_project else ""
         touchstone_ready = bool(s2p) and self._cached_path_exists(Path(s2p))
-        technical_data = self.selected_technical_data() if has_project else ""
-        technical_data_ready = self.technical_data_source_ready() if has_project else False
-        template_path = self.selected_datasheet_template_path()
-        template_ready = self._cached_path_exists(template_path)
-        frequency_ready = self._frequency_window_is_valid()
         stale_stages = self._stale_stage_keys() if has_project else []
         latest_failed = self._latest_failed_stage_key() if has_project else ""
         applicable_stages = [
@@ -3793,16 +3677,11 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         ready_stages = [stage_key for stage_key in applicable_stages if self._stage_output_exists(stage_key)]
         running = bool(self._current_stage_key or self._pending_stage_keys or self.proc.running_cmd or self.proc.queue)
         unsaved_changes = self.has_unsaved_project_changes()
-        full_ready = (
-            has_project
-            and frequency_ready
-            and enabled_ffs > 0
-            and not missing_enabled
-            and touchstone_ready
-            and technical_data_ready
-            and template_ready
+        full_issues = self._run_preflight_issues(FULL_PIPELINE_STAGE_KEYS)
+        self.btn_full.setEnabled(not running and not full_issues)
+        self.btn_full.setToolTip(
+            "\n".join(issue.message for issue in full_issues) or "Generate all pipeline outputs."
         )
-        vswr_ready = has_project and frequency_ready and touchstone_ready
 
         if not has_project:
             self._set_readiness_badge("project", "Not selected", "muted")
@@ -3862,77 +3741,22 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self._set_readiness_action("Run Full Pipeline", self.run_full, enabled=False, tooltip="")
             return
 
-        if unsaved_changes:
-            self.readiness_summary.setText("Save the current project before running so the edited inputs and preset selection match the next run snapshot.")
-            self._set_readiness_action("Save project", self.save_project_changes, tooltip="Persist the current project state.")
-            return
-
-        if not frequency_ready:
-            self.readiness_summary.setText("The shared frequency window is invalid. Fix it before running stages that depend on workbook, extract, plot, or VSWR settings.")
-            self._set_readiness_action("Open Processing", self._show_processing_tab, tooltip="Go to the Processing tab to fix the shared frequency window.")
-            return
-
-        if missing_enabled:
-            self.readiness_summary.setText("One or more enabled far-field files are missing. Fix or disable them before running workbook-based stages.")
-            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to fix far-field file paths.")
-            return
-
-        if total_ffs == 0:
-            if vswr_ready:
-                self.readiness_summary.setText("No far-field files are configured, so VSWR is the only runnable output right now.")
-                self._set_readiness_action("Run VSWR", self.run_vswr, tooltip="Generate the VSWR output from the selected Touchstone file.")
+        if full_issues:
+            self.readiness_summary.setText("\n".join(issue.message for issue in full_issues))
+            if not enabled_ffs and not self._run_preflight_issues(["vswr"]):
+                self._set_readiness_action("Run VSWR", self.run_vswr)
+            elif full_issues[0].code == "missing_template":
+                self._set_readiness_action("Open Document", self._show_document_tab)
+            elif full_issues[0].code.startswith(("invalid_frequency", "invalid_compliance", "missing_compliance")):
+                self._set_readiness_action("Open Processing", self._show_processing_tab)
             else:
-                self.readiness_summary.setText("Add far-field files for workbook and plot stages, or select a Touchstone file if you only need VSWR.")
-                self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to add far-field files or a Touchstone file.")
+                self._set_readiness_action("Open Inputs", self._show_inputs_tab)
             return
 
-        if enabled_ffs == 0:
-            if vswr_ready:
-                self.readiness_summary.setText("All far-field files are disabled, so VSWR is the only runnable output right now.")
-                self._set_readiness_action("Run VSWR", self.run_vswr, tooltip="Generate the VSWR output from the selected Touchstone file.")
-            else:
-                self.readiness_summary.setText("All far-field files are disabled. Enable at least one to run workbook and plot stages.")
-                self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to re-enable far-field files.")
-            return
-
-        if s2p and not touchstone_ready:
-            self.readiness_summary.setText("The selected Touchstone file is missing. Full Pipeline and VSWR stay unavailable until you fix that path.")
-            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to fix the Touchstone file path.")
-            return
-
-        if not s2p:
-            self.readiness_summary.setText("Far-field stages are ready, but Touchstone is still missing. Use the Project workspace menu for workbook, extract, or plots, or add Touchstone for Full Pipeline.")
-            self._set_readiness_action("Project actions", self._open_project_actions_menu, tooltip="Open the Project workspace actions menu.")
-            return
-
-        if is_url(technical_data) and not self.technical_data_is_google_sheet():
-            self.readiness_summary.setText("The selected Technical Data URL is not a Google Sheet link. Choose a local workbook or a valid Google Sheet.")
-            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to fix the Technical Data source.")
-            return
-
-        if self.technical_data_is_google_sheet() and not technical_data_ready:
-            self.readiness_summary.setText("Google Sheets sign-in is required before Datasheet or Full Pipeline can download the Technical Data workbook.")
-            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab and use Google Sign In.")
-            return
-
-        if technical_data and not technical_data_ready:
-            self.readiness_summary.setText("The selected Technical Data workbook is missing. Full Pipeline and Datasheet stay unavailable until you fix that path.")
-            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to fix the Technical Data workbook path.")
-            return
-
-        if not technical_data:
-            self.readiness_summary.setText("Far-field and Touchstone inputs are ready, but Technical Data is still missing. Add it before running Datasheet or Full Pipeline.")
-            self._set_readiness_action("Open Inputs", self._show_inputs_tab, tooltip="Go to the Inputs tab to select a Technical Data workbook.")
-            return
-
-        if not template_ready:
-            self.readiness_summary.setText("The selected datasheet export style is missing. Choose an available style before running Datasheet or Full Pipeline.")
-            self._set_readiness_action("Open Document", self._show_document_tab, tooltip="Go to the Document tab to select a datasheet export style.")
-            return
-
-        if latest_failed:
+        needed = self._needed_rerun_stage_keys()
+        if latest_failed and needed:
             self.readiness_summary.setText(self._recovery_plan_text())
-            self._set_readiness_action("Run Failed Stage", self.run_needed_outputs, tooltip="Retry only the failed stage.")
+            self._set_readiness_action("Run Full Pipeline", self.run_full)
             return
 
         if stale_stages:
@@ -3955,7 +3779,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self._set_readiness_action("Run Full Pipeline", self.run_full, tooltip="Complete the remaining outputs with a full rerun.")
             return
 
-        self.readiness_summary.setText("Inputs, selected preset, and generated outputs are in sync.")
+        self.readiness_summary.setText("Generated outputs are up to date.")
         self._set_readiness_action("Run Full Pipeline", self.run_full, tooltip="Run the full pipeline again for a fresh rebuild.")
 
     def _refresh_project_summary(self) -> None:
@@ -4000,17 +3824,13 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if unsaved_changes:
             self._set_save_state_indicator(self.project_save_state_indicator, "Project has unsaved changes", "unsaved")
             self.project_save_state_indicator.set_diff_items(self._project_diff_items())
-            self.project_health.setText("Unsaved project or preset changes are pending.")
+            self.project_health.setText("Project changes are pending.")
             self.run_summary.setText("Current edits are not saved yet.")
         else:
             self._set_save_state_indicator(self.project_save_state_indicator, "Project saved", "saved")
-        blocking_messages = [msg for msg in messages if not msg.startswith("VSWR stage is unavailable")]
-        if not unsaved_changes and blocking_messages:
+        if not unsaved_changes and messages:
             self.validation_label.setText("\n".join(messages))
-            self.project_health.setText(f"Validation needs attention. {len(blocking_messages)} item(s) flagged.")
-        elif not unsaved_changes and messages:
-            self.validation_label.setText("\n".join(messages))
-            self.project_health.setText("Core inputs are valid. Add a Touchstone file when you need VSWR output.")
+            self.project_health.setText(f"Full run needs attention. {len(messages)} item(s) flagged.")
         elif not unsaved_changes and stale_stages:
             labels = ", ".join(STAGE_LABELS[key] for key in stale_stages)
             self.validation_label.setText(f"Outputs are stale for: {labels}")
@@ -4022,7 +3842,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 self.project_health.setText(f"Project changed since the last successful run: {labels}.")
         elif not unsaved_changes:
             self.validation_label.setText("No validation issues.")
-            self.project_health.setText("Inputs, presets, and generated outputs are in sync.")
+            self.project_health.setText("Project inputs are ready for a full run.")
         elif messages:
             self.validation_label.setText("\n".join(messages))
         else:
@@ -4184,24 +4004,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         except TechnicalDataError as exc:
             raise GoogleSheetDownloadError(str(exc)) from exc
 
-    def technical_data_source_ready(self) -> bool:
-        source = self.selected_technical_data()
-        if not source:
-            return False
-        if is_url(source):
-            return self.technical_data_is_google_sheet() and bool(extract_google_sheet_id(source)) and self.google_sheets_auth_configured()
-        return self._cached_path_exists(Path(source))
-
     def selected_pdf_metadata_author(self) -> str:
         return self.pdf_metadata_author.text().strip()
-
-    def _project_uses_saved_preset(self) -> bool:
-        return bool(self.project_active_preset and self.project_active_preset in self.global_presets)
-
-    def _project_record_settings(self) -> dict[str, object]:
-        if self._project_uses_saved_preset():
-            return {}
-        return self.collect_preset_values()
 
     def current_project(self) -> ProjectRecord | None:
         if not self.active_project_slug:
@@ -4220,36 +4024,41 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             ],
             touchstone_file=serialize_workspace_path(THIS_DIR, self.selected_s2p()),
             technical_data_file=serialize_workspace_path(THIS_DIR, self.selected_technical_data()),
-            settings=self._project_record_settings(),
-            presets={},
+            settings=self.collect_preset_values(),
+            presets=self.project_legacy_presets,
             active_preset=self.project_active_preset,
             radiation_pattern_frequencies_ghz=None if self._project_radiation_frequencies is None else self.selected_radiation_frequencies(),
             run_state=clean_run_state(dict(self.project_run_state)),
         )
 
+    def _project_for_paths(self) -> ProjectRecord | None:
+        if not self.active_project_slug:
+            return None
+        return ProjectRecord(name=self.active_project_name, slug=self.active_project_slug)
+
     def project_results_dir(self) -> Path:
-        project = self.current_project()
-        return project.project_dir(THIS_DIR) if project else (self.project_store.projects_dir / "unassigned")
+        project = self._project_for_paths()
+        return project.project_dir(self.project_store.root) if project else (self.project_store.projects_dir / "unassigned")
 
     def deduced_beam_output(self) -> Path:
-        project = self.current_project()
-        return project.workbook_path(THIS_DIR) if project else (self.project_results_dir() / "project.xlsx")
+        project = self._project_for_paths()
+        return project.workbook_path(self.project_store.root) if project else (self.project_results_dir() / "project.xlsx")
 
     def deduced_extract_output(self) -> Path:
-        project = self.current_project()
-        return project.extract_path(THIS_DIR) if project else (self.project_results_dir() / "project-extracted-data.xlsx")
+        project = self._project_for_paths()
+        return project.extract_path(self.project_store.root) if project else (self.project_results_dir() / "project-extracted-data.xlsx")
 
     def deduced_compliance_output(self) -> Path:
-        project = self.current_project()
-        return project.compliance_path(THIS_DIR) if project else (self.project_results_dir() / "project-compliance.xlsx")
+        project = self._project_for_paths()
+        return project.compliance_path(self.project_store.root) if project else (self.project_results_dir() / "project-compliance.xlsx")
 
     def deduced_datasheet_output(self) -> Path:
-        project = self.current_project()
-        return project.datasheet_path(THIS_DIR) if project else (self.project_results_dir() / "project-datasheet.pdf")
+        project = self._project_for_paths()
+        return project.datasheet_path(self.project_store.root) if project else (self.project_results_dir() / "project-datasheet.pdf")
 
     def deduced_vswr_output(self) -> Path:
-        project = self.current_project()
-        return project.vswr_path(THIS_DIR) if project else (self.project_results_dir() / "project-vswr.svg")
+        project = self._project_for_paths()
+        return project.vswr_path(self.project_store.root) if project else (self.project_results_dir() / "project-vswr.svg")
 
     def refresh_derived_paths(self) -> None:
         was_enabled = self._refresh_cache_enabled
@@ -4292,13 +4101,18 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.project_duplicate_action.setEnabled(has_project)
         self.project_delete_action.setEnabled(has_project)
         self.project_run_menu.setEnabled(has_project)
-        self.project_run_beam_action.setEnabled(has_project)
-        self.project_run_extract_action.setEnabled(has_project)
-        self.project_run_datasheet_action.setEnabled(has_project)
-        self.project_run_plot_action.setEnabled(has_project)
-        self.project_run_vswr_action.setEnabled(has_project)
+        for stage_key, action in (
+            ("beam", self.project_run_beam_action),
+            ("extract", self.project_run_extract_action),
+            ("datasheet", self.project_run_datasheet_action),
+            ("plot", self.project_run_plot_action),
+            ("vswr", self.project_run_vswr_action),
+        ):
+            action.setEnabled(has_project and not is_running and not self._run_preflight_issues([stage_key]))
         needed_stage_keys = self._needed_rerun_stage_keys() if has_project else []
-        self.project_run_needed_action.setEnabled(has_project and not is_running and bool(needed_stage_keys))
+        needed_issues = self._run_preflight_issues(needed_stage_keys) if needed_stage_keys else []
+        can_run_needed = bool(needed_stage_keys) and not is_running and not needed_issues
+        self.project_run_needed_action.setEnabled(can_run_needed)
         self.project_run_needed_action.setText("Run failed/stale only")
         self.project_import_action.setEnabled(True)
         self.project_export_action.setEnabled(has_project)
@@ -4306,8 +4120,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.project_delete_outputs_action.setEnabled(has_project and not is_running and has_generated_outputs)
         self.project_open_folder_action.setEnabled(has_project)
         for widget in (
-            self.btn_full,
-            self.btn_run_needed,
             self.btn_validate,
             self.btn_clear_outputs,
             self.ffs_list,
@@ -4335,8 +4147,12 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         ):
             widget.setEnabled(has_project)
         self.btn_clear_outputs.setEnabled(has_project and not is_running and has_generated_outputs)
-        self.btn_run_needed.setEnabled(has_project and not is_running and bool(needed_stage_keys))
-        if needed_stage_keys:
+        self.btn_run_needed.setEnabled(can_run_needed)
+        if needed_issues:
+            message = "\n".join(issue.message for issue in needed_issues)
+            self.btn_run_needed.setToolTip(message)
+            self.project_run_needed_action.setToolTip(message)
+        elif needed_stage_keys:
             needed_label = self._stage_label_list(needed_stage_keys)
             self.btn_run_needed.setToolTip(f"Run only failed or stale outputs: {needed_label}.")
             self.project_run_needed_action.setToolTip(self._recovery_plan_text())
@@ -4407,48 +4223,22 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             text += f" | {queued} stage(s) queued"
         return text
 
-    def _update_preset_action_state(self) -> None:
-        if not hasattr(self, "preset_combo"):
-            return
+    def _update_preset_action_state(self, *_args) -> None:
         has_project = bool(self.active_project_slug)
         has_preset = bool(self.current_preset_name())
-        self.preset_combo.setEnabled(True)
-        self.preset_new_button.setEnabled(True)
-        self.preset_save_button.setEnabled(True)
-        self.preset_more_button.setEnabled(True)
+        self.preset_apply_button.setEnabled(has_project and has_preset)
+        self.preset_new_button.setEnabled(has_project)
+        self.preset_update_action.setEnabled(has_project and has_preset)
         self.preset_rename_action.setEnabled(has_preset)
         self.preset_delete_action.setEnabled(has_preset)
-        self.preset_import_action.setEnabled(True)
         self.preset_export_action.setEnabled(bool(self.global_presets))
-        preset_dirty = self.has_unsaved_preset_changes()
         if not has_project:
-            if has_preset:
-                self.preset_state_label.setText(f"Preset '{self.current_preset_name()}' is available globally. Select a project to save that choice with it.")
-                if preset_dirty:
-                    self._set_save_state_indicator(self.preset_save_state_indicator, "Preset has unsaved changes", "unsaved")
-                    self.preset_save_state_indicator.set_diff_items(self._current_preset_diff_items())
-                else:
-                    self._set_save_state_indicator(self.preset_save_state_indicator, "Preset saved", "saved")
-            else:
-                self.preset_state_label.setText("Choose a preset or keep working manually.")
-                self._set_save_state_indicator(self.preset_save_state_indicator, "No preset selected", "neutral")
-        elif self.project_active_preset and self.project_active_preset not in self.global_presets:
-            self.preset_state_label.setText(
-                f"Project preset '{self.project_active_preset}' is missing. Select an existing preset or save the current controls as a new one."
-            )
-            self._set_save_state_indicator(self.preset_save_state_indicator, "Preset missing", "unsaved")
-        elif not has_preset:
-            self.preset_state_label.setText("Manual settings only. Save them as a preset if you want to reuse them.")
-            self._set_save_state_indicator(self.preset_save_state_indicator, "No preset selected", "neutral")
-        elif self._preset_matches_selected():
-            self.preset_state_label.setText(f"Preset '{self.project_active_preset}' matches the current controls.")
-            self._set_save_state_indicator(self.preset_save_state_indicator, "Preset saved", "saved")
+            text = "Open a project to apply a preset or save its settings as a preset."
+        elif self.project_active_preset:
+            text = f"Last applied preset: {self.project_active_preset}. Edits are saved with Save project."
         else:
-            self.preset_state_label.setText(
-                f"Current controls differ from preset '{self.project_active_preset}'. Save to update it or create a new preset."
-            )
-            self._set_save_state_indicator(self.preset_save_state_indicator, "Preset has unsaved changes", "unsaved")
-            self.preset_save_state_indicator.set_diff_items(self._current_preset_diff_items())
+            text = "Edits are saved with Save project."
+        self.preset_state_label.setText(text)
 
     def refresh_project_list(self, select_slug: str = "", *, confirm_changes: bool = False) -> None:
         projects = self.project_store.list_projects()
@@ -4476,7 +4266,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if (
             slug != self.active_project_slug
             and not self._suppress_project_selection_prompt
-            and not self._confirm_pending_changes("switching projects")
+            and not self._confirm_pending_project_changes("switching projects")
         ):
             self._reverting_project_selection = True
             self.project_combo.blockSignals(True)
@@ -4486,44 +4276,26 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             self._reverting_project_selection = False
             return
         if not slug:
-            self.active_project_slug = ""
-            self.active_project_name = ""
-            self.project_active_preset = ""
-            self.project_run_state = {}
-            self._project_radiation_frequencies = None
-            self._saved_project_signature = ""
-            self._loaded_project_schema_version = CURRENT_PROJECT_SCHEMA_VERSION
-            self._pending_stage_keys = []
-            self._current_stage_key = ""
-            self._clear_live_run_progress()
-            self._loading_project = True
-            self.ffs_list.clear()
-            self.s2p_field.clear()
-            self._loading_project = False
-            self.store.set("active_project", "")
-            self.refresh_preset_list(select_name=self.global_active_preset)
-            self.refresh_radiation_frequency_list()
-            self.refresh_derived_paths()
+            self._reset_to_default_state()
             return
         project = self.project_store.load_project(slug)
         self._apply_project(project)
 
-    def _persist_global_presets(self) -> None:
-        self.preset_store.replace_all(self.global_presets)
-        active_name = self.global_active_preset if self.global_active_preset in self.global_presets else ""
-        self.global_active_preset = active_name
-        self.store.set(ACTIVE_PRESET_KEY, active_name)
+    def _legacy_project_settings(self, project: ProjectRecord) -> dict[str, object]:
+        if project.schema_version < CURRENT_PROJECT_SCHEMA_VERSION and project.active_preset:
+            embedded = normalize_preset_payload(project.presets)
+            preset = embedded.get(project.active_preset, self.global_presets.get(project.active_preset))
+            if preset is not None:
+                return preset
+        return project.settings
 
-    def _migrate_legacy_project_presets(self, presets: dict[str, dict[str, object]] | object) -> bool:
-        imported = normalize_preset_payload(presets)
-        changed = False
-        for name, values in imported.items():
-            if self.global_presets.get(name) != values:
-                self.global_presets[name] = values
-                changed = True
-        if changed:
-            self._persist_global_presets()
-        return changed
+    def _preserve_legacy_preset_settings(self, names: set[str]) -> None:
+        # Freeze unopened projects before changing a preset they still reference.
+        for project in self.project_store.list_projects():
+            if project.schema_version < CURRENT_PROJECT_SCHEMA_VERSION and project.active_preset in names:
+                project.settings = self._normalized_preset_values(self._legacy_project_settings(project))
+                project.schema_version = CURRENT_PROJECT_SCHEMA_VERSION
+                self.project_store.save_project(project)
 
     def _apply_project(self, project: ProjectRecord) -> None:
         self._loading_project = True
@@ -4545,20 +4317,12 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.s2p_field.setText(display_workspace_path(touchstone))
         technical_data = resolve_project_path(THIS_DIR, project.technical_data_file)
         self.technical_data_field.setText(display_workspace_path(technical_data))
-        legacy_presets_migrated = self._migrate_legacy_project_presets(project.presets)
-        self.project_active_preset = project.active_preset.strip()
-        missing_preset = bool(self.project_active_preset and self.project_active_preset not in self.global_presets)
-        self._apply_default_project_settings()
-        if not missing_preset and self.project_active_preset:
-            self.global_active_preset = self.project_active_preset
-            self.apply_preset_values(self.global_presets.get(self.project_active_preset, {}))
-        elif missing_preset:
-            self.status(f"Preset '{self.project_active_preset}' is missing; using default settings")
-            if project.settings:
-                self.apply_preset_values(project.settings)
-        elif project.settings:
-            self.apply_preset_values(project.settings)
-        self._persist_global_presets()
+        self.project_active_preset = project.active_preset
+        self.project_legacy_presets = project.presets
+        settings = self._legacy_project_settings(project)
+        self.apply_preset_values(self._normalized_preset_values(settings))
+        if project.schema_version < CURRENT_PROJECT_SCHEMA_VERSION and project.active_preset and not settings:
+            self.status(f"Legacy preset '{project.active_preset}' is missing. Review the project defaults.")
         self.refresh_preset_list(select_name=self.project_active_preset)
         self.store.set("beam_ffs", self.selected_ffs())
         self.store.set("vswr_s2p", touchstone)
@@ -4568,9 +4332,8 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self._capture_saved_project_signature(self.current_project())
         if self._loaded_project_schema_version < CURRENT_PROJECT_SCHEMA_VERSION:
             self.save_active_project()
-        elif project.settings or project.presets or legacy_presets_migrated:
-            self.save_active_project()
-        self.refresh_derived_paths()
+        else:
+            self.refresh_derived_paths()
 
     def save_active_project(self) -> None:
         if self._loading_project or not self.active_project_slug:
@@ -4590,7 +4353,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.refresh_derived_paths()
 
     def create_project(self) -> None:
-        if not self._confirm_pending_changes("creating a new project"):
+        if not self._confirm_pending_project_changes("creating a new project"):
             return
         seed_ffs = [str(item["path"]) for item in self.collect_ffs_items()]
         suggested_name = deduce_project_name(seed_ffs or [self.selected_s2p()]) if (seed_ffs or self.selected_s2p()) else "New project"
@@ -4616,9 +4379,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             ffs_items=[],
             touchstone_file="",
             technical_data_file="",
-            settings={},
-            presets={},
-            active_preset=self.current_preset_name(),
+            settings=self._default_project_settings(),
             radiation_pattern_frequencies_ghz=None,
             run_state={},
         )
@@ -4678,7 +4439,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if not self.active_project_slug:
             QMessageBox.information(self, "No Project Selected", "Select a project to duplicate.")
             return
-        if not self._confirm_pending_changes("duplicating this project"):
+        if not self._confirm_pending_project_changes("duplicating this project"):
             return
         suggested = f"{self.active_project_name or self.active_project_slug} copy"
         name, ok = QInputDialog.getText(self, "Duplicate Project", "New project name:", text=suggested)
@@ -4693,7 +4454,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if not self.active_project_slug:
             QMessageBox.information(self, "No Project Selected", "Select a project to export.")
             return
-        if not self._confirm_pending_changes("exporting this project"):
+        if not self._confirm_pending_project_changes("exporting this project"):
             return
         suggested = str((self.project_store.projects_dir / f"{self.active_project_slug}_bundle.zip").resolve())
         path, _ = QFileDialog.getSaveFileName(self, "Export Project Bundle", suggested, "ZIP (*.zip)")
@@ -4706,7 +4467,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         QMessageBox.information(self, "Bundle Exported", f"Project bundle written to:\n{bundle_path}")
 
     def import_project_bundle(self) -> None:
-        if not self._confirm_pending_changes("importing a project bundle"):
+        if not self._confirm_pending_project_changes("importing a project bundle"):
             return
         path, _ = QFileDialog.getOpenFileName(self, "Import Project Bundle", str(self.project_store.projects_dir), "ZIP (*.zip)")
         if not path:
@@ -4748,10 +4509,10 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if not hasattr(self, "preset_combo"):
             return
         if select_name is None:
-            select_name = self.project_active_preset or self.global_active_preset
+            select_name = self.current_preset_name()
         self.preset_combo.blockSignals(True)
         self.preset_combo.clear()
-        self.preset_combo.addItem("No preset", "")
+        self.preset_combo.addItem("Select a shared preset", "")
         for name in self.preset_names():
             self.preset_combo.addItem(name, name)
         index = max(0, self.preset_combo.findData(select_name))
@@ -4921,34 +4682,74 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if "angle" in values: self.angle_step.setValue(int(values["angle"]))
         if "clip" in values: self.clip_db.setValue(float(values["clip"]))
 
-    def on_preset_selected(self, _text: str) -> None:
-        if self._reverting_preset_selection or self._loading_project:
-            return
+    def _preview_preset_changes(self, title: str, description: str, changes: list[str], action: str) -> bool:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(620, 420)
+        layout = QVBoxLayout(dialog)
+        summary = QLabel(description)
+        summary.setWordWrap(True)
+        summary.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(summary)
+        details = QPlainTextEdit("\n".join(changes) or "The reusable settings already match.")
+        details.setReadOnly(True)
+        details.setAccessibleName("Settings changes")
+        layout.addWidget(details)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        buttons.addButton(action, QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setFocus()
+        layout.addWidget(buttons)
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
+    def _shared_values_from_project(self) -> dict[str, object]:
+        values = self.collect_preset_values()
+        values.pop("adf_model")
+        return values
+
+    def _preset_copy_values(self, preset: dict[str, object]) -> dict[str, object]:
+        values = self._normalized_preset_values(preset)
+        values["adf_model"] = self.adf_model.text().strip()
+        # Preview the same numeric values accepted by the project controls.
+        control_names = {
+            "smooth": "beam_smooth",
+            "theta": "theta_window",
+            "smooth2": "plot_smooth",
+            "angle": "angle_step",
+            "clip": "clip_db",
+        }
+        for key, value in values.items():
+            control = getattr(self, control_names.get(key, key), None)
+            if isinstance(control, (QSpinBox, QDoubleSpinBox)):
+                bounded = min(control.maximum(), max(control.minimum(), value))
+                values[key] = round(bounded, control.decimals()) if isinstance(control, QDoubleSpinBox) else bounded
+        template = str(values["datasheet_template"]) or self.selected_datasheet_template_name()
+        values["datasheet_template"] = LEGACY_DATASHEET_TEMPLATE_ALIASES.get(template, template)
+        return values
+
+    def preview_and_apply_preset(self) -> None:
         name = self.current_preset_name()
-        previous_name = self._active_preset_for_dirty_check()
-        if name != previous_name and not self._confirm_pending_changes("switching presets", include_project=False):
-            self._reverting_preset_selection = True
-            self.preset_combo.blockSignals(True)
-            restore_index = self.preset_combo.findData(previous_name)
-            self.preset_combo.setCurrentIndex(restore_index if restore_index >= 0 else 0)
-            self.preset_combo.blockSignals(False)
-            self._reverting_preset_selection = False
-            self._update_preset_action_state()
+        if not self.active_project_slug or name not in self.global_presets:
             return
+        before = self.collect_preset_values()
+        after = self._preset_copy_values(self.global_presets[name])
+        changes = self._settings_diff_items(before, after)
+        if not self._preview_preset_changes(
+            "Apply shared preset",
+            f"Copy settings from '{name}' into '{self.active_project_name}'? "
+            "The values below will replace the current project values. Use Save project to keep the changes.",
+            changes,
+            "Apply preset",
+        ):
+            return
+        self.apply_preset_values(after)
         self.project_active_preset = name
-        self.global_active_preset = name if name in self.global_presets else ""
-        self._persist_global_presets()
-        if not name:
-            self._mark_project_dirty()
-            self._update_preset_action_state()
-            return
-        values = self.global_presets.get(name, {})
-        if isinstance(values, dict):
-            self.apply_preset_values(values)
         self._mark_project_dirty()
-        self._update_preset_action_state()
 
     def create_preset(self) -> None:
+        if not self.active_project_slug:
+            return
         suggested = suggest_preset_name(self.preset_names(), self.active_project_name or "Preset")
         name, ok = QInputDialog.getText(self, "Create Preset", "Preset name:", text=suggested)
         name = name.strip()
@@ -4957,19 +4758,39 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if name in self.global_presets:
             QMessageBox.information(self, "Preset Exists", f"A preset named '{name}' already exists.")
             return
-        self.global_presets[name] = self.collect_preset_values()
-        self.project_active_preset = name
-        self.global_active_preset = name
-        self._persist_global_presets()
-        self._mark_project_dirty()
-        self.refresh_preset_list(select_name=name)
+        values = self._shared_values_from_project()
+        if self._write_shared_preset(name, values):
+            self.refresh_preset_list(select_name=name)
+            self.status(f"Shared preset '{name}' created")
+
+    def _write_shared_preset(self, name: str, values: dict[str, object]) -> bool:
+        try:
+            self._preserve_legacy_preset_settings({name})
+            self.preset_store.save_preset(name, values)
+        except OSError as exc:
+            QMessageBox.warning(self, "Preset Save Failed", str(exc))
+            return False
+        self.global_presets[name] = values
+        return True
 
     def save_preset(self) -> None:
         name = self.current_preset_name()
-        if not name:
-            self.create_preset()
+        if not self.active_project_slug or name not in self.global_presets:
             return
-        self._save_active_preset(refresh=True)
+        values = self._shared_values_from_project()
+        before = dict(self.global_presets[name])
+        before.pop("adf_model", None)
+        changes = self._settings_diff_items(before, values)
+        if not self._preview_preset_changes(
+            "Update shared preset",
+            f"Replace the reusable settings in '{name}' with values from '{self.active_project_name}'? "
+            "This affects future applications of the preset.",
+            changes,
+            "Update shared preset",
+        ):
+            return
+        if self._write_shared_preset(name, values):
+            self.status(f"Shared preset '{name}' updated")
 
     def rename_preset(self) -> None:
         name = self.current_preset_name()
@@ -4983,13 +4804,13 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if new_name in self.global_presets:
             QMessageBox.information(self, "Preset Exists", f"A preset named '{new_name}' already exists.")
             return
+        try:
+            self._preserve_legacy_preset_settings({name})
+            self.preset_store.rename_preset(name, new_name, self.global_presets[name])
+        except OSError as exc:
+            QMessageBox.warning(self, "Preset Rename Failed", str(exc))
+            return
         self.global_presets[new_name] = self.global_presets.pop(name)
-        if self.project_active_preset == name:
-            self.project_active_preset = new_name
-        if self.global_active_preset == name:
-            self.global_active_preset = new_name
-        self._persist_global_presets()
-        self._mark_project_dirty()
         self.refresh_preset_list(select_name=new_name)
 
     def delete_preset(self) -> None:
@@ -4999,13 +4820,13 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             return
         if QMessageBox.question(self, "Delete Preset", f"Delete preset '{name}'?") != QMessageBox.Yes:
             return
-        self.global_presets.pop(name, None)
-        if self.project_active_preset == name:
-            self.project_active_preset = ""
-        if self.global_active_preset == name:
-            self.global_active_preset = ""
-        self._persist_global_presets()
-        self._mark_project_dirty()
+        try:
+            self._preserve_legacy_preset_settings({name})
+            self.preset_store.delete_preset(name)
+        except OSError as exc:
+            QMessageBox.warning(self, "Preset Delete Failed", str(exc))
+            return
+        self.global_presets.pop(name)
         self.refresh_preset_list(select_name="")
 
     def import_presets(self) -> None:
@@ -5021,8 +4842,15 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if not imported:
             QMessageBox.information(self, "No Presets Imported", "The selected file did not contain any valid presets.")
             return
-        self.global_presets.update(imported)
-        self._persist_global_presets()
+        existing = sorted(self.global_presets.keys() & imported.keys())
+        if existing and QMessageBox.question(
+            self, "Replace Shared Presets", f"Replace these shared presets?\n\n{', '.join(existing)}"
+        ) != QMessageBox.Yes:
+            return
+        for name, values in imported.items():
+            if not self._write_shared_preset(name, values):
+                self.refresh_preset_list(select_name=self.current_preset_name())
+                return
         self._mark_project_dirty()
         self.refresh_preset_list(select_name=self.current_preset_name())
         QMessageBox.information(self, "Presets Imported", f"Imported {len(imported)} preset(s).")
@@ -5322,7 +5150,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             pass
 
     def closeEvent(self, e):
-        if not self._confirm_pending_changes("exiting"):
+        if not self._confirm_pending_project_changes("exiting"):
             e.ignore()
             return
         self._closing_app = True
