@@ -4,6 +4,20 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
+INPUT_DATA_DIRNAME = "Input data"
+INPUT_SUBDIRECTORIES = {
+    ".ffs": "Far-field",
+    ".s1p": "Touchstone",
+    ".s2p": "Touchstone",
+}
+
+
+def input_directory(root: Path, suffix: str = "") -> Path:
+    input_root = root / INPUT_DATA_DIRNAME
+    subdirectory = INPUT_SUBDIRECTORIES.get(suffix.lower())
+    return input_root / subdirectory if subdirectory else input_root
+
+
 def is_url(value: str | Path | None) -> bool:
     if value is None:
         return False
@@ -17,7 +31,13 @@ def resolve_workspace_path(root: Path, path: str | Path | None) -> Path:
     if is_url(path):
         return Path(str(path))
     target = Path(path)
-    return target.resolve() if target.is_absolute() else (root / target).resolve()
+    resolved = target.resolve() if target.is_absolute() else (root / target).resolve()
+    input_root = input_directory(root)
+    if resolved.suffix.lower() in INPUT_SUBDIRECTORIES and resolved.parent == input_root.resolve() and not resolved.exists():
+        moved = input_directory(root, resolved.suffix) / resolved.name
+        if moved.is_file():
+            return moved.resolve()
+    return resolved
 
 
 def display_workspace_path(root: Path, path: str | Path | None) -> str:
@@ -49,5 +69,4 @@ def resolve_project_path(root: Path, value: str | Path | None) -> str:
         return ""
     if is_url(value):
         return str(value).strip()
-    path = Path(value)
-    return str(path.resolve() if path.is_absolute() else (root / path).resolve())
+    return str(resolve_workspace_path(root, value))

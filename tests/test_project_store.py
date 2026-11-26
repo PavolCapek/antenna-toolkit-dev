@@ -136,6 +136,21 @@ class ProjectStoreTests(unittest.TestCase):
 
         self.assertIsNone(project.radiation_pattern_frequencies_ghz)
 
+    def test_old_flat_input_paths_resolve_after_sorting(self) -> None:
+        input_root = self.root / "Input data"
+        far_field = input_root / "Far-field" / "Example.ffs"
+        touchstone = input_root / "Touchstone" / "Example.s1p"
+        for file in (far_field, touchstone):
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text("sample", encoding="utf-8")
+
+        self.assertEqual(resolve_project_path(self.root, "Input data/Example.ffs"), str(far_field))
+        self.assertEqual(resolve_project_path(self.root, input_root / touchstone.name), str(touchstone))
+        flat = input_root / far_field.name
+        flat.write_text("distinct original", encoding="utf-8")
+        self.assertEqual(resolve_project_path(self.root, flat), str(flat))
+        self.assertEqual(resolve_project_path(self.root, self.root / far_field.name), str(self.root / far_field.name))
+
     def test_google_sheet_url_paths_are_preserved(self) -> None:
         url = "https://docs.google.com/spreadsheets/d/sheet123/edit#gid=0"
 

@@ -9,6 +9,47 @@ pytestmark = [pytest.mark.qt_slow, pytest.mark.gui_workflow]
 
 
 class StudioProjectStateTests(StudioDirtyStateBase):
+    def test_file_pickers_start_in_the_matching_input_directories(self) -> None:
+        root = Path(self.temp_dir.name)
+        with (
+            mock.patch.object(studio_module, "THIS_DIR", root),
+            mock.patch("antenna_toolkit_studio.QFileDialog.getOpenFileNames", return_value=([], "")) as ffs,
+            mock.patch("antenna_toolkit_studio.QFileDialog.getOpenFileName", return_value=("", "")) as single,
+        ):
+            self.window.add_ffs()
+            self.window.browse_s2p()
+            self.window.browse_technical_data()
+        input_root = root / "Input data"
+        self.assertEqual(Path(ffs.call_args.args[2]), input_root / "Far-field")
+        self.assertEqual(Path(single.call_args_list[0].args[2]), input_root / "Touchstone")
+        self.assertEqual(Path(single.call_args_list[1].args[2]), input_root)
+        self.assertTrue((input_root / "Far-field").is_dir())
+        self.assertTrue((input_root / "Touchstone").is_dir())
+
+    def test_split_input_folders_preserve_matches_and_saved_stage_fingerprints(self) -> None:
+        root = Path(self.temp_dir.name)
+        far_field = root / "Input data" / "Far-field"
+        touchstone = root / "Input data" / "Touchstone"
+        far_field.mkdir(parents=True)
+        touchstone.mkdir()
+        port_file = far_field / "Example_H.ffs"
+        touchstone_file = touchstone / "Example.s1p"
+        port_file.write_text("sample", encoding="utf-8")
+        touchstone_file.write_text("sample", encoding="utf-8")
+        legacy_port = "Input data/Example_H.ffs"
+        legacy_touchstone = "Input data/Example.s1p"
+        snapshot = {
+            "ffs_items": [{"path": legacy_port, "file": {"path": legacy_port, "size": 6}}],
+            "touchstone": {"path": legacy_touchstone, "size": 6},
+        }
+        with mock.patch.object(studio_module, "THIS_DIR", root):
+            self.assertEqual(studio_module.guess_touchstone_path("Example", [str(port_file)]), str(touchstone_file))
+            updated = self.window._snapshot_with_current_input_paths(snapshot)
+        self.assertEqual(updated["ffs_items"][0]["path"], "Input data/Far-field/Example_H.ffs")
+        self.assertEqual(updated["ffs_items"][0]["file"]["path"], "Input data/Far-field/Example_H.ffs")
+        self.assertEqual(updated["touchstone"], {"path": "Input data/Touchstone/Example.s1p", "size": 6})
+        self.assertEqual(snapshot["touchstone"]["path"], legacy_touchstone)
+
     def test_starts_clean_and_save_button_tracks_project_changes(self) -> None:
         self.assertFalse(self.window.has_unsaved_project_changes())
         self.assertFalse(self.window.project_save_button.isEnabled())
@@ -178,7 +219,7 @@ class StudioProjectStateTests(StudioDirtyStateBase):
         self.assertEqual(loaded.technical_data_file, "")
         self.assertEqual(loaded.presets, {})
         self.assertEqual(loaded.active_preset, "")
-        self.assertEqual(loaded.settings, {})
+        self.assertEqual(loaded.settings, self.window._default_project_settings())
 
     def test_edit_project_renames_project_and_keeps_saved_inputs(self) -> None:
         self.window._add_ffs_files(["Input data/a.ffs"])
@@ -303,6 +344,19 @@ class StudioProjectStateTests(StudioDirtyStateBase):
                 with mock.patch("antenna_toolkit_studio.QMessageBox.question", return_value=QMessageBox.Discard):
                     restored.close()
         temp_root.cleanup()
+
+    def test_legacy_preset_directory_does_not_restore_changed_or_deleted_presets(self) -> None:
+        root = Path(self.temp_dir.name)
+        state = qt_module.Persist(root / "app-state.json")
+        legacy = qt_module.PresetFileStore(root / "Legacy")
+        shared = qt_module.PresetFileStore(root / "Shared", [legacy.directory])
+        legacy.save_preset("Example", {"smooth": 6})
+        self.assertEqual(shared.migrate_from_state(state)["Example"]["smooth"], 6)
+
+        shared.save_preset("Example", {"smooth": 12})
+        self.assertEqual(shared.migrate_from_state(state)["Example"]["smooth"], 12)
+        shared.delete_preset("Example")
+        self.assertEqual(shared.migrate_from_state(state), {})
 
     def test_state_file_migrates_from_legacy_workspace_location(self) -> None:
         temp_root = tempfile.TemporaryDirectory()

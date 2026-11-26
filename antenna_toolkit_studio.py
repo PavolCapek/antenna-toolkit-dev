@@ -34,6 +34,7 @@ from project_store import (
     normalize_radiation_frequencies, sanitize_project_slug, serialize_workspace_path, utc_now_iso,
 )
 from legend_utils import detect_polarization
+from path_utils import input_directory
 from pipeline.settings import (
     DEFAULT_DATASHEET_TEMPLATE_NAME,
     DEFAULT_PDF_METADATA_AUTHOR,
@@ -445,7 +446,7 @@ def guess_touchstone_path(project: str, ffs_paths: list[str]) -> str:
         if parent not in search_dirs:
             search_dirs.append(parent)
 
-    for extra in (THIS_DIR / "Input data", THIS_DIR):
+    for extra in (input_directory(THIS_DIR, ".s2p"), input_directory(THIS_DIR), THIS_DIR):
         if extra not in search_dirs:
             search_dirs.append(extra)
 
@@ -1548,6 +1549,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         preset_card.body.addWidget(self.preset_state_label)
         self.preset_apply_button = QPushButton("Preview and apply…")
         self.preset_apply_button.clicked.connect(self.preview_and_apply_preset)
+        preset_card.body.addWidget(self.preset_apply_button)
         self.preset_new_button = QPushButton("Save as preset…")
         self.preset_new_button.clicked.connect(self.create_preset)
         self.preset_new_button.setToolTip("Save a new shared preset using this project's reusable settings.")
@@ -1563,9 +1565,9 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         self.preset_import_action = self.preset_more_menu.addAction("Import presets", self.import_presets)
         self.preset_export_action = self.preset_more_menu.addAction("Export presets", self.export_presets)
         self.preset_more_button.setMenu(self.preset_more_menu)
-        preset_actions = ResponsiveButtonPanel(max_columns=3, min_button_width=110)
+        preset_actions = ResponsiveButtonPanel(max_columns=2, min_button_width=145)
         self.preset_actions = preset_actions
-        preset_actions.set_buttons([self.preset_apply_button, self.preset_new_button, self.preset_more_button])
+        preset_actions.set_buttons([self.preset_new_button, self.preset_more_button])
         preset_card.body.addWidget(preset_actions)
         command_left_layout.addSpacing(14)
         command_left_layout.addWidget(preset_card)
@@ -2570,7 +2572,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 "colors_panel_min_card_width": 300,
                 "hero_min_button_width": 132,
                 "project_min_button_width": 118,
-                "preset_min_button_width": 96,
                 "ffs_min_button_width": 118,
                 "s2p_min_button_width": 122,
                 "ffs_list_min_height": 140,
@@ -2624,7 +2625,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             "colors_panel_min_card_width": 320,
             "hero_min_button_width": 150,
             "project_min_button_width": 130,
-            "preset_min_button_width": 110,
             "ffs_min_button_width": 135,
             "s2p_min_button_width": 145,
             "ffs_list_min_height": 170,
@@ -2701,7 +2701,6 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         for panel, min_width in (
             (self.hero_actions, int(metrics["hero_min_button_width"])),
             (self.project_actions, int(metrics["project_min_button_width"])),
-            (self.preset_actions, int(metrics["preset_min_button_width"])),
             (self.ffs_actions, int(metrics["ffs_min_button_width"])),
             (self.s2p_actions, int(metrics["s2p_min_button_width"])),
         ):
@@ -2789,6 +2788,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
                 QPushButton:disabled { color: %(helper_color)s; background: %(input_bg)s; border-color: %(card_border)s; }
                 QPushButton#primaryButton { background: %(primary_bg)s; color: white; border: none; padding: %(primary_button_padding_v)spx %(primary_button_padding_h)spx; }
                 QPushButton#primaryButton:hover { background: %(primary_hover)s; }
+                QPushButton#primaryButton:disabled { background: %(input_bg)s; color: %(helper_color)s; border: 1px solid %(card_border)s; }
                 QPushButton#ghostButton { background: %(ghost_bg)s; }
                 QPushButton#ghostButton:hover { background: %(ghost_hover)s; }
                 QComboBox#themeSelector { min-width: 168px; font-weight: 600; }
@@ -3376,6 +3376,26 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             has_technical_data=bool(self.selected_technical_data()),
         )
 
+    def _snapshot_with_current_input_paths(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        def with_current_path(entry: dict[str, Any]) -> dict[str, Any]:
+            path = entry.get("path")
+            if not isinstance(path, str) or not path:
+                return entry
+            return {**entry, "path": serialize_workspace_path(THIS_DIR, path)}
+
+        result = dict(snapshot)
+        ffs_items = snapshot.get("ffs_items")
+        if isinstance(ffs_items, list):
+            result["ffs_items"] = [
+                {**with_current_path(item), "file": with_current_path(item["file"])}
+                if isinstance(item, dict) and isinstance(item.get("file"), dict) else item
+                for item in ffs_items
+            ]
+        touchstone = snapshot.get("touchstone")
+        if isinstance(touchstone, dict):
+            result["touchstone"] = with_current_path(touchstone)
+        return result
+
     def _stage_is_stale(self, stage_key: str) -> bool:
         cache_key = f"stage_stale:{stage_key}"
         cached = self._cache_get(cache_key)
@@ -3385,9 +3405,10 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
             return bool(self._cache_set(cache_key, False))
         stage_state = self._stage_state(stage_key)
         snapshot = stage_state.get("snapshot")
-        if not snapshot:
+        if not isinstance(snapshot, dict) or not snapshot:
             return bool(self._cache_set(cache_key, True))
-        stale = snapshot != self._current_stage_snapshot(stage_key)
+        current = self._current_stage_snapshot(stage_key)
+        stale = snapshot != current and self._snapshot_with_current_input_paths(snapshot) != current
         return bool(self._cache_set(cache_key, stale))
 
     def _stage_stale_detail(self, stage_key: str) -> str:
@@ -4685,7 +4706,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
     def _preview_preset_changes(self, title: str, description: str, changes: list[str], action: str) -> bool:
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
-        dialog.resize(620, 420)
+        dialog.resize(620, min(440, 160 + 26 * len(changes)))
         layout = QVBoxLayout(dialog)
         summary = QLabel(description)
         summary.setWordWrap(True)
@@ -4696,11 +4717,14 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         details.setAccessibleName("Settings changes")
         layout.addWidget(details)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
-        buttons.addButton(action, QDialogButtonBox.ButtonRole.AcceptRole)
+        confirm = buttons.addButton(action, QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setFocus()
         layout.addWidget(buttons)
+        confirm.setAutoDefault(False)
+        cancel = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        cancel.setDefault(True)
+        cancel.setFocus()
         return dialog.exec() == QDialog.DialogCode.Accepted
 
     def _shared_values_from_project(self) -> dict[str, object]:
@@ -4975,11 +4999,22 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         elif added:
             self.refresh_derived_paths()
 
+    def _input_picker_dir(self, suffix: str = "") -> str:
+        directory = input_directory(THIS_DIR, suffix)
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.status(f"Could not open the {directory.name} input folder: {exc}")
+            directory = input_directory(THIS_DIR)
+            if not directory.is_dir():
+                directory = THIS_DIR
+        return str(directory)
+
     def add_ffs(self):
         if not self.active_project_slug:
             self.status("Create or select a project first")
             return
-        files, _ = QFileDialog.getOpenFileNames(self, "Add .ffs", str(THIS_DIR), "CST Farfield (*.ffs)")
+        files, _ = QFileDialog.getOpenFileNames(self, "Add .ffs", self._input_picker_dir(".ffs"), "CST Farfield (*.ffs)")
         if files:
             self._add_ffs_files(files)
 
@@ -5064,7 +5099,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if not self.active_project_slug:
             self.status("Create or select a project first")
             return
-        fn, _ = QFileDialog.getOpenFileName(self, "Select Touchstone", str(THIS_DIR), "Touchstone (*.s1p *.s2p)")
+        fn, _ = QFileDialog.getOpenFileName(self, "Select Touchstone", self._input_picker_dir(".s2p"), "Touchstone (*.s1p *.s2p)")
         if fn:
             self._set_touchstone(fn)
 
@@ -5078,7 +5113,7 @@ class ModernMainWindow(StudioRunMixin, QMainWindow):
         if not self.active_project_slug:
             self.status("Create or select a project first")
             return
-        fn, _ = QFileDialog.getOpenFileName(self, "Select Technical Data", str(THIS_DIR), "Excel Workbooks (*.xlsx *.xlsm)")
+        fn, _ = QFileDialog.getOpenFileName(self, "Select Technical Data", self._input_picker_dir(), "Excel Workbooks (*.xlsx *.xlsm)")
         if fn:
             self._set_technical_data(fn)
 

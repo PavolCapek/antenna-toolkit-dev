@@ -390,21 +390,26 @@ class PresetFileStore:
             raise
 
     def migrate_from_state(self, store: Persist, key: str = PRESET_STORE_KEY) -> dict[str, dict[str, object]]:
-        merged = self.load_presets()
-        for legacy_dir in self.legacy_directories:
-            legacy_presets = PresetFileStore(legacy_dir).load_presets()
-            if legacy_presets:
-                merged.update(legacy_presets)
+        saved = self.load_presets()
+        merged = dict(saved)
+        legacy_migrated_key = "preset_legacy_directories_migrated"
+        needs_legacy_migration = bool(self.legacy_directories) and not store.get(legacy_migrated_key, False)
+        if needs_legacy_migration:
+            for directory in self.legacy_directories:
+                for name, values in PresetFileStore(directory).load_presets().items():
+                    merged.setdefault(name, values)
         inline = normalize_preset_payload(store.get(key, {}))
-        if inline:
-            merged.update(inline)
-        if merged != self.load_presets():
+        for name, values in inline.items():
+            merged.setdefault(name, values)
+        if merged != saved:
             try:
                 self.replace_all(merged)
             except OSError:
                 return merged
         if inline:
             store.delete(key)
+        if needs_legacy_migration:
+            store.set(legacy_migrated_key, True)
         return merged
 
 

@@ -156,9 +156,10 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
         ffs_path.write_text("ffs", encoding="utf-8")
         self.window._add_ffs_files([str(ffs_path)])
         self.window.save_project_changes()
-        beam_output = self.window.deduced_beam_output()
-        beam_output.parent.mkdir(parents=True, exist_ok=True)
-        beam_output.write_text("workbook", encoding="utf-8")
+        beam_outputs = self.window._stage_output_files("beam")
+        for output in beam_outputs:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text("generated", encoding="utf-8")
         stage_state = self.window._stage_state("beam")
         stage_state["status"] = "success"
         stage_state["last_success_at"] = "2026-04-30T12:00:00Z"
@@ -172,7 +173,7 @@ class StudioRunWorkflowTests(StudioDirtyStateBase):
             self.window.delete_all_outputs()
         self.app.processEvents()
 
-        self.assertFalse(beam_output.exists())
+        self.assertFalse(any(output.exists() for output in beam_outputs))
         self.assertEqual(self.window.stage_chip_labels["beam"].text(), "Waiting")
 
     def test_needed_rerun_combines_failed_and_stale_with_skip_summary(self) -> None:
